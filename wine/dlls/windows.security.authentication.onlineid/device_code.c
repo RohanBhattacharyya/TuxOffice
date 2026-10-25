@@ -553,8 +553,27 @@ done:
     return hr;
 }
 
-HRESULT identity_device_list_accounts( HSTRING client_id, HSTRING authority, HANDLE cancel,
-                                       struct identity_reply *reply )
+/* native_store.c reports a missing keyring item as STATUS_OBJECT_NAME_NOT_FOUND. */
+#define TOKENS_NOT_FOUND HRESULT_FROM_NT( 0xc0000034 )
+
+/* Personal Microsoft accounts all live in this tenant. */
+static const WCHAR consumer_tenant[] = L"9188040d-6c67-4c5b-b112-36a304b66dad";
+
+/* filter: NULL keeps every record; L"organizations" keeps work/school
+ * accounts; a tenant id keeps that tenant's accounts. */
+static BOOL account_in_filter( const WCHAR *filter, const struct identity_reply *account )
+{
+    const WCHAR *tenant;
+
+    if (!filter) return TRUE;
+    if (!account->tenant_id) return FALSE;
+    tenant = WindowsGetStringRawBuffer( account->tenant_id, NULL );
+    if (!wcscmp( filter, L"organizations" )) return _wcsicmp( tenant, consumer_tenant ) != 0;
+    return !_wcsicmp( tenant, filter );
+}
+
+static HRESULT list_accounts_at( HSTRING client_id, HSTRING authority, const WCHAR *filter, HANDLE cancel,
+                                 struct identity_reply *reply )
 {
     struct identity_reply account = {0};
     HSTRING ids[128] = {0};
@@ -656,6 +675,11 @@ HRESULT identity_device_list_accounts( HSTRING client_id, HSTRING authority, HAN
         if (FAILED(hr = read_account( id + 1, cursor, &account ))) goto done;
         cursor += 41 + record_size;
         remaining -= record_size;
+        if (!account_in_filter( filter, &account ))
+        {
+            identity_reply_clear( &account );
+            continue;
+        }
         for (j = 0; j < returned; ++j)
         {
             if (FAILED(hr = WindowsCompareStringOrdinal( ids[j], account.account_id, &comparison ))) goto done;
@@ -714,6 +738,29 @@ done:
         reply->error = hr;
     }
     eagle_trace_native_identity( trace_id, 5, EAGLE_IDENTITY_COMPLETE, hr, __builtin_return_address(0) );
+    return hr;
+}
+
+/* Sign-in through the personal-account (OnlineId) path stores work/school
+ * accounts under "common", where an "organizations" or tenant listing would
+ * never see them; include those records, filtered by the token's tenant. */
+HRESULT identity_device_list_accounts( HSTRING client_id, HSTRING authority, HANDLE cancel,
+                                       struct identity_reply *reply )
+{
+    WCHAR tenant[37];
+    HSTRING common;
+    UINT32 count = 0;
+    HRESULT hr;
+
+    hr = list_accounts_at( client_id, authority, NULL, cancel, reply );
+    if (FAILED(hr) && hr != TOKENS_NOT_FOUND) return hr;
+    if (SUCCEEDED(hr) && reply->accounts_size >= sizeof(count)) memcpy( &count, reply->accounts, sizeof(count) );
+    if (count || FAILED(identity_authority_tenant( authority, tenant )) ||
+        !wcscmp( tenant, L"common" ) || !wcscmp( tenant, L"consumers" )) return hr;
+    if (FAILED(WindowsCreateString( L"common", 6, &common ))) return hr;
+    identity_reply_clear( reply );
+    hr = list_accounts_at( client_id, common, tenant, cancel, reply );
+    WindowsDeleteString( common );
     return hr;
 }
 
@@ -846,9 +893,56 @@ done:
     return hr;
 }
 
+/* Azure AD refresh tokens are not bound to the authority they were issued
+ * through: a token obtained via "common" or "organizations" also redeems at
+ * the user's tenant. Office signs in through one and later asks for tokens at
+ * https://login.microsoftonline.com/<tenant>, so fall back to the generic
+ * authorities when there is no record under the exact one. The caller checks
+ * that a fallback record belongs to the requested tenant. */
+static HRESULT lookup_native_tokens( const char *client_id, HSTRING authority, char *record,
+                                     DWORD capacity, DWORD *size, BOOL *fallback )
+{
+    static const WCHAR * const generic[] = {L"organizations", L"common"};
+    WCHAR tenant[37];
+    HSTRING alternate;
+    HRESULT hr;
+    UINT32 i;
+
+    *fallback = FALSE;
+    hr = identity_native_credentials( credential_lookup, client_id, authority, record, capacity, size );
+    if (hr != TOKENS_NOT_FOUND) return hr;
+    if (FAILED(identity_authority_tenant( authority, tenant )) ||
+        !wcscmp( tenant, L"common" ) || !wcscmp( tenant, L"consumers" )) return hr;
+    for (i = 0; i < ARRAY_SIZE(generic); ++i)
+    {
+        HRESULT alt_hr;
+
+        if (!wcscmp( tenant, generic[i] )) continue;
+        if (FAILED(WindowsCreateString( generic[i], wcslen( generic[i] ), &alternate ))) break;
+        memset( record, 0, capacity );
+        alt_hr = identity_native_credentials( credential_lookup, client_id, alternate, record, capacity, size );
+        WindowsDeleteString( alternate );
+        if (alt_hr == TOKENS_NOT_FOUND) continue;
+        if (SUCCEEDED(alt_hr)) *fallback = TRUE;
+        return alt_hr;
+    }
+    return hr;
+}
+
+/* A fallback record may only serve a tenant-specific request for its own tenant. */
+static BOOL fallback_tenant_matches( HSTRING authority, const struct identity_reply *account )
+{
+    WCHAR tenant[37];
+
+    if (FAILED(identity_authority_tenant( authority, tenant ))) return FALSE;
+    if (!wcscmp( tenant, L"organizations" )) return TRUE;
+    return account->tenant_id && !_wcsicmp( tenant, WindowsGetStringRawBuffer( account->tenant_id, NULL ) );
+}
+
 HRESULT identity_device_get_token( const GUID *application_id, HSTRING service, HSTRING authority,
                                    HSTRING account_id, HSTRING login_hint, HANDLE cancel, struct identity_reply *reply )
 {
+    BOOL fallback;
     char client_id[37], *record = NULL, *refresh, *id, *encoded_refresh = NULL, *encoded_scopes = NULL;
     char *scopes = NULL, *body = NULL, *response = NULL;
     WCHAR path[80];
@@ -880,8 +974,7 @@ HRESULT identity_device_get_token( const GUID *application_id, HSTRING service, 
         goto done;
     }
     eagle_trace_native_identity( trace_id, 3, EAGLE_IDENTITY_CACHE, E_PENDING, __builtin_return_address(0) );
-    hr = identity_native_credentials( credential_lookup, client_id, authority,
-                                      record, MAX_HTTP_RESPONSE, &size );
+    hr = lookup_native_tokens( client_id, authority, record, MAX_HTTP_RESPONSE, &size, &fallback );
     eagle_trace_native_identity( trace_id, 3, EAGLE_IDENTITY_CACHE, hr, __builtin_return_address(0) );
     if (FAILED(hr)) goto done;
     if (size < 5 || size > MAX_HTTP_RESPONSE || record[size - 1] || strncmp(record, "1\n", 2) ||
@@ -895,6 +988,11 @@ HRESULT identity_device_get_token( const GUID *application_id, HSTRING service, 
     if (!*refresh || !*id || strchr(id, '\n') || FAILED(hr = read_account( id, client_id, &previous )))
     {
         hr = E_INVALIDARG;
+        goto done;
+    }
+    if (fallback && !fallback_tenant_matches( authority, &previous ))
+    {
+        hr = TOKENS_NOT_FOUND;
         goto done;
     }
     if (WindowsGetStringLen(account_id))
