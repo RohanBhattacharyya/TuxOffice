@@ -1817,6 +1817,9 @@ void wayland_restack_client_surfaces(HWND toplevel)
     for (i = done; i--;)
     {
         if (!(data = wayland_win_data_get_nolock(order[i]))) continue;
+        TRACE("restack %p parent %p client %d surface %d opaque %d window %s\n", order[i],
+              NtUserGetAncestor(order[i], GA_PARENT), data->client_surface != NULL,
+              data->wayland_surface != NULL, rects[i].opaque, wine_dbgstr_rect(&rects[i].window));
         if ((client = data->client_surface))
         {
             if (client->toplevel != toplevel || !client->wl_subsurface) continue;
