@@ -11751,6 +11751,21 @@ static struct composition_drawing_surface *find_visual_drawing_surface( IVisual 
     return NULL;
 }
 
+/* Whether the layer window already covers the target's client area at the
+ * z-order edge DirectComposition uses (above the target's children for a
+ * topmost target, below them otherwise). */
+static BOOL render_window_placed( struct desktop_window_target *target, UINT width, UINT height )
+{
+    RECT rect;
+
+    if (!(GetWindowLongW( target->render_hwnd, GWL_STYLE ) & WS_VISIBLE)) return FALSE;
+    if (GetWindow( target->render_hwnd, target->topmost ? GW_HWNDFIRST : GW_HWNDLAST ) != target->render_hwnd)
+        return FALSE;
+    if (!GetWindowRect( target->render_hwnd, &rect )) return FALSE;
+    MapWindowPoints( HWND_DESKTOP, target->hwnd, (POINT *)&rect, 2 );
+    return !rect.left && !rect.top && rect.right == width && rect.bottom == height;
+}
+
 static HRESULT desktop_window_target_render_locked( struct desktop_window_target *target )
 {
     struct composition_drawing_surface *source;
@@ -11783,7 +11798,11 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
     width = max( 1, client.right - client.left );
     height = max( 1, client.bottom - client.top );
     stage = "position composition layer";
-    if (!SetWindowPos( target->render_hwnd, target->topmost ? HWND_TOP : HWND_BOTTOM,
+    /* Only move the layer when it is out of place: a SetWindowPos per frame
+     * makes the window manager restack (and the Wayland driver rebuild its
+     * overlays) on every frame, which shows up as flicker and stalls. */
+    if (!render_window_placed( target, width, height ) &&
+            !SetWindowPos( target->render_hwnd, target->topmost ? HWND_TOP : HWND_BOTTOM,
             0, 0, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS ))
     {
         hr = HRESULT_FROM_WIN32( GetLastError() );
