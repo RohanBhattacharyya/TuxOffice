@@ -924,11 +924,11 @@ static void wayland_surface_reconfigure_client(struct wayland_surface *surface,
 
     TRACE("hwnd=%p subsurface=%d,%d+%dx%d\n", surface->hwnd, x, y, width, height);
 
+    /* Only position here: placing the subsurface right above its parent and
+     * committing would show its siblings in the wrong order for a frame until
+     * wayland_restack_client_surfaces() restores the window stacking. */
     if (client->wl_subsurface)
-    {
         wl_subsurface_set_position(client->wl_subsurface, x, y);
-        wl_subsurface_place_above(client->wl_subsurface, surface->wl_surface);
-    }
 
     if (width != 0 && height != 0)
         wp_viewport_set_destination(client->wp_viewport, width, height);
@@ -1933,8 +1933,7 @@ static void wayland_client_surface_attach_rect(struct wayland_client_surface *cl
     }
 
     wayland_surface_reconfigure_client(surface, client, &client_rect);
-    /* reconfiguring puts the client surface right above its parent, below
-     * its siblings, restore the window stacking once the lock is released */
+    /* a new client surface starts on top; restack once the lock is released */
     toplevel_data->restack_pending = TRUE;
     /* Commit to apply subsurface positioning. */
     wl_surface_commit(surface->wl_surface);
