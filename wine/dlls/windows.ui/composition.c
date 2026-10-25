@@ -266,7 +266,6 @@ static HINSTANCE layer_instance;
 static const WCHAR layer_class_name[] = L"Wine.UI.Composition.Layer";
 
 static HRESULT desktop_window_target_render( struct desktop_window_target *target );
-static void desktop_window_target_repaint( struct desktop_window_target *target );
 
 static inline struct desktop_window_target *impl_from_IDesktopWindowTarget( IDesktopWindowTarget *iface )
 {
@@ -389,12 +388,82 @@ static LRESULT CALLBACK composition_layer_proc( HWND hwnd, UINT message, WPARAM 
     if (message == WM_NCDESTROY) return DefWindowProcW( hwnd, message, wparam, lparam );
     BeginPaint( hwnd, &paint );
     EndPaint( hwnd, &paint );
-    if (found)
-    {
-        desktop_window_target_repaint( found );
-        desktop_window_target_release( found );
-    }
+    /* The layer's contents live in its swapchain and survive without a
+     * repaint; presenting from the layer thread would race the application's
+     * own use of the rendering device, so leave presenting to the renderer. */
+    if (found) desktop_window_target_release( found );
     return 0;
+}
+
+/* Layer windows are owned by a dedicated thread that always pumps messages.
+ * They are children of the application's windows; when the application
+ * destroys one of those, win32u sends WM_DESTROY to every child and waits for
+ * the owning thread to handle it. Office creates its composition targets on a
+ * worker thread that never pumps messages, so a layer owned by that thread
+ * hangs the UI thread (and Office's watchdog then kills the process). */
+#define WM_WINE_CREATE_LAYER (WM_APP + 0x100)
+
+struct layer_request
+{
+    HWND parent;
+    int width, height;
+    HWND result;
+    DWORD error;
+};
+
+static HWND layer_host;
+static INIT_ONCE layer_thread_once = INIT_ONCE_STATIC_INIT;
+
+static LRESULT CALLBACK layer_host_proc( HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam )
+{
+    struct layer_request *request = (struct layer_request *)lparam;
+
+    if (message != WM_WINE_CREATE_LAYER) return DefWindowProcW( hwnd, message, wparam, lparam );
+    request->result = CreateWindowExW( WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_NOPARENTNOTIFY,
+            layer_class_name, NULL, WS_CHILD | WS_DISABLED | WS_CLIPSIBLINGS, 0, 0,
+            request->width, request->height, request->parent, NULL, layer_instance, NULL );
+    request->error = request->result ? ERROR_SUCCESS : GetLastError();
+    return 0;
+}
+
+static DWORD WINAPI layer_thread_proc( void *ready )
+{
+    WNDCLASSW class = { .lpfnWndProc = layer_host_proc, .hInstance = layer_instance,
+                        .lpszClassName = L"Wine.UI.Composition.LayerHost" };
+    MSG msg;
+
+    SetThreadDescription( GetCurrentThread(), L"wine_composition_layers" );
+    if (RegisterClassW( &class ) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS)
+        layer_host = CreateWindowExW( 0, class.lpszClassName, NULL, 0, 0, 0, 0, 0, HWND_MESSAGE,
+                                      NULL, layer_instance, NULL );
+    SetEvent( ready );
+    if (!layer_host) return 1;
+    while (GetMessageW( &msg, NULL, 0, 0 ) > 0) DispatchMessageW( &msg );
+    return 0;
+}
+
+static BOOL CALLBACK layer_thread_start( INIT_ONCE *once, void *param, void **context )
+{
+    HANDLE ready, thread;
+
+    if (!(ready = CreateEventW( NULL, TRUE, FALSE, NULL ))) return FALSE;
+    if ((thread = CreateThread( NULL, 0, layer_thread_proc, ready, 0, NULL )))
+    {
+        WaitForSingleObject( ready, INFINITE );
+        CloseHandle( thread );
+    }
+    CloseHandle( ready );
+    return layer_host != NULL;
+}
+
+static HWND create_layer_window( HWND parent, int width, int height )
+{
+    struct layer_request request = { parent, width, height };
+
+    if (!InitOnceExecuteOnce( &layer_thread_once, layer_thread_start, NULL, NULL )) return NULL;
+    SendMessageW( layer_host, WM_WINE_CREATE_LAYER, 0, (LPARAM)&request );
+    if (!request.result) SetLastError( request.error );
+    return request.result;
 }
 
 static BOOL CALLBACK composition_layer_register_class( INIT_ONCE *once, void *param, void **context )
@@ -631,9 +700,7 @@ static HRESULT desktop_window_target_create( IDCompositionDevice *device, struct
         hr = HRESULT_FROM_WIN32( GetLastError() );
         goto failed;
     }
-    impl->render_hwnd = CreateWindowExW( WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_NOPARENTNOTIFY,
-            layer_class_name, NULL, WS_CHILD | WS_DISABLED | WS_CLIPSIBLINGS, 0, 0,
-            max( 1, rect.right ), max( 1, rect.bottom ), hwnd, NULL, layer_instance, NULL );
+    impl->render_hwnd = create_layer_window( hwnd, max( 1, rect.right ), max( 1, rect.bottom ) );
     if (!impl->render_hwnd)
     {
         hr = HRESULT_FROM_WIN32( GetLastError() );
@@ -11988,25 +12055,6 @@ static HRESULT desktop_window_target_render( struct desktop_window_target *targe
     }
     LeaveCriticalSection( &target->render_cs );
     return hr;
-}
-
-static void desktop_window_target_repaint( struct desktop_window_target *target )
-{
-    HRESULT hr;
-
-    EnterCriticalSection( &target->render_cs );
-    if (!target->rendering && target->render_snapshot && target->swapchain &&
-            IsWindow( target->render_hwnd ))
-    {
-        target->rendering = TRUE;
-        /* Present discards the backbuffer; repaint only the last committed image. */
-        hr = ID2D1Bitmap1_CopyFromBitmap( target->render_bitmap, NULL,
-                (ID2D1Bitmap *)target->render_snapshot, NULL );
-        if (SUCCEEDED(hr)) hr = IDXGISwapChain1_Present( target->swapchain, 0, 0 );
-        if (FAILED(hr)) WARN( "composition layer repaint failed, hr %#lx.\n", hr );
-        target->rendering = FALSE;
-    }
-    LeaveCriticalSection( &target->render_cs );
 }
 
 static HRESULT drawing_surface_update_tiles( struct composition_drawing_surface *surface )
