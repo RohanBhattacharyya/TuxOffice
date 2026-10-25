@@ -11666,9 +11666,57 @@ static HRESULT draw_composition_brush( ID2D1DeviceContext *context, IComposition
     return S_OK;
 }
 
+/* Fill a visual's own brush honouring its effective composite mode. Office
+ * draws its text caret as a white sprite with DestinationInvert so that it
+ * shows black on paper and white on dark backgrounds. The layer's backbuffer
+ * cannot be read back here, so an inverting solid colour is approximated by
+ * its complement, which is exact over white and black. */
+static HRESULT draw_visual_brush( ID2D1DeviceContext *context, ICompositionBrush *brush,
+        const D2D1_RECT_F *bounds, FLOAT opacity, enum CompositionCompositeMode mode )
+{
+    HRESULT hr;
+
+    if (mode == CompositionCompositeMode_DestinationInvert && brush->lpVtbl == &composition_brush_vtbl)
+    {
+        struct color_brush *impl = color_brush_from_ICompositionBrush( brush );
+        ID2D1SolidColorBrush *solid;
+        struct Color value;
+        D2D1_COLOR_F color;
+
+        if (FAILED(hr = color_brush_get_Color( &impl->ICompositionColorBrush_iface, &value ))) return hr;
+        color = (D2D1_COLOR_F){(255 - value.R) / 255.0f, (255 - value.G) / 255.0f,
+                (255 - value.B) / 255.0f, opacity * value.A / 255.0f};
+        if (FAILED(hr = ID2D1DeviceContext_CreateSolidColorBrush( context, &color, NULL, &solid ))) return hr;
+        ID2D1DeviceContext_FillRectangle( context, bounds, (ID2D1Brush *)solid );
+        ID2D1SolidColorBrush_Release( solid );
+        return S_OK;
+    }
+    if (mode == CompositionCompositeMode_MinBlend)
+    {
+        ID2D1DeviceContext_SetPrimitiveBlend( context, D2D1_PRIMITIVE_BLEND_MIN );
+        hr = draw_composition_brush( context, brush, bounds, opacity, 0 );
+        ID2D1DeviceContext_SetPrimitiveBlend( context, D2D1_PRIMITIVE_BLEND_SOURCE_OVER );
+        return hr;
+    }
+    return draw_composition_brush( context, brush, bounds, opacity, 0 );
+}
+
+static HRESULT draw_composition_visual_mode( ID2D1DeviceContext *context, IVisual *visual,
+        FLOAT x, FLOAT y, FLOAT parent_width, FLOAT parent_height, FLOAT opacity, UINT depth,
+        enum CompositionCompositeMode parent_mode );
+
 static HRESULT draw_composition_visual( ID2D1DeviceContext *context, IVisual *visual,
         FLOAT x, FLOAT y, FLOAT parent_width, FLOAT parent_height, FLOAT opacity, UINT depth )
 {
+    return draw_composition_visual_mode( context, visual, x, y, parent_width, parent_height,
+            opacity, depth, CompositionCompositeMode_SourceOver );
+}
+
+static HRESULT draw_composition_visual_mode( ID2D1DeviceContext *context, IVisual *visual,
+        FLOAT x, FLOAT y, FLOAT parent_width, FLOAT parent_height, FLOAT opacity, UINT depth,
+        enum CompositionCompositeMode parent_mode )
+{
+    enum CompositionCompositeMode mode;
     struct sprite_visual *impl;
     struct visual_collection *children;
     IInsetClip *clip = NULL;
@@ -11715,6 +11763,7 @@ static HRESULT draw_composition_visual( ID2D1DeviceContext *context, IVisual *vi
         }
     }
     if (!impl->visible) return S_OK;
+    mode = impl->composite_mode == CompositionCompositeMode_Inherit ? parent_mode : impl->composite_mode;
     if (impl->scale_expression)
         expression_animation_get_vector( impl->scale_expression, &impl->scale );
     if (impl->offset_expression)
@@ -11766,15 +11815,15 @@ static HRESULT draw_composition_visual( ID2D1DeviceContext *context, IVisual *vi
         IVisual *source = visual_get_source(impl);
         if (source)
         {
-            hr = draw_composition_visual(context, source, 0.0f, 0.0f, width, height, opacity, depth + 1);
+            hr = draw_composition_visual_mode(context, source, 0.0f, 0.0f, width, height, opacity, depth + 1, mode);
             IVisual_Release(source);
         }
     }
     if (SUCCEEDED(hr) && impl->brush && bounds.right > bounds.left && bounds.bottom > bounds.top)
-        hr = draw_composition_brush( context, impl->brush, &bounds, opacity, 0 );
+        hr = draw_visual_brush( context, impl->brush, &bounds, opacity, mode );
     for (i = 0; SUCCEEDED(hr) && i < children->count; ++i)
-        hr = draw_composition_visual( context, children->items[i], 0.0f, 0.0f, width, height,
-                opacity, depth + 1 );
+        hr = draw_composition_visual_mode( context, children->items[i], 0.0f, 0.0f, width, height,
+                opacity, depth + 1, mode );
     if (clip)
     {
         ID2D1DeviceContext_PopAxisAlignedClip( context );
