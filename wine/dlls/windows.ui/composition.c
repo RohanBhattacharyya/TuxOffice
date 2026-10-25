@@ -639,6 +639,8 @@ static HRESULT desktop_window_target_create( IDCompositionDevice *device, struct
         hr = HRESULT_FROM_WIN32( GetLastError() );
         goto failed;
     }
+    TRACE( "target hwnd %p owned by thread %04lx, layer %p created on thread %04lx\n", hwnd,
+           GetWindowThreadProcessId( hwnd, NULL ), impl->render_hwnd, GetCurrentThreadId() );
     EnterCriticalSection( &layer_cs );
     list_add_tail( &layer_targets, &impl->layer_entry );
     impl->layer_linked = TRUE;
@@ -11613,6 +11615,38 @@ static HRESULT draw_composition_visual( ID2D1DeviceContext *context, IVisual *vi
     if (!visual) return S_OK;
     if (depth > 64) return E_INVALIDARG;
     impl = sprite_visual_from_IVisual( visual );
+    if (TRACE_ON(ui) && impl->size.X > 0.0f && impl->size.X <= 6.0f && impl->size.Y >= 8.0f)
+    {
+        const char *kind = "none";
+        struct Color c = {0};
+        if (impl->brush && impl->brush->lpVtbl == &composition_brush_vtbl)
+        {
+            kind = "color";
+            color_brush_get_Color( &color_brush_from_ICompositionBrush( impl->brush )->ICompositionColorBrush_iface, &c );
+        }
+        else if (impl->brush && (const void *)impl->brush->lpVtbl == &gradient_brush_vtbl) kind = "gradient";
+        else if (impl->brush && impl->brush->lpVtbl == &surface_composition_brush_vtbl) kind = "surface";
+        else if (impl->brush && impl->brush->lpVtbl == &nine_grid_composition_brush_vtbl) kind = "ninegrid";
+        else if (impl->brush && impl->brush->lpVtbl == &effect_composition_brush_vtbl) kind = "effect";
+        else if (impl->brush) kind = "other";
+        TRACE( "caret-like visual %p visible %d opacity %f size %fx%f offset %f,%f brush %p (%s #%02x%02x%02x%02x) depth %u parent_opacity %f\n",
+               impl, impl->visible, impl->opacity, impl->size.X, impl->size.Y, impl->offset.X, impl->offset.Y,
+               impl->brush, kind, c.A, c.R, c.G, c.B, depth, opacity );
+    }
+    if (TRACE_ON(ui) && impl->size.X > 0.0f && impl->size.X <= 6.0f && impl->size.Y >= 8.0f && !impl->brush)
+    {
+        struct visual_collection *kids = impl_from_IVisualCollection( impl->children );
+        UINT k;
+        TRACE( "caret-like visual %p has %u children\n", impl, kids->count );
+        for (k = 0; k < kids->count; ++k)
+        {
+            struct sprite_visual *kid = sprite_visual_from_IVisual( kids->items[k] );
+            TRACE( "  child %p visible %d opacity %f size %fx%f rel %f,%f offset %f,%f brush %p clip %p\n",
+                   kid, kid->visible, kid->opacity, kid->size.X, kid->size.Y,
+                   kid->relative_size_adjustment.X, kid->relative_size_adjustment.Y,
+                   kid->offset.X, kid->offset.Y, kid->brush, kid->clip );
+        }
+    }
     if (!impl->visible) return S_OK;
     if (impl->scale_expression)
         expression_animation_get_vector( impl->scale_expression, &impl->scale );
@@ -11794,6 +11828,7 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
         return S_FALSE;
     }
     source = find_visual_drawing_surface( target->root, 0 );
+    TRACE( "render target hwnd %p layer %p topmost %d\n", target->hwnd, target->render_hwnd, target->topmost );
     GetClientRect( target->hwnd, &client );
     width = max( 1, client.right - client.left );
     height = max( 1, client.bottom - client.top );
