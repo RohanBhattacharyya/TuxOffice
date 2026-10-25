@@ -11,6 +11,10 @@
 
 #include "private.h"
 
+#include "wine/debug.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(onlineid);
+
 #define ASYNC_CLOSED ((AsyncStatus)4)
 #define HANDLER_ASSIGNED ((IUnknown *)~(ULONG_PTR)0)
 
@@ -434,6 +438,9 @@ static HRESULT token_worker( struct web_async_operation *impl, IInspectable **re
     else
         hr = WindowsCreateString( L"", 0, &login_hint );
     if (FAILED(hr)) goto done;
+    TRACE( "token request silent %d prompt %d client %s authority %s scopes %s account %d\n",
+           impl->u.token.silent, prompt, debugstr_hstring( client_id ), debugstr_hstring( authority ),
+           debugstr_hstring( scopes ), impl->u.token.account != NULL );
     if (impl->u.token.silent)
     {
         if (!account_id && FAILED(hr = WindowsCreateString( L"", 0, &account_id ))) goto done;
@@ -441,6 +448,8 @@ static HRESULT token_worker( struct web_async_operation *impl, IInspectable **re
     }
     else
         hr = identity_bridge_authorize_client( client_id, scopes, authority, login_hint, policy, prompt == WebTokenRequestPromptType_ForceAuthentication, impl->cancel, &reply );
+    TRACE( "token request -> %#lx (reply error %#lx, tenant %s)\n", hr, reply.error,
+           debugstr_hstring( reply.tenant_id ) );
     if (SUCCEEDED(hr))
         hr = web_token_result_create( impl->u.token.request, provider, &reply, WebTokenRequestStatus_Success, &token_result );
     else if (hr == HRESULT_FROM_WIN32( ERROR_CANCELLED ))
@@ -477,6 +486,8 @@ static HRESULT provider_worker( struct web_async_operation *impl, IInspectable *
         WindowsDeleteString( display_name );
         return hr;
     }
+    TRACE( "provider %s authority %s system %d\n", debugstr_hstring( impl->u.provider.provider_id ),
+           debugstr_hstring( authority ), impl->u.provider.system_provider );
     hr = web_account_provider_create( impl->u.provider.provider_id, display_name,
                                       authority, impl->u.provider.system_provider,
                                       &provider );
@@ -516,6 +527,8 @@ static HRESULT accounts_worker( struct web_async_operation *impl, IInspectable *
         &IID_IWebAccountProvider2, (void **)&provider2 )) ||
         FAILED(hr = IWebAccountProvider2_get_Authority( provider2, &authority ))) goto done;
     hr = identity_bridge_list_accounts( impl->u.accounts.client_id, authority, impl->cancel, &reply );
+    TRACE( "list accounts provider %s client %s authority %s -> %#lx\n", debugstr_hstring( provider_id ),
+           debugstr_hstring( impl->u.accounts.client_id ), debugstr_hstring( authority ), hr );
     if (hr == HRESULT_FROM_WIN32( ERROR_CANCELLED )) goto done;
     reply.error = hr;
     hr = web_accounts_result_create( impl->u.accounts.provider, &reply, &accounts_result );

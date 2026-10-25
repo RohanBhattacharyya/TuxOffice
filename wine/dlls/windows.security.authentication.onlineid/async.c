@@ -10,6 +10,10 @@
 
 #include "private.h"
 
+#include "wine/debug.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(onlineid);
+
 #define ASYNC_CLOSED ((AsyncStatus)4)
 #define HANDLER_ASSIGNED ((void *)~(ULONG_PTR)0)
 
@@ -332,6 +336,8 @@ static void CALLBACK operation_callback( TP_CALLBACK_INSTANCE *instance, void *c
     if (SUCCEEDED(hr = IOnlineIdServiceTicketRequest_get_Service( impl->request, &service )) &&
         SUCCEEDED(hr = IOnlineIdServiceTicketRequest_get_Policy( impl->request, &policy )))
         hr = identity_bridge_authorize( &impl->application_id, service, policy, impl->cancel, &reply );
+    TRACE( "ticket app %s service %s policy %s -> %#lx (tenant %s)\n", debugstr_guid( &impl->application_id ),
+           debugstr_hstring( service ), debugstr_hstring( policy ), hr, debugstr_hstring( reply.tenant_id ) );
     if (FAILED(hr)) reply.error = hr;
     if (SUCCEEDED(hr) || reply.error)
         hr = ticket_result_create( impl->request, &reply, &result );
