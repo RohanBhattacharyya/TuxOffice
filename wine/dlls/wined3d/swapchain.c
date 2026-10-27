@@ -26,6 +26,7 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(d3d);
 WINE_DECLARE_DEBUG_CHANNEL(d3d_perf);
+WINE_DECLARE_DEBUG_CHANNEL(uiperf);
 
 static BOOL set_window_present_rect(HWND hwnd, UINT x, UINT y, UINT width, UINT height)
 {
@@ -128,6 +129,11 @@ static void wined3d_swapchain_vk_destroy_vulkan_swapchain(struct wined3d_swapcha
     free(swapchain_vk->vk_semaphores);
     VK_CALL(vkDestroySwapchainKHR(device_vk->vk_device, swapchain_vk->vk_swapchain, NULL));
     VK_CALL(vkDestroySurfaceKHR(vk_info->instance, swapchain_vk->vk_surface, NULL));
+    swapchain_vk->vk_images = NULL;
+    swapchain_vk->vk_semaphores = NULL;
+    swapchain_vk->image_count = 0;
+    swapchain_vk->vk_swapchain = VK_NULL_HANDLE;
+    swapchain_vk->vk_surface = VK_NULL_HANDLE;
 }
 
 static void wined3d_swapchain_vk_destroy_object(void *object)
@@ -847,6 +853,7 @@ static bool wined3d_swapchain_vk_create_vulkan_swapchain_images(struct wined3d_s
     {
         ERR("Failed to get swapchain images, vr %s.\n", wined3d_debug_vkresult(vr));
         free(swapchain_vk->vk_images);
+        swapchain_vk->vk_images = NULL;
         return false;
     }
 
@@ -854,6 +861,7 @@ static bool wined3d_swapchain_vk_create_vulkan_swapchain_images(struct wined3d_s
     {
         ERR("Failed to allocate semaphores array.\n");
         free(swapchain_vk->vk_images);
+        swapchain_vk->vk_images = NULL;
         return false;
     }
 
@@ -890,6 +898,8 @@ fail:
     }
     free(swapchain_vk->vk_semaphores);
     free(swapchain_vk->vk_images);
+    swapchain_vk->vk_semaphores = NULL;
+    swapchain_vk->vk_images = NULL;
     return false;
 }
 
@@ -1027,6 +1037,7 @@ static HRESULT wined3d_swapchain_vk_create_vulkan_swapchain(struct wined3d_swapc
     if (!wined3d_swapchain_vk_create_vulkan_swapchain_images(swapchain_vk, vk_swapchain))
     {
         VK_CALL(vkDestroySwapchainKHR(device_vk->vk_device, vk_swapchain, NULL));
+        swapchain_vk->vk_swapchain = VK_NULL_HANDLE;
         goto fail;
     }
 
@@ -1050,7 +1061,7 @@ static HRESULT wined3d_swapchain_vk_recreate(struct wined3d_swapchain_vk *swapch
     return wined3d_swapchain_vk_create_vulkan_swapchain(swapchain_vk);
 }
 
-static void wined3d_swapchain_vk_set_swap_interval(struct wined3d_swapchain_vk *swapchain_vk,
+static HRESULT wined3d_swapchain_vk_set_swap_interval(struct wined3d_swapchain_vk *swapchain_vk,
         unsigned int swap_interval)
 {
     if (swap_interval > 1)
@@ -1061,10 +1072,10 @@ static void wined3d_swapchain_vk_set_swap_interval(struct wined3d_swapchain_vk *
     }
 
     if (swapchain_vk->s.swap_interval == swap_interval)
-        return;
+        return WINED3D_OK;
 
     swapchain_vk->s.swap_interval = swap_interval;
-    wined3d_swapchain_vk_recreate(swapchain_vk);
+    return wined3d_swapchain_vk_recreate(swapchain_vk);
 }
 
 static VkResult wined3d_swapchain_vk_blit(struct wined3d_swapchain_vk *swapchain_vk,
@@ -1090,7 +1101,10 @@ static VkResult wined3d_swapchain_vk_blit(struct wined3d_swapchain_vk *swapchain
     TRACE("swapchain_vk %p, context_vk %p, src_rect %s, dst_rect %s, swap_interval %u.\n",
             swapchain_vk, context_vk, wine_dbgstr_rect(src_rect), wine_dbgstr_rect(dst_rect), swap_interval);
 
-    wined3d_swapchain_vk_set_swap_interval(swapchain_vk, swap_interval);
+    /* A queued present may outlive its window. A failed recreation destroyed
+     * the old swapchain and semaphores; never acquire an image from them. */
+    if (FAILED(wined3d_swapchain_vk_set_swap_interval(swapchain_vk, swap_interval)))
+        return VK_ERROR_SURFACE_LOST_KHR;
 
     present_idx = swapchain_vk->current++ % swapchain_vk->image_count;
     wined3d_context_vk_wait_command_buffer(context_vk, swapchain_vk->vk_semaphores[present_idx].command_buffer_id);
@@ -1258,6 +1272,7 @@ static void swapchain_vk_present(struct wined3d_swapchain *swapchain, const RECT
     struct wined3d_context_vk *context_vk;
     VkResult vr;
     HRESULT hr;
+    ULONGLONG started = GetTickCount64();
 
     context_vk = wined3d_context_vk(context_acquire(swapchain->device, back_buffer, 0));
 
@@ -1294,6 +1309,8 @@ static void swapchain_vk_present(struct wined3d_swapchain *swapchain, const RECT
     TRACE("Starting new frame.\n");
 
     context_release(&context_vk->c);
+    TRACE_(uiperf)("gpu_frame hwnd %p tick %I64u elapsed %I64u.\n",
+            swapchain->win_handle, started, GetTickCount64() - started);
 }
 
 static const struct wined3d_swapchain_ops swapchain_vk_ops =
