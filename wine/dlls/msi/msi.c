@@ -2768,6 +2768,35 @@ static BOOL open_userdata_comp_key( const WCHAR *comp, const WCHAR *usersid, MSI
     return FALSE;
 }
 
+/* A component key path is a file or, as "NN:\key\value", a registry
+ * value (an empty value name means the key itself). The first digit is 2
+ * for the 64-bit view, the second picks HKCR, HKCU, HKLM or HKU. */
+static BOOL component_keypath_exists( const WCHAR *path )
+{
+    static const HKEY roots[] = {HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, HKEY_USERS};
+    const WCHAR *value;
+    WCHAR *key;
+    REGSAM access = KEY_QUERY_VALUE;
+    HKEY hkey;
+    BOOL ret;
+
+    if (!path) return FALSE;
+    if (!(path[0] == '0' || path[0] == '2') || path[1] < '0' || path[1] > '3' ||
+            path[2] != ':' || path[3] != '\\')
+        return GetFileAttributesW( path ) != INVALID_FILE_ATTRIBUTES;
+    if (path[0] == '2') access |= KEY_WOW64_64KEY;
+    if (!(value = wcsrchr( path + 4, '\\' ))) return FALSE;
+    if (!(key = malloc( (value - (path + 4) + 1) * sizeof(WCHAR) ))) return FALSE;
+    memcpy( key, path + 4, (value - (path + 4)) * sizeof(WCHAR) );
+    key[value - (path + 4)] = 0;
+    ret = !RegOpenKeyExW( roots[path[1] - '0'], key, 0, access, &hkey );
+    free( key );
+    if (!ret) return FALSE;
+    if (*++value) ret = !RegQueryValueExW( hkey, value, NULL, NULL, NULL, NULL );
+    RegCloseKey( hkey );
+    return ret;
+}
+
 static INSTALLSTATE MSI_GetComponentPath( const WCHAR *szProduct, const WCHAR *szComponent,
                                           const WCHAR *szUserSid, MSIINSTALLCONTEXT ctx,
                                           awstring *lpPathBuf, DWORD *pcchBuf )
@@ -2801,7 +2830,7 @@ static INSTALLSTATE MSI_GetComponentPath( const WCHAR *szProduct, const WCHAR *s
         if ((!MSIREG_OpenInstallProps(szProduct, MSIINSTALLCONTEXT_MACHINE, NULL, &hkey, FALSE) ||
              !MSIREG_OpenUserDataProductKey(szProduct, MSIINSTALLCONTEXT_USERUNMANAGED, NULL, &hkey, FALSE)) &&
             msi_reg_get_val_dword(hkey, L"WindowsInstaller", &version) &&
-            GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES)
+            component_keypath_exists( path ))
         {
             RegCloseKey(hkey);
             state = INSTALLSTATE_LOCAL;
@@ -2822,7 +2851,7 @@ static INSTALLSTATE MSI_GetComponentPath( const WCHAR *szProduct, const WCHAR *s
 
             state = INSTALLSTATE_ABSENT;
 
-            if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES)
+            if (component_keypath_exists( path ))
                 state = INSTALLSTATE_LOCAL;
         }
     }
