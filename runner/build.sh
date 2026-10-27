@@ -137,7 +137,11 @@ cp -a --reflink=auto "$(readlink -f "$base_runner")" "$OUT.tmp"
 install_support_files "$OUT.tmp"
 if ((server_changed)); then install -m 0755 server/wineserver "$OUT.tmp/bin/wineserver"; fi
 if ((protocol_changed)); then install_unix32_ntdll "$OUT.tmp"; fi
+missing=()
 for d in "${dlls[@]}"; do
+  # configure disables a module whose libraries are missing; shipping Soda's
+  # unpatched copy instead would go unnoticed, so stop.
+  compgen -G "dlls/$d/x86_64-windows/*.[de][lrx][lve]" >/dev/null || missing+=("$d")
   for arch in x86_64 i386; do
     pe=$(ls "dlls/$d/$arch-windows/"*.{dll,drv,exe} 2>/dev/null | head -1) || true
     [[ -n $pe ]] && install -m 0644 "$pe" "$OUT.tmp/lib/wine/$arch-windows/$(basename "$pe")"
@@ -147,6 +151,14 @@ for d in "${dlls[@]}"; do
     [[ -f $so ]] && install -m 0755 "$so" "$OUT.tmp/lib/wine/x86_64-unix/$(basename "$so")"
   done
 done
+if ((${#missing[@]})); then
+  echo "error: changed modules were not built (missing build dependencies?): ${missing[*]}" >&2
+  rm -rf "$OUT.tmp"; exit 1
+fi
+if [[ " ${dlls[*]} " == *" winewayland.drv "* && ! -f dlls/winewayland.drv/winewayland.so ]]; then
+  echo "error: winewayland.so was not built; install the Wayland and xkbcommon development files" >&2
+  rm -rf "$OUT.tmp"; exit 1
+fi
 # Keep Soda's separate debug info next to the libraries for gdb.
 [[ -d $OUT/lib/wine/x86_64-unix/.debug ]] && cp -a "$OUT/lib/wine/x86_64-unix/.debug" "$OUT.tmp/lib/wine/x86_64-unix/" 2>/dev/null || true
 rm -rf "$OUT" && mv "$OUT.tmp" "$OUT"
