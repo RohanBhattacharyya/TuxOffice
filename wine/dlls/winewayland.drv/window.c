@@ -35,6 +35,7 @@
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(waylanddrv);
+WINE_DECLARE_DEBUG_CHANNEL(uistack);
 
 
 static int wayland_win_data_cmp_rb(const void *key,
@@ -51,6 +52,7 @@ static int wayland_win_data_cmp_rb(const void *key,
 
 static pthread_mutex_t win_data_mutex = PTHREAD_MUTEX_INITIALIZER;
 static struct rb_tree win_data_rb = { wayland_win_data_cmp_rb };
+static BOOL is_mso_border_effect_window(HWND hwnd);
 
 /***********************************************************************
  *           wayland_win_data_create
@@ -72,6 +74,7 @@ static struct wayland_win_data *wayland_win_data_create(HWND hwnd, const struct 
 
     data->hwnd = hwnd;
     data->rects = *rects;
+    data->mso_border_effect = is_mso_border_effect_window(hwnd);
     wl_list_init(&data->overlays);
 
     pthread_mutex_lock(&win_data_mutex);
@@ -153,11 +156,24 @@ void wayland_win_data_release(struct wayland_win_data *data)
 static void wayland_win_data_get_config(struct wayland_win_data *data,
                                         struct wayland_window_config *conf)
 {
+    struct wayland_win_data *root_data;
     enum wayland_surface_config_state window_state = 0;
     DWORD style;
 
     conf->rect = data->rects.window;
     conf->client_rect = data->rects.client;
+    /* Win32u gives child rectangles in parent-client coordinates. Wayland
+     * subsurface placement subtracts the root's screen rectangle, so first
+     * express a child's rectangles in that same coordinate system. Keep the
+     * mapping relative to the root client to handle monitor DPI/origins. */
+    if (data->root_hwnd && data->root_hwnd != data->hwnd &&
+        (root_data = wayland_win_data_get_nolock(data->root_hwnd)))
+    {
+        int x = root_data->rects.client.left + data->root_client_offset.x;
+        int y = root_data->rects.client.top + data->root_client_offset.y;
+        OffsetRect(&conf->rect, x, y);
+        OffsetRect(&conf->client_rect, x, y);
+    }
     style = NtUserGetWindowLongW(data->hwnd, GWL_STYLE);
 
     TRACE("window=%s style=%#x\n", wine_dbgstr_rect(&conf->rect), style);
@@ -208,6 +224,10 @@ static BOOL wayland_win_data_create_wayland_surface(struct wayland_win_data *dat
     struct wl_region *input_region;
 
     TRACE("hwnd=%p\n", data->hwnd);
+
+    /* No path, including GPU client-surface creation, may promote an
+     * unowned Office shadow strip to an independent desktop window. */
+    if (data->mso_border_effect && !toplevel_surface) return FALSE;
 
     visible = ((style & WS_VISIBLE) == WS_VISIBLE) &&
                (!(exstyle & WS_EX_LAYERED) || data->layered_attribs_set || data->client_surface);
@@ -384,19 +404,6 @@ static inline HWND get_active_window(void)
     return NtUserGetGUIThreadInfo(GetCurrentThreadId(), &info) ? info.hwndActive : 0;
 }
 
-static BOOL is_mso_border_effect_window(HWND hwnd)
-{
-    static const WCHAR border_effect[] = u"MSO_BORDEREFFECT_WINDOW_CLASS";
-    WCHAR class_name[ARRAY_SIZE(border_effect)];
-    UNICODE_STRING name = {.Buffer = class_name, .MaximumLength = sizeof(class_name)};
-    DWORD style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
-    DWORD ex_style = NtUserGetWindowLongW(hwnd, GWL_EXSTYLE);
-
-    return NtUserGetClassName(hwnd, FALSE, &name) == ARRAY_SIZE(border_effect) - 1 &&
-           !wcsncmp(class_name, border_effect, ARRAY_SIZE(border_effect) - 1) &&
-           (style & WS_POPUP) && (ex_style & WS_EX_LAYERED);
-}
-
 /***********************************************************************
  *		is_window_managed
  *
@@ -478,6 +485,53 @@ BOOL WAYLAND_WindowPosChanging(HWND hwnd, UINT swp_flags, BOOL shaped, const str
     return TRUE;
 }
 
+static BOOL is_mso_border_effect_window(HWND hwnd)
+{
+    static const WCHAR border_effect[] = u"MSO_BORDEREFFECT_WINDOW_CLASS";
+    WCHAR class_name[ARRAY_SIZE(border_effect)];
+    UNICODE_STRING name = {.Buffer = class_name, .MaximumLength = sizeof(class_name)};
+    return NtUserGetClassName(hwnd, FALSE, &name) == ARRAY_SIZE(border_effect) - 1 &&
+           !wcsncmp(class_name, border_effect, ARRAY_SIZE(border_effect) - 1);
+}
+
+/* Office's frame shadow strips have neither a parent nor an owner, and are
+ * outside the frame, so WindowFromPoint cannot find the frame behind them.
+ * Match their edges to a managed window in this process instead. Called with
+ * win_data_mutex held; use only cached rectangles, never Wine window calls. */
+static HWND find_mso_border_parent(HWND hwnd, HWND active, const RECT *border)
+{
+    struct wayland_win_data *candidate;
+    LONGLONG best_score = 129;
+    HWND best = NULL;
+
+    RB_FOR_EACH_ENTRY(candidate, &win_data_rb, struct wayland_win_data, entry)
+    {
+        const RECT *frame = &candidate->rects.window;
+        LONGLONG score;
+
+        if (candidate->hwnd == hwnd || !candidate->managed || !candidate->wayland_surface ||
+            frame->right <= frame->left || frame->bottom <= frame->top) continue;
+
+        if ((LONGLONG)border->right - border->left > (LONGLONG)border->bottom - border->top)
+            score = llabs((LONGLONG)border->left - frame->left) +
+                    llabs((LONGLONG)border->right - frame->right) +
+                    min(llabs((LONGLONG)border->bottom - frame->top),
+                        llabs((LONGLONG)border->top - frame->bottom));
+        else
+            score = llabs((LONGLONG)border->top - frame->top) +
+                    llabs((LONGLONG)border->bottom - frame->bottom) +
+                    min(llabs((LONGLONG)border->right - frame->left),
+                        llabs((LONGLONG)border->left - frame->right));
+
+        if (score <= 128 && (score < best_score || (score == best_score && candidate->hwnd == active)))
+        {
+            best_score = score;
+            best = candidate->hwnd;
+        }
+    }
+    return best;
+}
+
 /***********************************************************************
  *           WAYLAND_WindowPosChanged
  */
@@ -485,37 +539,65 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
                               const struct window_rects *new_rects, struct window_surface *surface)
 {
     HWND toplevel = NtUserGetAncestor(hwnd, GA_ROOT);
+    HWND root = toplevel, parent;
+    POINT root_client_offset = {0};
     struct wayland_surface *toplevel_surface;
     struct wayland_client_surface *client;
     struct wayland_win_data *data, *toplevel_data;
-    BOOL border_effect, managed;
+    HWND active = NULL, border_parent, owner;
+    BOOL managed, orphan_border, moved_only;
+    BOOL border_effect = is_mso_border_effect_window(hwnd);
     BOOL fullscreen = swp_flags & WINE_SWP_FULLSCREEN;
 
     TRACE("hwnd %p new_rects %s after %p flags %08x\n", hwnd,
           debugstr_window_rects(new_rects), insert_after, swp_flags);
 
-    if ((border_effect = is_mso_border_effect_window(hwnd))) surface = NULL;
-
     /* Get the managed state with win_data unlocked, as is_window_managed
      * may need to query win_data information about other HWNDs and thus
      * acquire the lock itself internally. */
-    if (!(managed = is_window_managed(hwnd, swp_flags, fullscreen)) && surface) toplevel = owner_hint;
+    managed = !border_effect && is_window_managed(hwnd, swp_flags, fullscreen);
+    if (border_effect) active = NtUserGetAncestor(get_active_window(), GA_ROOT);
+    if (root && root != hwnd && (parent = NtUserGetAncestor(hwnd, GA_PARENT)))
+        NtUserMapWindowPoints(parent, root, &root_client_offset, 1,
+                             NtUserGetWinMonitorDpi(root, MDT_WINE_RAW_DPI));
+    if (!managed && surface) toplevel = owner_hint;
+    owner = managed ? NtUserGetWindowRelative(hwnd, GW_OWNER) : NULL;
 
     if (!(data = wayland_win_data_get(hwnd))) return;
+    if (border_effect && (border_parent = find_mso_border_parent(hwnd, active, &new_rects->window)))
+        toplevel = border_parent;
     toplevel_data = toplevel && toplevel != hwnd ? wayland_win_data_get_nolock(toplevel) : NULL;
     toplevel_surface = toplevel_data ? toplevel_data->wayland_surface : NULL;
+    TRACE_(uistack)("position hwnd %p root %p host %p flags %#x buffer %d client %d own_surface %d rect %s\n",
+                   hwnd, root, toplevel, swp_flags, !!surface, !!data->client_surface,
+                   !!data->wayland_surface, wine_dbgstr_rect(&new_rects->window));
+    orphan_border = border_effect && !toplevel_surface;
     /* a moved child or popup may change the stacking of its toplevel */
     if (toplevel_data) toplevel_data->restack_pending = TRUE;
+    moved_only = (data->rects.window.left != new_rects->window.left ||
+                  data->rects.window.top != new_rects->window.top) &&
+                 data->rects.window.right - data->rects.window.left ==
+                     new_rects->window.right - new_rects->window.left &&
+                 data->rects.window.bottom - data->rects.window.top ==
+                     new_rects->window.bottom - new_rects->window.top;
     data->rects = *new_rects;
+    data->root_hwnd = root;
+    data->root_client_offset = root_client_offset;
     data->is_fullscreen = fullscreen;
     data->managed = managed;
+    data->mso_border_effect = border_effect;
 
-    if (!surface && (border_effect || !NtUserIsWindowVisible(hwnd) ||
-        (toplevel != hwnd && !data->client_surface)))
+    /* A GPU child already belongs to the root's client-surface stack. Do
+     * not create an extra SHM subsurface for it on a position change: that
+     * reparents the GPU surface root -> child -> root on its next present,
+     * exposing the GDI background between those commits. Foreign roots
+     * still need the existing standalone/import fallback. */
+    if (orphan_border || (!surface && (!NtUserIsWindowVisible(hwnd) ||
+        (toplevel != hwnd && (!data->client_surface || (root != hwnd && toplevel_surface))))))
     {
         if ((client = data->client_surface))
         {
-            if (!border_effect && toplevel && NtUserIsWindowVisible(hwnd))
+            if (!orphan_border && toplevel && NtUserIsWindowVisible(hwnd))
                 wayland_client_surface_attach(client, toplevel);
             else
                 wayland_client_surface_attach(client, NULL);
@@ -529,7 +611,19 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
         }
     }
     else if (wayland_win_data_create_wayland_surface(data, toplevel_surface))
+    {
+        struct wayland_win_data *owner_data = owner ? wayland_win_data_get_nolock(owner) : NULL;
+
+        wayland_surface_set_parent(data->wayland_surface, owner_data ? owner_data->wayland_surface : NULL);
         wayland_win_data_update_wayland_state(data);
+        /* A subsurface's position is otherwise applied with its next buffer.
+         * A window that only moves needs no repaint, so without this it stays
+         * at its old place, e.g. Office's frame shadow strip on the edge that
+         * does not change size during an interactive resize. */
+        if (moved_only && data->window_contents &&
+            data->wayland_surface->role == WAYLAND_SURFACE_ROLE_SUBSURFACE)
+            wayland_surface_reconfigure(data->wayland_surface);
+    }
 
     wayland_win_data_release(data);
 
@@ -575,8 +669,14 @@ static void wayland_configure_window(HWND hwnd)
 
     state = surface->processing.state;
     /* Ignore size hints if we don't have a state that requires strict
-     * size adherence, in order to avoid spurious resizes. */
-    if (state)
+     * size adherence, in order to avoid spurious resizes. When the
+     * compositor takes a window out of the maximized or fullscreen state,
+     * its size is the one to restore to; keeping the old size would leave a
+     * restored window covering the screen, which Office then treats as
+     * neither maximized nor restored. A restore the application made
+     * itself already has its size. */
+    if (state || (surface->window.state & (WAYLAND_SURFACE_CONFIG_STATE_MAXIMIZED |
+                                           WAYLAND_SURFACE_CONFIG_STATE_FULLSCREEN)))
     {
         width = surface->processing.width;
         height = surface->processing.height;
@@ -939,11 +1039,12 @@ BOOL set_window_surface_contents(HWND hwnd, struct wayland_shm_buffer *shm_buffe
             TRACE("Wayland surface not configured yet, not flushing\n");
         }
     }
-    else if (is_mso_border_effect_window(hwnd))
+    else if (data->mso_border_effect)
     {
+        /* Keep the most recent pixels until a frame is available, without
+         * retrying a flush that cannot yet be presented. */
         committed = TRUE;
     }
-
     /* Update the latest window buffer for the wayland surface. Note that we
      * only care whether the buffer contains the latest window contents,
      * it's irrelevant if it was actually committed or not. */

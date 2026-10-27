@@ -252,6 +252,12 @@ struct wayland_client_surface
     struct wl_subsurface *wl_subsurface;
     struct wp_viewport *wp_viewport;
     struct wl_callback *foreign_activation_frame_callback;
+    /* size of the last image a Vulkan present reported, 0 if none has */
+    UINT present_width, present_height;
+    /* size of the image before it; the surface shows one of the two */
+    UINT previous_width, previous_height;
+    BOOL presenting; /* a present is updating the surface */
+    BOOL cropped; /* showing only the part inside its window */
 };
 
 struct wayland_shm_buffer
@@ -281,6 +287,7 @@ struct wayland_surface
     RTL_ATOM imported_handle_atom;
     HWND foreign_parent_hwnd;
     BOOL foreign_activation_pending;
+    struct xdg_toplevel *parent_toplevel; /* the owner's, set with xdg_toplevel_set_parent */
 
     enum wayland_surface_role role;
     union
@@ -326,6 +333,7 @@ void wayland_output_use_xdg_extension(struct wayland_output *output);
 struct wayland_surface *wayland_surface_create(HWND hwnd);
 void wayland_surface_destroy(struct wayland_surface *surface);
 void wayland_surface_make_toplevel(struct wayland_surface *surface);
+void wayland_surface_set_parent(struct wayland_surface *surface, struct wayland_surface *parent);
 void wayland_surface_update_foreign_parent(struct wayland_surface *surface);
 void wayland_activate_foreign_child(HWND hwnd, uint32_t serial);
 void wayland_forget_foreign_child(HWND hwnd);
@@ -388,8 +396,11 @@ struct wayland_win_data
     struct wayland_client_surface *client_surface;
     /* window rects, relative to parent client area */
     struct window_rects rects;
+    HWND root_hwnd;
+    POINT root_client_offset;
     BOOL is_fullscreen;
     BOOL managed;
+    BOOL mso_border_effect;
     BOOL layered_attribs_set;
     /* the client surfaces and popups of this toplevel need restacking */
     BOOL restack_pending;

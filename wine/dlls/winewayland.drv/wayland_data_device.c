@@ -26,10 +26,13 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <unistd.h>
 
 #include "waylanddrv.h"
+#include "shlobj.h"
+#include "wine/unixlib.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(clipboard);
@@ -63,6 +66,7 @@ static const WCHAR pngW[] = {'P','N','G',0};
 static const WCHAR jfifW[] = {'J','F','I','F',0};
 static const WCHAR gifW[] = {'G','I','F',0};
 static const WCHAR image_svg_xmlW[] = {'i','m','a','g','e','/','s','v','g','+','x','m','l',0};
+static const WCHAR html_formatW[] = {'H','T','M','L',' ','F','o','r','m','a','t',0};
 
 /* Normalize the MIME type string by skipping inconsequential characters,
  * such as spaces and double quotes, and convert to lower case. */
@@ -167,13 +171,16 @@ out:
 
 static void *export_unicode_text(void *data, size_t size, size_t *ret_size)
 {
+    const WCHAR *text = data;
     DWORD byte_count;
+    size_t len = 0;
     char *bytes;
 
-    /* Wayland apps expect strings to not be zero-terminated, so avoid
-     * zero-terminating the resulting converted string. */
-    if (size >= sizeof(WCHAR) && ((WCHAR *)data)[size / sizeof(WCHAR) - 1] == 0)
-        size -= sizeof(WCHAR);
+    /* Wayland apps expect strings to not be zero-terminated. The text ends
+     * at its first null character: clipboard memory is often larger than the
+     * string (Word's is), and the rest would reach the other application. */
+    while (len < size / sizeof(WCHAR) && text[len]) len++;
+    size = len * sizeof(WCHAR);
 
     RtlUnicodeToUTF8N(NULL, 0, &byte_count, data, size);
     if (!(bytes = malloc(byte_count))) return NULL;
@@ -181,6 +188,209 @@ static void *export_unicode_text(void *data, size_t size, size_t *ret_size)
 
     *ret_size = byte_count;
     return bytes;
+}
+
+/* Windows' "HTML Format" is UTF-8 HTML after a header of byte offsets. Export
+ * the whole document when the header has it: Office keeps its styles in the
+ * head, so the fragment alone loses most formatting in Linux applications. */
+static void *export_html(void *data, size_t size, size_t *ret_size)
+{
+    size_t start_html = 0, end_html = 0, start = 0, end = 0;
+    const char *p = data, *data_end = (const char *)data + size;
+    char *ret;
+
+    while (p < data_end && *p && *p != '<')
+    {
+        if (data_end - p > 10 && !strncmp(p, "StartHTML:", 10)) start_html = strtoul(p + 10, NULL, 10);
+        else if (data_end - p > 8 && !strncmp(p, "EndHTML:", 8)) end_html = strtoul(p + 8, NULL, 10);
+        else if (data_end - p > 14 && !strncmp(p, "StartFragment:", 14)) start = strtoul(p + 14, NULL, 10);
+        else if (data_end - p > 12 && !strncmp(p, "EndFragment:", 12)) end = strtoul(p + 12, NULL, 10);
+        while (p < data_end && *p && *p != '\r' && *p != '\n') p++;
+        while (p < data_end && (*p == '\r' || *p == '\n')) p++;
+    }
+    if (start_html && start_html < end_html && end_html <= size)
+    {
+        start = start_html;
+        end = end_html;
+    }
+    if (!start || start >= end || end > size) return NULL;
+    if (!(ret = malloc(end - start))) return NULL;
+    memcpy(ret, (char *)data + start, end - start);
+    *ret_size = end - start;
+    return ret;
+}
+
+static void *import_html(void *data, size_t size, size_t *ret_size)
+{
+    static const char header[] =
+        "Version:0.9\n"
+        "StartHTML:0000000100\n"
+        "EndHTML:%010lu\n"
+        "StartFragment:%010lu\n"
+        "EndFragment:%010lu\n"
+        "<!--StartFragment-->";
+    static const char trailer[] = "\n<!--EndFragment-->";
+    size_t len = strlen(header) + 12, total; /* 3 * 4 more characters for %010lu */
+    char *text = NULL, *ret, *p;
+
+    /* Firefox uses UTF-16LE with a byte order mark; convert to UTF-8 without it. */
+    if (size >= sizeof(WCHAR) && ((const WCHAR *)data)[0] == 0xfeff)
+    {
+        DWORD utf8_size;
+
+        RtlUnicodeToUTF8N(NULL, 0, &utf8_size, (const WCHAR *)data + 1, size - sizeof(WCHAR));
+        if (!(text = malloc(utf8_size))) return NULL;
+        RtlUnicodeToUTF8N(text, utf8_size, &utf8_size, (const WCHAR *)data + 1, size - sizeof(WCHAR));
+        data = text;
+        size = utf8_size;
+    }
+
+    total = len + size + sizeof(trailer);
+    if ((ret = malloc(total)))
+    {
+        p = ret + sprintf(ret, header, (unsigned long)(total - 1), (unsigned long)len,
+                          (unsigned long)(len + size + 1) /* include the final \n in the data */);
+        memcpy(p, data, size);
+        strcpy(p + size, trailer);
+        *ret_size = total;
+    }
+    free(text);
+    return ret;
+}
+
+static int hex_value(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* file:///home/user/My%20File.docx (or file://localhost/...) -> Z:\home\user\My File.docx */
+static WCHAR *dos_path_from_uri(const char *uri, size_t len)
+{
+    char *path, *dst;
+    const char *src = uri, *end = uri + len;
+    WCHAR *ret = NULL;
+
+    if (len < 7 || strncmp(uri, "file://", 7)) return NULL;
+    src += 7;
+    if (src < end && *src != '/')  /* host name */
+    {
+        while (src < end && *src != '/') src++;
+    }
+    if (!(path = malloc(end - src + 1))) return NULL;
+    for (dst = path; src < end; src++)
+    {
+        if (*src == '%' && end - src > 2 && hex_value(src[1]) >= 0 && hex_value(src[2]) >= 0)
+        {
+            *dst++ = hex_value(src[1]) * 16 + hex_value(src[2]);
+            src += 2;
+        }
+        else *dst++ = *src;
+    }
+    *dst = 0;
+    if (ntdll_get_dos_file_name(path, &ret, FILE_OPEN)) ret = NULL;
+    free(path);
+    return ret;
+}
+
+/* text/uri-list (one URI per line, "#" comments) -> CF_HDROP */
+static void *import_uri_list(void *data, size_t size, size_t *ret_size)
+{
+    const char *line = data, *end = (const char *)data + size, *eol;
+    size_t total = 0, capacity = 1024, len;
+    WCHAR *paths, *path, *grown;
+    DROPFILES *drop = NULL;
+
+    if (!(paths = malloc(capacity * sizeof(WCHAR)))) return NULL;
+    for (; line < end; line = eol + 1)
+    {
+        if (!(eol = memchr(line, '\n', end - line))) eol = end;
+        len = eol - line;
+        if (len && line[len - 1] == '\r') len--;
+        if (!len || line[0] == '#') continue;
+        if (!(path = dos_path_from_uri(line, len))) continue;
+        len = wcslen(path) + 1;
+        if (total + len + 1 > capacity)
+        {
+            capacity = 2 * (total + len + 1);
+            if (!(grown = realloc(paths, capacity * sizeof(WCHAR))))
+            {
+                free(path);
+                break;
+            }
+            paths = grown;
+        }
+        memcpy(paths + total, path, len * sizeof(WCHAR));
+        total += len;
+        free(path);
+    }
+    if (total)
+    {
+        paths[total++] = 0;
+        *ret_size = sizeof(*drop) + total * sizeof(WCHAR);
+        if ((drop = calloc(1, *ret_size)))
+        {
+            drop->pFiles = sizeof(*drop);
+            drop->fWide = TRUE;
+            memcpy(drop + 1, paths, total * sizeof(WCHAR));
+        }
+    }
+    free(paths);
+    return drop;
+}
+
+/* CF_HDROP -> text/uri-list */
+static void *export_uri_list(void *data, size_t size, size_t *ret_size)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    const DROPFILES *drop = data;
+    const WCHAR *path;
+    size_t total = 0, capacity = 1024, needed;
+    char *ret, *grown, *unix_name, *p;
+
+    if (size < sizeof(*drop) || drop->pFiles >= size || !drop->fWide) return NULL;
+    if (!(ret = malloc(capacity))) return NULL;
+    for (path = (const WCHAR *)((const char *)data + drop->pFiles);
+         (const char *)path < (const char *)data + size && *path; path += wcslen(path) + 1)
+    {
+        if (ntdll_get_unix_file_name(path, &unix_name, FILE_OPEN)) continue;
+        needed = total + 7 + 3 * strlen(unix_name) + 3;
+        if (needed > capacity)
+        {
+            capacity = 2 * needed;
+            if (!(grown = realloc(ret, capacity)))
+            {
+                free(unix_name);
+                break;
+            }
+            ret = grown;
+        }
+        memcpy(ret + total, "file://", 7);
+        total += 7;
+        for (p = unix_name; *p; p++)
+        {
+            unsigned char c = *p;
+            if (c <= ' ' || c >= 0x7f || strchr("%#?\"<>[]^`{|}", c))
+            {
+                ret[total++] = '%';
+                ret[total++] = hex[c >> 4];
+                ret[total++] = hex[c & 15];
+            }
+            else ret[total++] = c;
+        }
+        memcpy(ret + total, "\r\n", 2);
+        total += 2;
+        free(unix_name);
+    }
+    if (!total)
+    {
+        free(ret);
+        return NULL;
+    }
+    *ret_size = total;
+    return ret;
 }
 
 static void *export_data(void *data, size_t size, size_t *ret_size)
@@ -215,6 +425,10 @@ static void *import_data(void *data, size_t size, size_t *ret_size)
 static struct data_device_format supported_formats[] =
 {
     {"text/plain;charset=utf-8", CF_UNICODETEXT, NULL, export_unicode_text, import_unicode_text},
+    /* Some applications offer or request only text/plain, which is UTF-8 on Wayland. */
+    {"text/plain", CF_UNICODETEXT, NULL, export_unicode_text, import_unicode_text},
+    {"text/html", 0, html_formatW, export_html, import_html},
+    {"text/uri-list", CF_HDROP, NULL, export_uri_list, import_uri_list},
     {"text/rtf", 0, rich_text_formatW, export_data, import_data},
     {"image/tiff", CF_TIFF, NULL, export_data, import_data},
     {"image/png", 0, pngW, export_data, import_data},
@@ -651,6 +865,148 @@ static const struct wl_data_source_listener data_source_listener =
 };
 
 /**********************************************************************
+ *          Drag and drop into Wine windows
+ *
+ * The data is read when the drag enters a window, as Windows drop targets
+ * expect it in DragEnter; user32 finds the target under the pointer and
+ * talks OLE to it. Without wl_data_device_manager version 3 the drop is a
+ * copy, which is what Office does with dropped files.
+ */
+
+static struct wayland_data_offer *dnd_offer;
+static const char *dnd_mime_type; /* the type the drop accepts */
+static HWND dnd_hwnd;
+static uint32_t dnd_serial;
+
+/* Like read_all, but gives up on a drag source that does not send its data. */
+static void *read_all_timeout(int fd, size_t *size_out)
+{
+    struct pollfd pfd = {.fd = fd, .events = POLLIN};
+    size_t size = 0, capacity = 4096;
+    char *buffer, *grown;
+    ssize_t count;
+
+    if (!(buffer = malloc(capacity))) return NULL;
+    for (;;)
+    {
+        if (poll(&pfd, 1, 2000) <= 0)
+        {
+            if (errno == EINTR) continue;
+            WARN("drag source sent no data\n");
+            free(buffer);
+            return NULL;
+        }
+        if ((count = read(fd, buffer + size, capacity - size)) < 0)
+        {
+            if (errno == EINTR) continue;
+            free(buffer);
+            return NULL;
+        }
+        if (!count) break;
+        if ((size += count) == capacity)
+        {
+            if (!(grown = realloc(buffer, capacity *= 2)))
+            {
+                free(buffer);
+                return NULL;
+            }
+            buffer = grown;
+        }
+    }
+    *size_out = size;
+    return buffer;
+}
+
+/* The offered data in the form user32 builds its IDataObject from. */
+static struct format_entry *dnd_import_formats(struct wayland_data_offer *offer, size_t *ret_size)
+{
+    struct format_entry *entries = NULL, *entry, *grown;
+    size_t size, capacity = 0, entry_size, imported_size;
+    struct data_device_format *format;
+    void *data, *imported;
+    BOOL have_hdrop = FALSE;
+    UINT done[32], done_count = 0, i;
+    char **p;
+    int fd;
+
+    *ret_size = 0;
+    wl_array_for_each(p, &offer->types)
+        if ((format = data_device_format_for_mime_type(*p)) && format->clipboard_format == CF_HDROP)
+            have_hdrop = TRUE;
+
+    wl_array_for_each(p, &offer->types)
+    {
+        if (!(format = data_device_format_for_mime_type(*p)) || !format->clipboard_format) continue;
+        /* Files are dropped as files: their names as text would only confuse targets. */
+        if (have_hdrop && format->clipboard_format != CF_HDROP && format->clipboard_format < CF_MAX) continue;
+        for (i = 0; i < done_count; i++) if (done[i] == format->clipboard_format) break;
+        if (i < done_count || done_count == ARRAY_SIZE(done)) continue;
+
+        if ((fd = wayland_data_offer_get_import_fd(offer, *p)) < 0) continue;
+        data = read_all_timeout(fd, &size);
+        close(fd);
+        if (!data) continue;
+        imported = format->import(data, size, &imported_size);
+        if (imported != data) free(data);
+        if (!imported) continue;
+
+        done[done_count++] = format->clipboard_format;
+        if (!dnd_mime_type) dnd_mime_type = *p;
+        entry_size = (FIELD_OFFSET(struct format_entry, data[imported_size]) + 7) & ~7;
+        if (*ret_size + entry_size > capacity)
+        {
+            capacity = 2 * (*ret_size + entry_size);
+            if (!(grown = realloc(entries, capacity)))
+            {
+                free(imported);
+                break;
+            }
+            entries = grown;
+        }
+        entry = (struct format_entry *)((char *)entries + *ret_size);
+        entry->format = format->clipboard_format;
+        entry->size = imported_size;
+        memcpy(entry->data, imported, imported_size);
+        *ret_size += entry_size;
+        free(imported);
+    }
+    return entries;
+}
+
+static void dnd_release(void)
+{
+    if (dnd_offer) wayland_data_offer_destroy(dnd_offer);
+    dnd_offer = NULL;
+    dnd_mime_type = NULL;
+    dnd_hwnd = 0;
+}
+
+static void dnd_update_position(wl_fixed_t x, wl_fixed_t y)
+{
+    struct wayland_win_data *data;
+    POINT point;
+    DWORD effect;
+
+    if (!(data = wayland_win_data_get(dnd_hwnd))) return;
+    if (!data->wayland_surface)
+    {
+        wayland_win_data_release(data);
+        return;
+    }
+    wayland_surface_coords_to_window(data->wayland_surface, wl_fixed_to_double(x), wl_fixed_to_double(y),
+                                     (int *)&point.x, (int *)&point.y);
+    point.x += data->wayland_surface->window.rect.left;
+    point.y += data->wayland_surface->window.rect.top;
+    wayland_win_data_release(data);
+
+    effect = NtUserMessageCall(dnd_hwnd, WINE_DRAG_DROP_DRAG, MAKELONG(max(point.x, 0), max(point.y, 0)),
+                               DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, NULL,
+                               NtUserDragDropCall, FALSE);
+    TRACE("hwnd %p at %s effect %#x\n", dnd_hwnd, wine_dbgstr_point(&point), (UINT)effect);
+    wl_data_offer_accept(dnd_offer->wl_data_offer, dnd_serial, effect ? dnd_mime_type : NULL);
+}
+
+/**********************************************************************
  *          wl_data_device handling
  */
 
@@ -665,19 +1021,55 @@ static void data_device_enter(void *data, struct wl_data_device *wl_data_device,
                               wl_fixed_t x_w, wl_fixed_t y_w,
                               struct wl_data_offer *wl_data_offer)
 {
+    struct format_entry *entries;
+    size_t size;
+    HWND hwnd;
+
+    dnd_release();
+    if (!wl_data_offer) return;
+    dnd_offer = wl_data_offer_get_user_data(wl_data_offer);
+    if (!wl_surface || !(hwnd = wl_surface_get_user_data(wl_surface)))
+    {
+        dnd_release();
+        return;
+    }
+    dnd_hwnd = hwnd;
+    dnd_serial = serial;
+
+    TRACE("drag entered hwnd %p\n", hwnd);
+    if (!(entries = dnd_import_formats(dnd_offer, &size)))
+    {
+        wl_data_offer_accept(dnd_offer->wl_data_offer, serial, NULL);
+        return;
+    }
+    NtUserMessageCall(0, WINE_DRAG_DROP_ENTER, size, (LPARAM)entries, NULL, NtUserDragDropCall, FALSE);
+    free(entries);
+    dnd_update_position(x_w, y_w);
 }
 
 static void data_device_leave(void *data, struct wl_data_device *wl_data_device)
 {
+    if (!dnd_offer) return;
+    TRACE("drag left hwnd %p\n", dnd_hwnd);
+    if (dnd_mime_type) NtUserMessageCall(0, WINE_DRAG_DROP_LEAVE, 0, 0, NULL, NtUserDragDropCall, FALSE);
+    dnd_release();
 }
 
 static void data_device_motion(void *data, struct wl_data_device *wl_data_device,
                                uint32_t time, wl_fixed_t x_w, wl_fixed_t y_w)
 {
+    if (dnd_offer && dnd_hwnd && dnd_mime_type) dnd_update_position(x_w, y_w);
 }
 
 static void data_device_drop(void *data, struct wl_data_device *wl_data_device)
 {
+    DWORD effect;
+
+    if (!dnd_offer || !dnd_hwnd || !dnd_mime_type) return;
+    effect = NtUserMessageCall(dnd_hwnd, WINE_DRAG_DROP_DROP, 0, 0, NULL, NtUserDragDropCall, FALSE);
+    TRACE("dropped on hwnd %p, effect %#x\n", dnd_hwnd, (UINT)effect);
+    /* The data was read at enter; a following leave must not cancel the drop. */
+    dnd_release();
 }
 
 static void data_device_selection(void *data, struct wl_data_device *wl_data_device,

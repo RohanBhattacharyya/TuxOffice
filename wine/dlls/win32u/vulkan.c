@@ -191,6 +191,7 @@ struct swapchain
     struct vulkan_swapchain obj;
     struct surface *surface;
     VkExtent2D extents;
+    VkExtent2D image_extents; /* size of the host images */
 
     /* fs hack data below */
     UINT fshack_dpi;
@@ -2669,6 +2670,7 @@ static VkResult win32u_vkCreateSwapchainKHR( VkDevice client_device, const VkSwa
     vulkan_object_init( &swapchain->obj.obj, host_swapchain );
     swapchain->surface = surface;
     swapchain->extents = create_info->imageExtent;
+    swapchain->image_extents = create_info_host.imageExtent;
     instance->p_insert_object( instance, &swapchain->obj.obj );
 
     if (swapchain->fshack_dpi)
@@ -3034,7 +3036,8 @@ static VkResult win32u_vkQueuePresentKHR( VkQueue client_queue, const VkPresentI
     {
         struct swapchain *swapchain = swapchain_from_handle( client_swapchains[i] );
         struct surface *surface = swapchain->surface;
-        client_surface_update( surface->client );
+        client_surface_update_for_present( surface->client, swapchain->image_extents.width,
+                                           swapchain->image_extents.height );
     }
 
     if (blit_count)

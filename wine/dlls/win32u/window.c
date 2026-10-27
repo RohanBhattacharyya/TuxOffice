@@ -460,6 +460,35 @@ void client_surface_update( struct client_surface *surface )
     pthread_mutex_unlock( &surfaces_lock );
 }
 
+/* The surface a present is updating, and its image size; surfaces_lock protects them. */
+static struct client_surface *presenting_surface;
+static UINT presenting_width, presenting_height;
+
+void client_surface_update_for_present( struct client_surface *surface, UINT width, UINT height )
+{
+    pthread_mutex_lock( &surfaces_lock );
+    presenting_surface = surface;
+    presenting_width = width;
+    presenting_height = height;
+    if (surface->hwnd) surface->funcs->update( surface );
+    presenting_surface = NULL;
+    pthread_mutex_unlock( &surfaces_lock );
+}
+
+/***********************************************************************
+ *           client_surface_get_present_size
+ *
+ * Called by a driver from the update callback: the size of the image being
+ * presented, so that the driver can crop it to the visible part of the window.
+ */
+BOOL client_surface_get_present_size( struct client_surface *surface, UINT *width, UINT *height )
+{
+    if (surface != presenting_surface || !presenting_width || !presenting_height) return FALSE;
+    *width = presenting_width;
+    *height = presenting_height;
+    return TRUE;
+}
+
 void add_window_client_surface( HWND hwnd, struct client_surface *surface )
 {
     pthread_mutex_lock( &surfaces_lock );
@@ -2071,35 +2100,45 @@ static NTSTATUS get_window_region( HWND hwnd, BOOL surface, HRGN *region, RECT *
 static void update_surface_region( HWND hwnd )
 {
     WND *win = get_win_ptr( hwnd );
+    struct window_surface *surface;
+    DWORD ex_style;
     HRGN region, shape = 0;
     RECT visible;
 
     if (!win || win == WND_DESKTOP || win == WND_OTHER_PROCESS) return;
-    if (!win->surface) goto done;
+    surface = win->surface;
+    ex_style = win->dwExStyle;
+    if (surface) window_surface_add_ref( surface );
+    release_win_ptr( win );
+    if (!surface) return;
+
+    /* Surface flushing takes the surface lock before entering the display
+     * driver. The driver can query window state and take the user lock.
+     * Keep the surface alive without holding the user lock while updating it. */
 
     if (get_window_region( hwnd, FALSE, &shape, &visible )) goto done;
     if (shape)
     {
         region = NtGdiCreateRectRgn( 0, 0, visible.right - visible.left, visible.bottom - visible.top );
         NtGdiCombineRgn( shape, shape, region, RGN_AND );
-        if (win->dwExStyle & WS_EX_LAYOUTRTL) NtUserMirrorRgn( hwnd, shape );
+        if (ex_style & WS_EX_LAYOUTRTL) NtUserMirrorRgn( hwnd, shape );
         NtGdiDeleteObjectApp( region );
     }
-    window_surface_set_shape( win->surface, shape );
+    window_surface_set_shape( surface, shape );
 
     if (get_window_region( hwnd, TRUE, &region, &visible )) goto done;
-    if (!region) window_surface_set_clip( win->surface, shape );
+    if (!region) window_surface_set_clip( surface, shape );
     else
     {
         NtGdiOffsetRgn( region, -visible.left, -visible.top );
         if (shape) NtGdiCombineRgn( region, region, shape, RGN_AND );
-        window_surface_set_clip( win->surface, region );
+        window_surface_set_clip( surface, region );
         NtGdiDeleteObjectApp( region );
     }
 
 done:
     if (shape) NtGdiDeleteObjectApp( shape );
-    release_win_ptr( win );
+    window_surface_release( surface );
 }
 
 
@@ -2388,7 +2427,6 @@ static BOOL apply_window_pos( HWND hwnd, HWND insert_after, UINT swp_flags, stru
 
     if (ret)
     {
-        update_surface_region( surface_win );
         if (((swp_flags & SWP_AGG_NOPOSCHANGE) != SWP_AGG_NOPOSCHANGE) ||
             (swp_flags & (SWP_HIDEWINDOW | SWP_SHOWWINDOW | SWP_STATECHANGED | SWP_FRAMECHANGED)))
             invalidate_dce( win, &old_rects.window );
@@ -2423,6 +2461,7 @@ static BOOL apply_window_pos( HWND hwnd, HWND insert_after, UINT swp_flags, stru
 
     if (ret)
     {
+        update_surface_region( surface_win );
         TRACE( "win %p surface %p -> %p\n", hwnd, old_surface, new_surface );
         register_window_surface( old_surface, new_surface );
         if (old_surface)
@@ -2479,7 +2518,12 @@ static BOOL apply_window_pos( HWND hwnd, HWND insert_after, UINT swp_flags, stru
             user_driver->pSetWindowIcons( hwnd, icon, &ii, icon_small, &ii_small );
         }
 
-        owner_hint = NtUserGetWindowRelative(hwnd, GW_OWNER);
+        /* Child surfaces belong to their actual toplevel. Inferring this
+         * from a point outside a thin child can hit the desktop/nonclient
+         * area and turn a toolbar shadow into a separate Wayland window. */
+        owner_hint = NtUserGetAncestor(hwnd, GA_ROOT);
+        if (!owner_hint || owner_hint == hwnd)
+            owner_hint = NtUserGetWindowRelative(hwnd, GW_OWNER);
         /* fallback to any window that is right below our top left corner */
         if (!owner_hint) owner_hint = NtUserWindowFromPoint(new_rects->window.left - 1, new_rects->window.top - 1);
         if (owner_hint) owner_hint = NtUserGetAncestor(owner_hint, GA_ROOT);

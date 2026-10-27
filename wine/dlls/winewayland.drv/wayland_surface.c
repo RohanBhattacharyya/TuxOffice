@@ -36,6 +36,7 @@
 #include "wine/server.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(waylanddrv);
+WINE_DECLARE_DEBUG_CHANNEL(uistack);
 
 static const WCHAR xdg_foreign_handle_prop[] =
     {'_','_','w','i','n','e','_','w','a','y','l','a','n','d','_','x','d','g','_',
@@ -529,6 +530,29 @@ void wayland_surface_destroy(struct wayland_surface *surface)
  *
  * Gives the toplevel role to a plain wayland surface.
  */
+/* The desktop passes the token of the launch in XDG_ACTIVATION_TOKEN. The
+ * first window uses it, so that a document opened from the file manager comes
+ * up focused despite focus stealing prevention. Tokens work once. */
+static void wayland_surface_use_launch_token(struct wayland_surface *surface)
+{
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    static BOOL used;
+    const char *token = NULL;
+
+    if (!process_wayland.xdg_activation_v1) return;
+    pthread_mutex_lock(&lock);
+    if (!used)
+    {
+        used = TRUE;
+        token = getenv("XDG_ACTIVATION_TOKEN");
+    }
+    pthread_mutex_unlock(&lock);
+    if (!token || !*token) return;
+
+    TRACE("hwnd=%p uses launch token %s\n", surface->hwnd, debugstr_a(token));
+    xdg_activation_v1_activate(process_wayland.xdg_activation_v1, token, surface->wl_surface);
+}
+
 void wayland_surface_make_toplevel(struct wayland_surface *surface)
 {
     WCHAR text[1024];
@@ -573,6 +597,7 @@ void wayland_surface_make_toplevel(struct wayland_surface *surface)
         wayland_surface_update_foreign_parent(surface);
 
     wl_surface_commit(surface->wl_surface);
+    wayland_surface_use_launch_token(surface);
     wl_display_flush(process_wayland.wl_display);
 
     return;
@@ -580,6 +605,26 @@ void wayland_surface_make_toplevel(struct wayland_surface *surface)
 err:
     wayland_surface_clear_role(surface);
     ERR("Failed to assign toplevel role to wayland surface\n");
+}
+
+/**********************************************************************
+ *          wayland_surface_set_parent
+ *
+ * Makes the toplevel a child of its owner's toplevel. Windows keeps owned
+ * windows above their owner; without this the compositor raises the owner
+ * over them when it is clicked, which hides a modal dialog behind the
+ * disabled window it belongs to.
+ */
+void wayland_surface_set_parent(struct wayland_surface *surface, struct wayland_surface *parent)
+{
+    struct xdg_toplevel *toplevel = NULL;
+
+    if (!wayland_surface_is_toplevel(surface)) return;
+    if (parent && parent != surface && wayland_surface_is_toplevel(parent)) toplevel = parent->xdg_toplevel;
+    if (surface->parent_toplevel == toplevel) return;
+    TRACE("hwnd=%p parent=%p\n", surface->hwnd, parent ? parent->hwnd : NULL);
+    xdg_toplevel_set_parent(surface->xdg_toplevel, toplevel);
+    surface->parent_toplevel = toplevel;
 }
 
 /**********************************************************************
@@ -675,6 +720,7 @@ void wayland_surface_clear_role(struct wayland_surface *surface)
         {
             xdg_toplevel_destroy(surface->xdg_toplevel);
             surface->xdg_toplevel = NULL;
+            surface->parent_toplevel = NULL;
         }
 
         if (surface->xdg_surface)
@@ -910,6 +956,12 @@ static void wayland_surface_reconfigure_client(struct wayland_surface *surface,
     struct wayland_window_config *window = &surface->window;
     int client_x, client_y, x, y;
     int client_width, client_height, width, height;
+    int window_width = window->rect.right - window->rect.left;
+    int window_height = window->rect.bottom - window->rect.top;
+    int visible_left, visible_top, visible_right, visible_bottom;
+    int src_x = 0, src_y = 0, src_width = 0, src_height = 0;
+    UINT buffer_width = client->present_width, buffer_height = client->present_height;
+    BOOL crop;
 
     /* The offset of the client area origin relatively to the window origin. */
     client_x = client_rect->left + window->client_rect.left - window->rect.left;
@@ -918,11 +970,51 @@ static void wayland_surface_reconfigure_client(struct wayland_surface *surface,
     client_width = client_rect->right - client_rect->left;
     client_height = client_rect->bottom - client_rect->top;
 
-    wayland_surface_coords_from_window(surface, client_x, client_y, &x, &y);
-    wayland_surface_coords_from_window(surface, client_width, client_height,
-                                       &width, &height);
+    /* Windows clips child windows to their parent; Wayland subsurfaces are
+     * not clipped. Office grows its document view before moving it when the
+     * ribbon collapses, so the view would cover the desktop below the window
+     * for several frames. Show only the part inside the window. */
+    visible_left = max(client_x, 0);
+    visible_top = max(client_y, 0);
+    visible_right = min(client_x + client_width, window_width);
+    visible_bottom = min(client_y + client_height, window_height);
+    crop = client->wl_subsurface && client_width > 0 && client_height > 0 &&
+           (visible_left != client_x || visible_top != client_y ||
+            visible_right != client_x + client_width || visible_bottom != client_y + client_height);
+    if (crop && (visible_right <= visible_left || visible_bottom <= visible_top))
+    {
+        /* Entirely outside: a subsurface can't be hidden without taking the
+         * buffer away from Vulkan, show a single pixel inside the window. */
+        visible_left = max(0, min(client_x, window_width - 1));
+        visible_top = max(0, min(client_y, window_height - 1));
+        visible_right = visible_left + 1;
+        visible_bottom = visible_top + 1;
+        if (buffer_width && buffer_height) src_width = src_height = 1;
+    }
+    else if (crop && buffer_width && buffer_height)
+    {
+        src_x = (INT64)(visible_left - client_x) * buffer_width / client_width;
+        src_y = (INT64)(visible_top - client_y) * buffer_height / client_height;
+        src_width = (INT64)(visible_right - client_x) * buffer_width / client_width - src_x;
+        src_height = (INT64)(visible_bottom - client_y) * buffer_height / client_height - src_y;
+    }
+    if (crop && src_width > 0 && src_height > 0)
+    {
+        wayland_surface_coords_from_window(surface, visible_left, visible_top, &x, &y);
+        wayland_surface_coords_from_window(surface, visible_right - visible_left,
+                                           visible_bottom - visible_top, &width, &height);
+    }
+    else
+    {
+        crop = FALSE;
+        wayland_surface_coords_from_window(surface, client_x, client_y, &x, &y);
+        wayland_surface_coords_from_window(surface, client_width, client_height, &width, &height);
+    }
 
     TRACE("hwnd=%p subsurface=%d,%d+%dx%d\n", surface->hwnd, x, y, width, height);
+    TRACE_(uistack)("GPU hwnd %p in %p at %d,%d size %dx%d (window %s)%s\n", client->client.hwnd,
+                    surface->hwnd, x, y, width, height, wine_dbgstr_rect(client_rect),
+                    crop ? " cropped" : client->presenting ? "" : " (window change)");
 
     /* Only position here: placing the subsurface right above its parent and
      * committing would show its siblings in the wrong order for a frame until
@@ -930,10 +1022,39 @@ static void wayland_surface_reconfigure_client(struct wayland_surface *surface,
     if (client->wl_subsurface)
         wl_subsurface_set_position(client->wl_subsurface, x, y);
 
+    /* Size and crop are surface state that only a present commits. Once
+     * presents report their image size, leave them to presents, except when
+     * the window now extends past its parent: the current image would show
+     * outside the window until the next present, so crop it now. */
+    if (!client->presenting && client->present_width && !crop) return;
+
+    if (crop)
+    {
+        /* The surface shows the image of the last present or, when its
+         * commit is still on the way, the one before. A source outside the
+         * buffer is a protocol error, so keep it inside both. */
+        if (!client->presenting && client->previous_width)
+        {
+            src_width = min(src_width, (int)min(client->previous_width, buffer_width) - src_x);
+            src_height = min(src_height, (int)min(client->previous_height, buffer_height) - src_y);
+            if (src_width <= 0 || src_height <= 0) return;
+        }
+        wp_viewport_set_source(client->wp_viewport, wl_fixed_from_int(src_x), wl_fixed_from_int(src_y),
+                               wl_fixed_from_int(src_width), wl_fixed_from_int(src_height));
+        client->cropped = TRUE;
+    }
+    else if (client->cropped)
+    {
+        wp_viewport_set_source(client->wp_viewport, wl_fixed_from_int(-1), wl_fixed_from_int(-1),
+                               wl_fixed_from_int(-1), wl_fixed_from_int(-1));
+        client->cropped = FALSE;
+    }
     if (width != 0 && height != 0)
         wp_viewport_set_destination(client->wp_viewport, width, height);
     else /* We can't have a 0x0 destination, use 1x1 instead. */
         wp_viewport_set_destination(client->wp_viewport, 1, 1);
+    /* the subsurface is desynchronized, this applies the crop right away */
+    if (!client->presenting && client->present_width) wl_surface_commit(client->wl_surface);
 }
 
 /**********************************************************************
@@ -1386,6 +1507,7 @@ static void wayland_client_surface_update(struct client_surface *client)
     struct wayland_win_data *data;
     BOOL visible = toplevel && NtUserIsWindowVisible(hwnd);
     RECT client_rect, toplevel_rect;
+    UINT width, height;
 
     /* This runs on every present, possibly while another thread holds the
      * win32u user lock and waits for the win_data lock, so query the window
@@ -1397,6 +1519,15 @@ static void wayland_client_surface_update(struct client_surface *client)
 
     if (!(data = wayland_win_data_get(hwnd))) return;
 
+    /* A Vulkan present reports the size of the image it is about to commit. */
+    surface->presenting = client_surface_get_present_size(client, &width, &height);
+    if (surface->presenting)
+    {
+        surface->previous_width = surface->present_width;
+        surface->previous_height = surface->present_height;
+        surface->present_width = width;
+        surface->present_height = height;
+    }
     if (visible && data->client_surface == surface)
     {
         wayland_client_surface_attach_rect(surface, toplevel, &toplevel_rect);
@@ -1405,6 +1536,7 @@ static void wayland_client_surface_update(struct client_surface *client)
     }
     else
         wayland_client_surface_attach(surface, NULL);
+    surface->presenting = FALSE;
 
     wayland_win_data_release(data);
 
@@ -1850,6 +1982,8 @@ void wayland_restack_client_surfaces(HWND toplevel)
             continue;
         wayland_overlay_set_rect(overlay, surface, &rect);
         overlay->used = TRUE;
+        TRACE_(uistack)("overlay hwnd %p above GPU root %p rect %s\n", order[i], toplevel,
+                       wine_dbgstr_rect(&rect));
         wl_subsurface_place_above(overlay->wl_subsurface, below);
         below = overlay->wl_surface;
         overlaid = rects[i].window;
@@ -1892,6 +2026,7 @@ static void wayland_client_surface_attach_rect(struct wayland_client_surface *cl
     {
         if (client->wl_subsurface)
         {
+            TRACE_(uistack)("detach GPU hwnd %p from host %p\n", hwnd, client->toplevel);
             wl_subsurface_destroy(client->wl_subsurface);
             client->wl_subsurface = NULL;
         }
@@ -1908,6 +2043,7 @@ static void wayland_client_surface_attach_rect(struct wayland_client_surface *cl
 
     if (client->toplevel != toplevel)
     {
+        TRACE_(uistack)("attach GPU hwnd %p from host %p to host %p\n", hwnd, client->toplevel, toplevel);
         wayland_client_surface_attach(client, NULL);
 
         client->wl_subsurface =
