@@ -94,6 +94,22 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   apply the repair; it is also installed in the regular prefix.
 - Removed tracked `wine/autom4te.cache` output and ignored that directory.
 
+## Open: Excel crash after an embedded chart's workbook closes
+
+PowerPoint's functional step (insert a chart, open its data in Excel's
+chart data window, edit a cell, `Workbook.Close`) crashed Excel in 1 of 15
+isolated repeats with the packaged runner, and three times in today's
+batteries: a write to NULL+0x8c at `EXCEL.EXE+0xe02c6a` on Excel's main
+thread, a few hundred milliseconds after the close, while the embedding
+Excel process shuts down. There are no Wine frames on the stack; the code
+loads a global state object, reads its pointer at +0x3e0 (already NULL) and
+writes through it, i.e. Excel's own teardown races with work still queued.
+PowerPoint is unaffected (all its checks pass, the edited data survives a
+reopen), and with Wine's crash debugger disabled nothing is shown, but Excel
+records an unclean exit, so its next start can ask about safe mode. Closing
+the chart editor through its window (the embedded chart UI test) has not
+crashed. Which Wine behaviour shifts the timing is not known yet.
+
 ## 26 October evening: distribution packages and the one-line installer
 
 - `packaging/build-release.sh` builds a portable runner in Ubuntu 24.04
