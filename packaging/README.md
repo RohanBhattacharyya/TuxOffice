@@ -54,13 +54,22 @@ repackages an existing `dist/runner` without rebuilding it.
 
 ## Publishing
 
-Push a tag that matches [`VERSION`](../VERSION):
+Releases are published by hand with the **Release** workflow
+([`.github/workflows/release.yml`](../.github/workflows/release.yml)):
 
-```sh
-git tag v0.1.0 && git push origin v0.1.0
-```
+1. Set [`VERSION`](../VERSION) to the new version (for example `0.2.0`),
+   commit and push.
+2. On GitHub, open **Actions → Release → Run workflow**, pick the branch and
+   run it.
 
-[`.github/workflows/release.yml`](../.github/workflows/release.yml) builds
-the files and attaches them to a GitHub release; `install.sh` installs the
-latest release from there. To update the AUR package, copy `dist/aur/PKGBUILD`
-and `dist/aur/.SRCINFO` into the `tuxoffice-bin` AUR repository and push.
+The workflow checks that the version is not released yet and that
+`install.sh` downloads from this repository, builds every package, installs
+them on Ubuntu, Debian, Fedora, openSUSE and Arch, then tags `vVERSION` and
+publishes a release marked as the latest, with install instructions in its
+notes. `install.sh` installs GitHub's latest release, so users get it at
+once. Two options: **pre-release** publishes a test release that the installer
+ignores, and **skip package tests** saves about 20 minutes when you are sure.
+
+To update the AUR package afterwards, copy `dist/aur/PKGBUILD` (also attached
+to the release) and `dist/aur/.SRCINFO` into the `tuxoffice-bin` AUR
+repository and push.

@@ -1,31 +1,59 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-# Build the release packages and publish them when a version tag is pushed:
-#   git tag v0.1.0 && git push origin v0.1.0
+# Publish a TuxOffice release. Run it by hand from the Actions tab
+# ("Release" -> "Run workflow"), on the branch to release:
+#
+#   1. Set VERSION to the new version (for example 0.2.0) and push.
+#   2. Run this workflow. It builds every package, installs them on five
+#      distributions, then tags v0.2.0 and publishes the release.
+#
+# install.sh installs GitHub's "latest" release, which is the newest one that
+# is neither a draft nor a pre-release; a pre-release is not picked up.
 name: Release
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      prerelease:
+        description: Publish as a pre-release (install.sh will not pick it up)
+        type: boolean
+        default: false
+      skip_package_tests:
+        description: Skip installing the packages on five distributions first
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
         with:
           # runner/build.sh finds the Soda import commit in the history.
           fetch-depth: 0
 
-      - name: Check the version
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Check the version and the installer
+        id: version
         run: |
-          [ "v$(cat VERSION)" = "${GITHUB_REF_NAME}" ] || {
-            echo "VERSION ($(cat VERSION)) does not match the tag ${GITHUB_REF_NAME}"; exit 1; }
+          version=$(cat VERSION)
+          if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=VERSION::VERSION must be a version like 1.2.3, not '$version'"; exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null; then
+            echo "::error file=VERSION::v$version is already released; raise VERSION and push first"; exit 1
+          fi
+          repo=$(sed -nE 's/^REPO="\$\{TUXOFFICE_REPO:-([^}]+)\}"/\1/p' install.sh)
+          if [[ $repo != "$GITHUB_REPOSITORY" ]]; then
+            echo "::error file=install.sh::install.sh downloads from $repo, but this repository is $GITHUB_REPOSITORY"; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Make room for the build
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -37,26 +65,53 @@ jobs:
           restore-keys: release-cache-
 
       - name: Build the packages
+        env:
+          TUXOFFICE_HOMEPAGE: ${{ github.server_url }}/${{ github.repository }}
         run: packaging/build-release.sh dist
 
+      - name: Install the packages on five distributions
+        if: ${{ !inputs.skip_package_tests }}
+        run: packaging/test-packages.sh dist
+
+      - name: Write the release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cat > dist/release-notes.md <<EOF
+          ## Install
+
+          \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | bash
+          \`\`\`
+
+          Or install a package below with your package manager:
+
+          | Distribution | Command |
+          | --- | --- |
+          | Ubuntu 24.04+, Debian 13+ | \`sudo apt install ./tuxoffice_${VERSION}-1_amd64.deb\` |
+          | Fedora 40+ | \`sudo dnf install ./tuxoffice-${VERSION}-1.x86_64.rpm\` |
+          | openSUSE Tumbleweed | \`sudo zypper install --allow-unsigned-rpm ./tuxoffice-${VERSION}-1.x86_64.rpm\` |
+          | Arch Linux and derivatives | \`sudo pacman -U ./tuxoffice-${VERSION}-1-x86_64.pkg.tar.zst\` |
+
+          Then run \`tuxoffice setup && tuxoffice install\` as your normal user.
+          Check downloads with \`sha256sum -c SHA256SUMS --ignore-missing\`.
+          EOF
+
       - name: Publish the release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: TuxOffice ${{ steps.version.outputs.version }}
+          body_path: dist/release-notes.md
+          generate_release_notes: true
+          prerelease: ${{ inputs.prerelease }}
+          make_latest: ${{ inputs.prerelease && 'false' || 'true' }}
+          fail_on_unmatched_files: true
           files: |
-            dist/tuxoffice-*
-            dist/tuxoffice_*
+            dist/tuxoffice-${{ steps.version.outputs.version }}-x86_64.tar.xz
+            dist/tuxoffice_${{ steps.version.outputs.version }}-1_amd64.deb
+            dist/tuxoffice-${{ steps.version.outputs.version }}-1.x86_64.rpm
+            dist/tuxoffice-${{ steps.version.outputs.version }}-1-x86_64.pkg.tar.zst
             dist/SHA256SUMS
             dist/aur/PKGBUILD
-          generate_release_notes: true
-
-      - name: Keep the packages (manual runs)
-        if: "!startsWith(github.ref, 'refs/tags/v')"
-        uses: actions/upload-artifact@v4
-        with:
-          name: tuxoffice-packages
-          path: |
-            dist/tuxoffice-*
-            dist/tuxoffice_*
-            dist/SHA256SUMS
-            dist/aur/
