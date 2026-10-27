@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# AUR package for TuxOffice, filled in by packaging/build-release.sh.
+# Maintainer: Rohan Bhattacharyya <73246001+RohanBhattacharyya@users.noreply.github.com>
+pkgname=tuxoffice-bin
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="Microsoft 365 desktop apps on Linux, running natively"
+arch=('x86_64')
+url="@HOMEPAGE@"
+license=('LGPL-2.1-or-later')
+depends=('bash' 'curl' 'python' 'unzip' 'cabextract' '7zip' 'vulkan-icd-loader' 'wayland'
+         'libxkbcommon' 'libglvnd' 'freetype2' 'fontconfig' 'gnutls' 'libsecret' 'dbus' 'systemd-libs')
+optdepends=('xdg-desktop-portal: the desktop file chooser for Open and Save As'
+            'vulkan-driver: GPU rendering')
+provides=('tuxoffice')
+conflicts=('tuxoffice')
+# The runner holds Windows (PE) libraries; leave every binary as built.
+options=('!strip' '!debug')
+source=("$url/releases/download/v$pkgver/tuxoffice-$pkgver-x86_64.tar.xz")
+sha256sums=('@SHA256@')
+
+package() {
+  cp -a "$srcdir/usr" "$pkgdir/"
+}

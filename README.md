@@ -25,9 +25,9 @@ PowerPoint, Outlook, OneNote, Access and Publisher) on a Linux desktop.
 Office's x86-64 code runs directly on your CPU; its Windows, COM, Direct2D and
 composition calls are answered by a Wine runner built from Valve's Proton Wine,
 Bottles' [Soda](https://github.com/bottlesdevs/wine) Office patches and
-TuxOffice's own fixes in [`wine/`](wine). One command builds the runner and
-the Office environment, and another installs Office from Microsoft's
-servers. You then sign in with the Microsoft account that holds your
+TuxOffice's own fixes in [`wine/`](wine). Install it from your
+distribution's package manager, let it download Office from Microsoft's
+servers, and sign in with the Microsoft account that holds your
 subscription.
 
 ## Highlights
@@ -70,38 +70,85 @@ apps is not implemented, Office's embedded sign-in page has minor rendering
 glitches, and there is no matched Windows baseline, so performance parity with
 Windows is not claimed.
 
-## Requirements
+## Install
 
-- A 64-bit Linux desktop. Wayland is recommended and KDE Plasma is the tested
-  desktop; X11 sessions use Wine's X11 driver and are less tested.
-- A Vulkan-capable GPU and driver (`vulkaninfo` should work).
-- Linux 6.14 or later for `ntsync` (optional; older kernels fall back to the
-  wineserver).
-- A Microsoft 365 subscription that includes the desktop apps.
-- Tools: `bash`, `curl`, `python3`, `7z`, `unzip`, `git`, and
-  `xdg-desktop-portal` with a FileChooser backend (for the native file dialogs).
-- To build the patched runner: `clang`, `lld`, `bison`, `flex`, `meson`,
-  `ninja`, `glslangValidator`, Wine's usual development libraries (Wayland,
-  Vulkan, FreeType, fontconfig, …) and `libsystemd` headers.
-
-## Quick start
+One command installs TuxOffice with your distribution's package manager and
+then offers to install Microsoft 365 right away:
 
 ```sh
-git clone <this repository> TuxOffice
-cd TuxOffice
-
-./tuxoffice setup      # runner, Office environment, fonts and Windows components
-./tuxoffice install    # downloads and installs Microsoft 365 Apps (about 3.5 GB)
-./tuxoffice run word   # sign in when Office asks
-./tuxoffice fonts cloud   # after signing in: fetch Segoe UI, Aptos, Calibri, …
-./tuxoffice set-default   # optional: open Office files with TuxOffice
+curl -fsSL https://raw.githubusercontent.com/RohanBhattacharyya/TuxOffice/main/install.sh | bash
 ```
 
-`setup` builds the TuxOffice runner from [`wine/`](wine) the first time (an
-overlay build takes a few minutes). `install` also creates the desktop
-entries, so the apps appear in your application menu.
+The installer checks your system, picks the package for your distribution,
+installs it with `apt`, `dnf`, `zypper` or `pacman` (or into your home folder
+if you prefer, or on immutable systems), verifies every download against the
+release checksums, and then asks what to do next:
 
-Check your environment at any time with `./tuxoffice doctor`.
+```
+What next?
+  1) Set up TuxOffice and install Microsoft 365 now (downloads about 4 GB, 15-30 minutes)
+  2) Set up TuxOffice now, install Microsoft 365 later
+  3) Nothing for now
+```
+
+It never runs Office as root. `bash install.sh --help` lists the options for
+unattended installs (`--system`, `--user`, `--office`, `--setup-only`,
+`--yes`) and `--uninstall`.
+
+### Packages
+
+Every [release](https://github.com/RohanBhattacharyya/TuxOffice/releases)
+provides native packages that declare the right dependencies for each
+distribution family:
+
+| Distribution | Package | Install |
+| --- | --- | --- |
+| Ubuntu 24.04+, Debian 13+, Linux Mint 22+, Pop!_OS 24.04+ | `.deb` | `sudo apt install ./tuxoffice_VERSION-1_amd64.deb` |
+| Fedora 40+ | `.rpm` | `sudo dnf install ./tuxoffice-VERSION-1.x86_64.rpm` |
+| openSUSE Tumbleweed | `.rpm` | `sudo zypper install --allow-unsigned-rpm ./tuxoffice-VERSION-1.x86_64.rpm` |
+| Arch Linux, CachyOS, EndeavourOS, Manjaro | `.pkg.tar.zst`, AUR `tuxoffice-bin` | `sudo pacman -U ./tuxoffice-VERSION-1-x86_64.pkg.tar.zst` |
+| Anything else, Fedora Atomic, Bazzite | `.tar.xz` | `bash install.sh --user` |
+
+The packages install the launcher to `/usr/bin/tuxoffice` and a ready-built
+runner to `/usr/lib/tuxoffice`; nothing is compiled on your machine. Then, as
+your normal user:
+
+```sh
+tuxoffice setup      # Office environment, fonts and Windows components
+tuxoffice install    # downloads and installs Microsoft 365 Apps (about 3.5 GB)
+tuxoffice run word   # sign in when Office asks
+tuxoffice fonts cloud   # after signing in: fetch Segoe UI, Aptos, Calibri, …
+tuxoffice set-default   # optional: open Office files with TuxOffice
+```
+
+`install` also creates the desktop entries, so the apps appear in your
+application menu. Check your environment at any time with `tuxoffice doctor`.
+
+### Requirements
+
+- A 64-bit x86 Linux distribution with glibc 2.38 or newer (the releases
+  above or newer). Wayland is recommended and KDE Plasma is the tested
+  desktop; X11 sessions use Wine's X11 driver and are less tested.
+- A Vulkan-capable GPU and driver.
+- Linux 6.14 or later for `ntsync` (optional; older kernels fall back to the
+  wineserver).
+- `xdg-desktop-portal` with a FileChooser backend, for the native file dialogs.
+- A Microsoft 365 subscription that includes the desktop apps.
+
+### From source
+
+```sh
+git clone https://github.com/RohanBhattacharyya/TuxOffice.git
+cd TuxOffice
+./tuxoffice setup && ./tuxoffice install
+```
+
+From a checkout, `setup` builds the runner from [`wine/`](wine) on top of the
+pinned Soda release (an overlay build takes a few minutes). It needs `clang`,
+`lld`, `bison`, `flex`, `meson`, `ninja`, `glslangValidator`, Wine's usual
+development libraries (Wayland, xkbcommon, Vulkan, FreeType, Fontconfig,
+GnuTLS, libsecret, …) and the `libsystemd` headers.
+[`packaging/`](packaging) describes how the release packages are built.
 
 ## Commands
 
@@ -162,6 +209,7 @@ hours.
 | [`tuxoffice`](tuxoffice) | The launcher: setup, install, run, fonts, integration |
 | [`wine/`](wine) | Wine source: Soda base plus TuxOffice's Wine commits |
 | [`runner/`](runner) | Runner and DXVK build scripts and DXVK patches |
+| [`packaging/`](packaging), [`install.sh`](install.sh) | Release packages and the one-line installer |
 | [`lib/`](lib) | Helpers: CDN fetcher, file chooser, font tools, registry repair |
 | [`config/`](config) | Click-to-Run configuration for Microsoft 365 Apps |
 | [`tests/`](tests) | Automated tests, probes and the isolated test session |

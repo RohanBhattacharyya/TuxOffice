@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Build the release packages and publish them when a version tag is pushed:
+#   git tag v0.1.0 && git push origin v0.1.0
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # runner/build.sh finds the Soda import commit in the history.
+          fetch-depth: 0
+
+      - name: Check the version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          [ "v$(cat VERSION)" = "${GITHUB_REF_NAME}" ] || {
+            echo "VERSION ($(cat VERSION)) does not match the tag ${GITHUB_REF_NAME}"; exit 1; }
+
+      - name: Make room for the build
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/tuxoffice-release
+          key: release-cache-${{ github.sha }}
+          restore-keys: release-cache-
+
+      - name: Build the packages
+        run: packaging/build-release.sh dist
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/tuxoffice-*
+            dist/tuxoffice_*
+            dist/SHA256SUMS
+            dist/aur/PKGBUILD
+          generate_release_notes: true
+
+      - name: Keep the packages (manual runs)
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: tuxoffice-packages
+          path: |
+            dist/tuxoffice-*
+            dist/tuxoffice_*
+            dist/SHA256SUMS
+            dist/aur/

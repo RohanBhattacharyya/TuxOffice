@@ -24,6 +24,10 @@ CABEXTRACT_URL="https://www.cabextract.org.uk/cabextract-1.11.tar.gz"
 SELAWIK_URL="https://github.com/microsoft/Selawik/releases/download/1.01/Selawik_Release.zip"
 # Soda plus TuxOffice's Wine source changes, built by runner/build.sh.
 LOCAL_RUNNER_NAME="tuxoffice-${RUNNER_NAME#soda-}"
+# Distribution packages install the launcher in <prefix>/share/tuxoffice and a
+# ready-built runner in <prefix>/lib/tuxoffice/runner.
+SYSTEM_RUNNER="${TUXOFFICE_SYSTEM_RUNNER:-$(readlink -m "$TUX_SRC/../../lib/tuxoffice/runner")}"
+TUX_VERSION="$(cat "$TUX_SRC/VERSION" 2>/dev/null || echo dev)"
 
 OFFICE_ROOT="$TUX_PREFIX/drive_c/Program Files/Microsoft Office/root/Office16"
 C2R_DIR="$TUX_PREFIX/drive_c/Program Files/Common Files/Microsoft Shared/ClickToRun"
@@ -43,11 +47,21 @@ msg()  { printf '\033[1;34m::\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mwarning:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# The runner to use: TUXOFFICE_RUNNER, one built from wine/ with
+# runner/build.sh, the one a distribution package installed, then stock Soda.
+find_runner() {
+  local r
+  for r in "${TUXOFFICE_RUNNER:-}" "$TUX_HOME/runners/$LOCAL_RUNNER_NAME" "$SYSTEM_RUNNER" \
+           "$TUX_HOME/runners/$RUNNER_NAME"; do
+    [[ -n $r && -x "$r/bin/wine" ]] && { echo "$r"; return 0; }
+  done
+  [[ -z ${TUXOFFICE_RUNNER:-} ]] || die "no runner at $TUXOFFICE_RUNNER"
+  return 1
+}
+
 runner_env() {
-  # Prefer the runner with TuxOffice's patches; TUXOFFICE_RUNNER overrides.
-  local r="${TUXOFFICE_RUNNER:-$TUX_HOME/runners/$LOCAL_RUNNER_NAME}"
-  [[ -x "$r/bin/wine" ]] || r="$TUX_HOME/runners/$RUNNER_NAME"
-  [[ -x "$r/bin/wine" ]] || die "runner missing at $r; run: tuxoffice setup"
+  local r
+  r=$(find_runner) || die "no runner installed; run: tuxoffice setup"
   export PATH="$TUX_HOME/tools/local/bin:$r/bin:$PATH"
   export WINE="$r/bin/wine" WINESERVER="$r/bin/wineserver"
   export WINEPREFIX="$TUX_PREFIX"
@@ -83,8 +97,9 @@ wreg() { wine reg add "$@" /f >/dev/null 2>&1; }
 cmd_setup() {
   mkdir -p "$TUX_HOME"/{runners,cache,tools,prefixes}
 
-  # Runner
-  if [[ ! -x "$TUX_HOME/runners/$RUNNER_NAME/bin/wine" ]]; then
+  # Runner: a package ships one ready-built; a source checkout builds it from
+  # wine/ on top of the pinned Soda release.
+  if [[ ! -x "$SYSTEM_RUNNER/bin/wine" && ! -x "$TUX_HOME/runners/$RUNNER_NAME/bin/wine" ]]; then
     fetch "$RUNNER_URL" "$TUX_CACHE/$RUNNER_NAME.tar.xz" "$RUNNER_SHA256"
     tar -C "$TUX_HOME/runners" -xf "$TUX_CACHE/$RUNNER_NAME.tar.xz"
   fi
@@ -158,7 +173,7 @@ cmd_setup() {
     binPath= '"C:\Program Files\Common Files\Microsoft Shared\ClickToRun\OfficeClickToRun.exe" /service' \
     DisplayName= 'Microsoft Office Click-to-Run Service' start= auto type= own error= normal >/dev/null 2>&1 || true
 
-  if [[ ${TUXOFFICE_NO_BUILD:-0} != 1 ]]; then
+  if [[ ${TUXOFFICE_NO_BUILD:-0} != 1 && -d "$TUX_SRC/wine" && ! -x "$SYSTEM_RUNNER/bin/wine" ]]; then
     msg "building the TuxOffice runner from wine/"
     if "$TUX_SRC/runner/build.sh" >"$TUX_CACHE/runner-build.log" 2>&1; then
       runner_env
@@ -785,9 +800,10 @@ cmd_unintegrate() {
 
 cmd_doctor() {
   local ok='\033[32mok\033[0m' bad='\033[31mmissing\033[0m'
-  local runner=$LOCAL_RUNNER_NAME
-  [[ -x $TUX_HOME/runners/$runner/bin/wine ]] || runner=$RUNNER_NAME
-  printf 'runner      %b  %s\n' "$([[ -x $TUX_HOME/runners/$runner/bin/wine ]] && echo "$ok" || echo "$bad")" "$runner"
+  local runner
+  runner=$(find_runner 2>/dev/null) || runner=""
+  printf 'tuxoffice   %s\n' "$TUX_VERSION"
+  printf 'runner      %b  %s\n' "$([[ -n $runner ]] && echo "$ok" || echo "$bad")" "${runner:-run: tuxoffice setup}"
   printf 'prefix      %b  %s\n' "$([[ -f $TUX_PREFIX/system.reg ]] && echo "$ok" || echo "$bad")" "$TUX_PREFIX"
   printf 'ntsync      %b\n' "$([[ -e /dev/ntsync ]] && echo "$ok" || echo "$bad (older kernel: falls back to wineserver sync)")"
   printf 'vulkan      %b\n' "$(command -v vulkaninfo >/dev/null && vulkaninfo --summary >/dev/null 2>&1 && echo "$ok" || echo "$bad")"
@@ -805,7 +821,7 @@ cmd_kill() { runner_env; wineserver -k 2>/dev/null || true; }
 
 usage() {
   cat <<EOF
-usage: tuxoffice <command> [args]
+usage: tuxoffice <command> [args]   (TuxOffice $TUX_VERSION)
 
   setup                     download the runner and build the Office prefix
   install [--config FILE]   install Office via Click-to-Run (default: config/m365-apps.xml)
@@ -849,6 +865,7 @@ main() {
     graphics) cmd_graphics "$@" ;;
     ui) runner_env; configure_office_ui; msg "UI fonts, colours and window effects applied" ;;
     repair) runner_env; configure_chart_proxies; configure_installer_components; msg "Office registrations repaired" ;;
+    -V|--version|version) echo "tuxoffice $TUX_VERSION" ;;
     ""|-h|--help|help) usage ;;
     *) die "unknown command: $c" ;;
   esac

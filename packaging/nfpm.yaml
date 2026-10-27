@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Distribution packages for TuxOffice, built by packaging/build-release.sh with
+# nfpm (https://nfpm.goreleaser.com). One staged tree, packaged as .deb, .rpm
+# and Arch Linux .pkg.tar.zst with each family's own dependency names.
+name: tuxoffice
+arch: amd64
+platform: linux
+version: ${TUXOFFICE_VERSION}
+release: 1
+section: misc
+priority: optional
+maintainer: Rohan Bhattacharyya <73246001+RohanBhattacharyya@users.noreply.github.com>
+vendor: TuxOffice
+homepage: ${TUXOFFICE_HOMEPAGE}
+license: LGPL-2.1-or-later
+description: |-
+  Microsoft 365 desktop apps on Linux, running natively.
+  TuxOffice installs and runs Word, Excel, PowerPoint, Outlook, OneNote,
+  Access and Publisher with a Wine runner built for Office, and integrates
+  them with the desktop: file chooser, clipboard, drag and drop, theme and
+  application menu. Office itself is downloaded from Microsoft by
+  "tuxoffice install" and activated by signing in with your own account.
+
+contents:
+  # The staged tree includes the /usr/bin/tuxoffice symlink.
+  - src: ${TUXOFFICE_STAGE}/usr/
+    dst: /usr/
+    type: tree
+
+overrides:
+  deb:
+    depends:
+      - bash
+      - curl
+      - ca-certificates
+      - python3
+      - unzip
+      - cabextract
+      - 7zip | p7zip-full
+      - libvulkan1
+      - libwayland-client0
+      - libwayland-egl1
+      - libxkbcommon0
+      - libxkbregistry0
+      - libegl1
+      - libfreetype6
+      - libfontconfig1
+      - libgnutls30t64 | libgnutls30
+      - libsecret-1-0
+      - libdbus-1-3
+      - libsystemd0
+    recommends:
+      - xdg-desktop-portal
+      - mesa-vulkan-drivers
+      - libx11-6
+  rpm:
+    # File and library dependencies resolve on Fedora and openSUSE alike.
+    depends:
+      - bash
+      - /usr/bin/curl
+      - /usr/bin/python3
+      - /usr/bin/unzip
+      - /usr/bin/cabextract
+      - /usr/bin/7z
+      - libvulkan.so.1()(64bit)
+      - libwayland-client.so.0()(64bit)
+      - libwayland-egl.so.1()(64bit)
+      - libxkbcommon.so.0()(64bit)
+      - libxkbregistry.so.0()(64bit)
+      - libEGL.so.1()(64bit)
+      - libfreetype.so.6()(64bit)
+      - libfontconfig.so.1()(64bit)
+      - libgnutls.so.30()(64bit)
+      - libsecret-1.so.0()(64bit)
+      - libdbus-1.so.3()(64bit)
+      - libsystemd.so.0()(64bit)
+    recommends:
+      - xdg-desktop-portal
+  archlinux:
+    depends:
+      - bash
+      - curl
+      - python
+      - unzip
+      - cabextract
+      - 7zip
+      - vulkan-icd-loader
+      - wayland
+      - libxkbcommon
+      - libglvnd
+      - freetype2
+      - fontconfig
+      - gnutls
+      - libsecret
+      - dbus
+      - systemd-libs
+    recommends:
+      - xdg-desktop-portal
+      - vulkan-driver
+
+rpm:
+  group: Applications/Productivity
+  compression: zstd
+deb:
+  compression: zstd
+archlinux:
+  packager: Rohan Bhattacharyya <73246001+RohanBhattacharyya@users.noreply.github.com>

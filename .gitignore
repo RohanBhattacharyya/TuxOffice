@@ -7,3 +7,6 @@ __pycache__/
 /*.msi
 /*.log
 *.dmp
+
+# Release builds
+/dist/
