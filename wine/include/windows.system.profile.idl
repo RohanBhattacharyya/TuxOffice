@@ -1,0 +1,249 @@
+/*
+ * Copyright 2023 Rémi Bernon for CodeWeavers
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ */
+
+#ifdef __WIDL__
+#pragma winrt ns_prefix
+#endif
+
+import "inspectable.idl";
+import "asyncinfo.idl";
+import "eventtoken.idl";
+import "windowscontracts.idl";
+import "windows.foundation.idl";
+import "windows.storage.streams.idl";
+import "windows.system.idl";
+
+namespace Windows.System.Profile {
+    apicontract ProfileRetailInfoContract;
+    apicontract ProfileSharedModeContract;
+    typedef enum PlatformDataCollectionLevel PlatformDataCollectionLevel;
+    typedef enum SystemIdentificationSource SystemIdentificationSource;
+    interface IAnalyticsInfoStatics;
+    interface IAnalyticsInfoStatics2;
+    interface IAnalyticsVersionInfo;
+    interface IAnalyticsVersionInfo2;
+    interface IPlatformDiagnosticsAndUsageDataSettingsStatics;
+    interface ISystemIdentificationInfo;
+    interface ISystemIdentificationStatics;
+    interface IRetailInfoStatics;
+    interface ISharedModeSettingsStatics;
+    interface ISharedModeSettingsStatics2;
+    runtimeclass AnalyticsVersionInfo;
+    runtimeclass AnalyticsInfo;
+    runtimeclass PlatformDiagnosticsAndUsageDataSettings;
+    runtimeclass SystemIdentification;
+    runtimeclass SystemIdentificationInfo;
+    runtimeclass RetailInfo;
+    runtimeclass SharedModeSettings;
+
+    [contractversion(1.0)]
+    apicontract ProfileRetailInfoContract
+    {
+    }
+
+    [contractversion(2.0)]
+    apicontract ProfileSharedModeContract
+    {
+    }
+
+    [contract(Windows.Foundation.UniversalApiContract, 3.0)]
+    enum SystemIdentificationSource
+    {
+        None     = 0,
+        Tpm      = 1,
+        Uefi     = 2,
+        [contract(Windows.Foundation.UniversalApiContract, 5.0)]
+        Registry = 3,
+    };
+
+    [contract(Windows.Foundation.UniversalApiContract, 2.0)]
+    enum PlatformDataCollectionLevel
+    {
+        Security = 0,
+        Basic    = 1,
+        Enhanced = 2,
+        Full     = 3,
+    };
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 2.0),
+        exclusiveto(Windows.System.Profile.PlatformDiagnosticsAndUsageDataSettings),
+        uuid(b6e24c1b-7b1c-4b32-8c62-a66597ce723a)
+    ]
+    interface IPlatformDiagnosticsAndUsageDataSettingsStatics : IInspectable
+    {
+        [propget] HRESULT CollectionLevel([out, retval] Windows.System.Profile.PlatformDataCollectionLevel *value);
+        [eventadd] HRESULT CollectionLevelChanged(
+                [in] Windows.Foundation.EventHandler<IInspectable *> *handler,
+                [out, retval] EventRegistrationToken *token);
+        [eventremove] HRESULT CollectionLevelChanged([in] EventRegistrationToken token);
+        HRESULT CanCollectDiagnostics([in] Windows.System.Profile.PlatformDataCollectionLevel level,
+                [out, retval] boolean *value);
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        exclusiveto(Windows.System.Profile.AnalyticsInfo),
+        uuid(1d5ee066-188d-5ba9-4387-acaeb0e7e305)
+    ]
+    interface IAnalyticsInfoStatics : IInspectable
+    {
+        [propget] HRESULT VersionInfo([out, retval] Windows.System.Profile.AnalyticsVersionInfo **value);
+        [propget] HRESULT DeviceForm([out, retval] HSTRING *value);
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        exclusiveto(Windows.System.Profile.AnalyticsVersionInfo),
+        uuid(926130b8-9955-4c74-bdc1-7cd0decf9b03)
+    ]
+    interface IAnalyticsVersionInfo : IInspectable
+    {
+        [propget] HRESULT DeviceFamily([out, retval] HSTRING *value);
+        [propget] HRESULT DeviceFamilyVersion([out, retval] HSTRING *value);
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 3.0),
+        exclusiveto(Windows.System.Profile.SystemIdentificationInfo),
+        uuid(0c659e7d-c3c2-4d33-a2df-21bc41916eb3)
+    ]
+    interface ISystemIdentificationInfo : IInspectable
+    {
+        [propget] HRESULT Id([out, retval] Windows.Storage.Streams.IBuffer **value);
+        [propget] HRESULT Source([out, retval] Windows.System.Profile.SystemIdentificationSource *value);
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 3.0),
+        exclusiveto(Windows.System.Profile.SystemIdentification),
+        uuid(5581f42a-d3df-4d93-a37d-c41a616c6d01)
+    ]
+    interface ISystemIdentificationStatics : IInspectable
+    {
+        HRESULT GetSystemIdForPublisher([out, retval] Windows.System.Profile.SystemIdentificationInfo **result);
+        HRESULT GetSystemIdForUser([in] Windows.System.User *user, [out, retval] Windows.System.Profile.SystemIdentificationInfo **result);
+    }
+
+    [
+        contract(Windows.System.Profile.ProfileRetailInfoContract, 1.0),
+        exclusiveto(Windows.System.Profile.RetailInfo),
+        uuid(0712c6b8-8b92-4f2a-8499-031f1798d6ef)
+    ]
+    interface IRetailInfoStatics : IInspectable
+    {
+        [propget] HRESULT IsDemoModeEnabled([out, retval] boolean *value);
+        [propget] HRESULT Properties([out, retval] Windows.Foundation.Collections.IMapView<HSTRING, IInspectable *> **value);
+    }
+
+    [
+        contract(Windows.System.Profile.ProfileSharedModeContract, 1.0),
+        exclusiveto(Windows.System.Profile.SharedModeSettings),
+        uuid(893df40e-cad6-4d50-8c49-6fcfc03edb29)
+    ]
+    interface ISharedModeSettingsStatics : IInspectable
+    {
+        [propget] HRESULT IsEnabled([out, retval] boolean *value);
+    }
+
+    [
+        contract(Windows.System.Profile.ProfileSharedModeContract, 2.0),
+        exclusiveto(Windows.System.Profile.SharedModeSettings),
+        uuid(608988a4-ccf1-4ee8-a5e2-fd6a1d0cfac8)
+    ]
+    interface ISharedModeSettingsStatics2 : IInspectable
+    {
+        [propget] HRESULT ShouldAvoidLocalStorage([out, retval] boolean *value);
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        marshaling_behavior(agile),
+        threading(both)
+    ]
+    runtimeclass AnalyticsVersionInfo
+    {
+        [default] interface Windows.System.Profile.IAnalyticsVersionInfo;
+        /* [contract(Windows.Foundation.UniversalApiContract, 11.0)] interface Windows.System.Profile.IAnalyticsVersionInfo2; */
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 1.0),
+        marshaling_behavior(agile),
+        static(Windows.System.Profile.IAnalyticsInfoStatics, Windows.Foundation.UniversalApiContract, 1.0),
+        /* static(Windows.System.Profile.IAnalyticsInfoStatics2, Windows.Foundation.UniversalApiContract, 6.0), */
+        threading(both)
+    ]
+    runtimeclass AnalyticsInfo
+    {
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 2.0),
+        marshaling_behavior(agile),
+        static(Windows.System.Profile.IPlatformDiagnosticsAndUsageDataSettingsStatics,
+                Windows.Foundation.UniversalApiContract, 2.0),
+        threading(both)
+    ]
+    runtimeclass PlatformDiagnosticsAndUsageDataSettings
+    {
+    }
+
+    [
+        contract(Windows.System.Profile.ProfileRetailInfoContract, 1.0),
+        marshaling_behavior(agile),
+        static(Windows.System.Profile.IRetailInfoStatics, Windows.System.Profile.ProfileRetailInfoContract, 1.0),
+        threading(both)
+    ]
+    runtimeclass RetailInfo
+    {
+    }
+
+    [
+        contract(Windows.System.Profile.ProfileSharedModeContract, 1.0),
+        marshaling_behavior(agile),
+        static(Windows.System.Profile.ISharedModeSettingsStatics,
+                Windows.System.Profile.ProfileSharedModeContract, 1.0),
+        static(Windows.System.Profile.ISharedModeSettingsStatics2,
+                Windows.System.Profile.ProfileSharedModeContract, 2.0),
+        threading(both)
+    ]
+    runtimeclass SharedModeSettings
+    {
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 3.0),
+        marshaling_behavior(agile),
+        static(Windows.System.Profile.ISystemIdentificationStatics, Windows.Foundation.UniversalApiContract, 3.0),
+        threading(both)
+    ]
+    runtimeclass SystemIdentification
+    {
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 3.0),
+        marshaling_behavior(agile),
+        threading(both)
+    ]
+    runtimeclass SystemIdentificationInfo
+    {
+        [default] interface Windows.System.Profile.ISystemIdentificationInfo;
+    }
+}

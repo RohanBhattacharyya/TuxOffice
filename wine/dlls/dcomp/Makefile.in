@@ -1,0 +1,9 @@
+MODULE    = dcomp.dll
+IMPORTLIB = dcomp
+IMPORTS   = user32
+
+EXTRADLLFLAGS = -Wb,--prefer-native
+
+SOURCES = \
+	device.c \
+	version.rc

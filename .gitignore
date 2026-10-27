@@ -1,0 +1,9 @@
+# Python
+__pycache__/
+*.pyc
+
+# Installers, Office payloads and dumps stay out of the repository
+/*.exe
+/*.msi
+/*.log
+*.dmp

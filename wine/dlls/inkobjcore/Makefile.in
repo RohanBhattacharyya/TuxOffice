@@ -1,0 +1,17 @@
+MODULE = inkobjcore.dll
+IMPORTS = combase ole32 uuid
+
+SOURCES = \
+	classes.idl \
+	configuration.c \
+	core_host.c \
+	drawing.c \
+	events.c \
+	factory.c \
+	inkobjcore.rc \
+	main.c \
+	point.c \
+	presenter.c \
+	source.c \
+	stroke_view.c \
+	synchronizer.c

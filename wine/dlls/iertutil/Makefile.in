@@ -1,0 +1,6 @@
+MODULE = iertutil.dll
+IMPORTS = combase oleaut32 urlmon
+
+SOURCES = \
+	classes.idl \
+	main.c

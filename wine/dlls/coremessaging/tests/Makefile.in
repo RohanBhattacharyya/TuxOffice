@@ -1,0 +1,5 @@
+TESTDLL = coremessaging.dll
+IMPORTS = advapi32 combase coremessaging user32
+
+SOURCES = \
+	coremessaging.c

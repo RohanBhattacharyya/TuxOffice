@@ -1,0 +1,123 @@
+/*
+ * Copyright (C) 2017 Alistair Leslie-Hughes
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ */
+#ifndef _APPMODEL_H_
+#define _APPMODEL_H_
+
+#if defined(__cplusplus)
+extern "C" {
+#endif
+
+typedef enum AppPolicyMediaFoundationCodecLoading
+{
+    AppPolicyMediaFoundationCodecLoading_All       = 0,
+    AppPolicyMediaFoundationCodecLoading_InboxOnly = 1,
+} AppPolicyMediaFoundationCodecLoading;
+
+typedef enum AppPolicyProcessTerminationMethod
+{
+    AppPolicyProcessTerminationMethod_ExitProcess      = 0,
+    AppPolicyProcessTerminationMethod_TerminateProcess = 1,
+} AppPolicyProcessTerminationMethod;
+
+typedef enum AppPolicyThreadInitializationType
+{
+    AppPolicyThreadInitializationType_None            = 0,
+    AppPolicyThreadInitializationType_InitializeWinRT = 1,
+} AppPolicyThreadInitializationType;
+
+typedef enum AppPolicyShowDeveloperDiagnostic
+{
+    AppPolicyShowDeveloperDiagnostic_None   = 0,
+    AppPolicyShowDeveloperDiagnostic_ShowUI = 1,
+} AppPolicyShowDeveloperDiagnostic;
+
+typedef enum AppPolicyWindowingModel
+{
+    AppPolicyWindowingModel_None           = 0,
+    AppPolicyWindowingModel_Universal      = 1,
+    AppPolicyWindowingModel_ClassicDesktop = 2,
+    AppPolicyWindowingModel_ClassicPhone   = 3
+} AppPolicyWindowingModel;
+
+typedef struct PACKAGE_VERSION
+{
+    union
+    {
+        UINT64 Version;
+        struct
+        {
+            USHORT Revision;
+            USHORT Build;
+            USHORT Minor;
+            USHORT Major;
+        }
+        DUMMYSTRUCTNAME;
+    }
+    DUMMYUNIONNAME;
+}
+PACKAGE_VERSION;
+
+typedef struct PACKAGE_ID
+{
+    UINT32 reserved;
+    UINT32 processorArchitecture;
+    PACKAGE_VERSION version;
+    WCHAR *name;
+    WCHAR *publisher;
+    WCHAR *resourceId;
+    WCHAR *publisherId;
+}
+PACKAGE_ID;
+
+#define PACKAGE_PROPERTY_FRAMEWORK 0x00000001
+#define PACKAGE_PROPERTY_RESOURCE 0x00000002
+#define PACKAGE_PROPERTY_BUNDLE 0x00000004
+#define PACKAGE_PROPERTY_OPTIONAL 0x00000008
+#define PACKAGE_FILTER_HEAD 0x00000010
+#define PACKAGE_FILTER_DIRECT 0x00000020
+#define PACKAGE_FILTER_RESOURCE 0x00000040
+#define PACKAGE_FILTER_BUNDLE 0x00000080
+#define PACKAGE_INFORMATION_BASIC 0x00000000
+#define PACKAGE_INFORMATION_FULL 0x00000100
+#define PACKAGE_PROPERTY_DEVELOPMENT_MODE 0x00010000
+#define PACKAGE_FILTER_OPTIONAL 0x00020000
+#define PACKAGE_PROPERTY_IS_IN_RELATED_SET 0x00040000
+#define PACKAGE_FILTER_IS_IN_RELATED_SET PACKAGE_PROPERTY_IS_IN_RELATED_SET
+#define PACKAGE_PROPERTY_STATIC 0x00080000
+#define PACKAGE_FILTER_STATIC PACKAGE_PROPERTY_STATIC
+#define PACKAGE_PROPERTY_DYNAMIC 0x00100000
+#define PACKAGE_FILTER_DYNAMIC PACKAGE_PROPERTY_DYNAMIC
+
+LONG WINAPI AppPolicyGetMediaFoundationCodecLoading(HANDLE token, AppPolicyMediaFoundationCodecLoading *policy);
+LONG WINAPI AppPolicyGetProcessTerminationMethod(HANDLE token, AppPolicyProcessTerminationMethod *policy);
+LONG WINAPI AppPolicyGetShowDeveloperDiagnostic(HANDLE token, AppPolicyShowDeveloperDiagnostic *policy);
+LONG WINAPI AppPolicyGetThreadInitializationType(HANDLE token, AppPolicyThreadInitializationType *policy);
+LONG WINAPI AppPolicyGetWindowingModel(HANDLE processToken, AppPolicyWindowingModel *policy);
+LONG WINAPI FindPackagesByPackageFamily(const WCHAR *family_name, UINT32 filters, UINT32 *count,
+        WCHAR **full_names, UINT32 *buffer_length, WCHAR *buffer, UINT32 *properties);
+LONG WINAPI GetPackagePath(const PACKAGE_ID *package_id, const UINT32 reserved, UINT32 *length, WCHAR *path);
+LONG WINAPI GetPackagesByPackageFamily(const WCHAR *family_name, UINT32 *count, WCHAR **full_names,
+        UINT32 *buffer_length, WCHAR *buffer);
+LONG WINAPI PackageFullNameFromId(const PACKAGE_ID *package_id, UINT32 *length, WCHAR *full_name);
+LONG WINAPI PackageIdFromFullName(const WCHAR *full_name, UINT32 flags, UINT32 *buffer_length, BYTE *buffer);
+
+#if defined(__cplusplus)
+}
+#endif
+
+#endif /* _APPMODEL_H_ */
