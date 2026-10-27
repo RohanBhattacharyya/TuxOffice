@@ -724,15 +724,91 @@ static void add_ms_root_certs(HKEY key, HCERTSTORE cached)
     }
 }
 
+struct host_cert
+{
+    BYTE *data;
+    DWORD size;
+};
+
+static void free_host_certs( struct host_cert *certs, DWORD count )
+{
+    DWORD i;
+
+    for (i = 0; i < count; i++) CryptMemFree( certs[i].data );
+    CryptMemFree( certs );
+}
+
+/* Reads the host's trusted roots (the Unix side hands each one out once) and
+ * a digest of the whole set, so that an unchanged set need not be imported
+ * again by every process. */
+static struct host_cert *read_host_certs( DWORD *count, BYTE digest[20] )
+{
+    DWORD needed, size = 2048, capacity = 0, digest_size = 20;
+    struct enum_root_certs_params params = { NULL, 0, &needed };
+    struct host_cert *certs = NULL, *grown;
+    HCRYPTPROV prov;
+    HCRYPTHASH set_hash = 0;
+
+    *count = 0;
+    memset( digest, 0, 20 );
+    if (!CryptAcquireContextW( &prov, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT )) return NULL;
+    CryptCreateHash( prov, CALG_SHA1, 0, 0, &set_hash );
+    params.buffer = CryptMemAlloc( size );
+    params.size = size;
+    while (params.buffer && !CRYPT32_CALL( enum_root_certs, &params ))
+    {
+        if (needed > params.size)
+        {
+            CryptMemFree( params.buffer );
+            params.buffer = CryptMemAlloc( needed );
+            params.size = needed;
+            continue;
+        }
+        if (*count == capacity)
+        {
+            capacity = capacity ? capacity * 2 : 256;
+            if (!(grown = CryptMemRealloc( certs, capacity * sizeof(*certs) ))) break;
+            certs = grown;
+        }
+        if (!(certs[*count].data = CryptMemAlloc( needed ))) break;
+        memcpy( certs[*count].data, params.buffer, needed );
+        certs[*count].size = needed;
+        CryptHashData( set_hash, params.buffer, needed, 0 );
+        ++*count;
+    }
+    CryptMemFree( params.buffer );
+    CryptGetHashParam( set_hash, HP_HASHVAL, digest, &digest_size, 0 );
+    CryptDestroyHash( set_hash );
+    CryptReleaseContext( prov, 0 );
+    return certs;
+}
+
+static const WCHAR host_digest_name[] = L"HostCertificatesDigest";
+
+static BOOL host_certs_unchanged( const BYTE digest[20] )
+{
+    BYTE stored[20];
+    DWORD size = sizeof(stored), type;
+    BOOL ret = FALSE;
+    HKEY import_key;
+
+    if (RegOpenKeyExW( HKEY_LOCAL_MACHINE, L"Software\\Wine\\HostImportedCertificates", 0, KEY_QUERY_VALUE, &import_key ))
+        return FALSE;
+    if (!RegQueryValueExW( import_key, host_digest_name, NULL, &type, stored, &size ))
+        ret = type == REG_BINARY && size == sizeof(stored) && !memcmp( stored, digest, sizeof(stored) );
+    RegCloseKey( import_key );
+    return ret;
+}
+
 /* Reads certificates from the list of known locations into store.  Stops when
  * any location contains any certificates, to prevent spending unnecessary time
  * adding redundant certificates, e.g. when both a certificate bundle and
  * individual certificates exist in the same directory.
  */
-static void sync_trusted_roots_from_known_locations( HKEY key, HCERTSTORE cached )
+static void sync_trusted_roots_from_known_locations( HKEY key, HCERTSTORE cached, const struct host_cert *host_certs,
+                                                     DWORD host_count, const BYTE digest[20] )
 {
-    DWORD needed, size;
-    struct enum_root_certs_params params = { NULL, 2048, &needed };
+    DWORD needed, size, host;
     HCRYPTPROV prov;
     HCRYPTHASH hash;
     BYTE hashval[20];
@@ -768,18 +844,13 @@ static void sync_trusted_roots_from_known_locations( HKEY key, HCERTSTORE cached
     }
 
     CryptAcquireContextW( &prov, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT );
-    params.buffer = CryptMemAlloc( params.size );
-    while (!CRYPT32_CALL( enum_root_certs, &params ))
+    for (host = 0; host < host_count; host++)
     {
-        if (needed > params.size)
-        {
-            CryptMemFree( params.buffer );
-            params.buffer = CryptMemAlloc( needed );
-            params.size = needed;
-            continue;
-        }
+        const BYTE *data = host_certs[host].data;
+
+        needed = host_certs[host].size;
         CryptCreateHash( prov, CALG_SHA1, 0, 0, &hash );
-        CryptHashData( hash, params.buffer, needed, 0 );
+        CryptHashData( hash, data, needed, 0 );
         hashlen = sizeof(hashval);
         CryptGetHashParam( hash, HP_HASHVAL, hashval, &hashlen, 0 );
         CryptDestroyHash( hash );
@@ -799,14 +870,13 @@ static void sync_trusted_roots_from_known_locations( HKEY key, HCERTSTORE cached
             continue;
         }
 
-        CertAddEncodedCertificateToStore( cached, X509_ASN_ENCODING, params.buffer, needed, CERT_STORE_ADD_ALWAYS, &cert );
+        CertAddEncodedCertificateToStore( cached, X509_ASN_ENCODING, data, needed, CERT_STORE_ADD_ALWAYS, &cert );
         is_new = 1;
         if (!CertSetCertificateContextProperty( cert, CERT_FIRST_USER_PROP_ID, 0, &exists_blob ))
             ERR("Failed to set property.\n");
         CertFreeCertificateContext( cert );
         ++new_count;
     }
-    CryptMemFree( params.buffer );
     CryptReleaseContext( prov, 0 );
 
     cert = NULL;
@@ -834,6 +904,8 @@ static void sync_trusted_roots_from_known_locations( HKEY key, HCERTSTORE cached
     if (new_count)
         check_and_store_certs( cached, key, import_key );
 
+    /* Certificates rejected above are checked again only when the host's set changes. */
+    RegSetValueExW( import_key, host_digest_name, 0, REG_BINARY, digest, 20 );
     RegCloseKey( import_key );
     TRACE( "existing %u, deleted %u, new %u.\n", existing_count, deleted_count, new_count );
 }
@@ -841,6 +913,9 @@ static void sync_trusted_roots_from_known_locations( HKEY key, HCERTSTORE cached
 void CRYPT_ImportSystemRootCertsToReg(void)
 {
     HCERTSTORE cached = NULL;
+    struct host_cert *host_certs = NULL;
+    DWORD host_count = 0;
+    BYTE digest[20];
     HKEY key = NULL;
     LONG rc;
     HANDLE hsem;
@@ -863,6 +938,16 @@ void CRYPT_ImportSystemRootCertsToReg(void)
         goto done;
     }
 
+    /* Every process imports; usually nothing has changed since the last one.
+     * Then no key is opened for writing, which also keeps clear of
+     * application registry virtualization layers. */
+    host_certs = read_host_certs(&host_count, digest);
+    if (host_certs_unchanged(digest))
+    {
+        TRACE("host root certificates unchanged\n");
+        goto done;
+    }
+
     rc = RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\SystemCertificates\\Root\\Certificates", 0, NULL, 0,
             KEY_ALL_ACCESS, NULL, &key, 0);
     if (rc)
@@ -875,9 +960,10 @@ void CRYPT_ImportSystemRootCertsToReg(void)
     }
     CRYPT_RegReadSerializedFromReg(key, CERT_STORE_CERTIFICATE_CONTEXT_FLAG, cached, CERT_STORE_ADD_ALWAYS);
     add_ms_root_certs(key, cached);
-    sync_trusted_roots_from_known_locations(key, cached);
+    sync_trusted_roots_from_known_locations(key, cached, host_certs, host_count, digest);
 
 done:
+    free_host_certs(host_certs, host_count);
     RegCloseKey(key);
     CertCloseStore(cached, 0);
     root_certs_imported = TRUE;

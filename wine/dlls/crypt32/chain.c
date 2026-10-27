@@ -161,6 +161,10 @@ HCERTCHAINENGINE CRYPT_CreateChainEngine(HCERTSTORE root, DWORD system_store, co
 }
 
 static CertificateChainEngine *default_cu_engine, *default_lm_engine;
+/* Threads verifying their first chain at the same time would each create a
+ * default engine and all but one would free theirs again; that free has
+ * crashed in Office, where wininet threads start together. */
+static SRWLOCK default_engine_lock = SRWLOCK_INIT;
 
 static CertificateChainEngine *get_chain_engine(HCERTCHAINENGINE handle, BOOL allow_default)
 {
@@ -171,10 +175,13 @@ static CertificateChainEngine *get_chain_engine(HCERTCHAINENGINE handle, BOOL al
             return NULL;
 
         if(!default_cu_engine) {
-            handle = CRYPT_CreateChainEngine(NULL, CERT_SYSTEM_STORE_CURRENT_USER, &config);
-            InterlockedCompareExchangePointer((void**)&default_cu_engine, handle, NULL);
-            if(default_cu_engine != handle)
-                CertFreeCertificateChainEngine(handle);
+            AcquireSRWLockExclusive(&default_engine_lock);
+            if(!default_cu_engine)
+                InterlockedExchangePointer((void**)&default_cu_engine,
+                 CRYPT_CreateChainEngine(NULL, CERT_SYSTEM_STORE_CURRENT_USER, &config));
+            ReleaseSRWLockExclusive(&default_engine_lock);
+            if(!default_cu_engine)
+                return NULL;
         }
         CertControlStore(default_cu_engine->hWorld, 0, CERT_STORE_CTRL_RESYNC, NULL);
         return default_cu_engine;
@@ -185,10 +192,13 @@ static CertificateChainEngine *get_chain_engine(HCERTCHAINENGINE handle, BOOL al
             return NULL;
 
         if(!default_lm_engine) {
-            handle = CRYPT_CreateChainEngine(NULL, CERT_SYSTEM_STORE_LOCAL_MACHINE, &config);
-            InterlockedCompareExchangePointer((void**)&default_lm_engine, handle, NULL);
-            if(default_lm_engine != handle)
-                CertFreeCertificateChainEngine(handle);
+            AcquireSRWLockExclusive(&default_engine_lock);
+            if(!default_lm_engine)
+                InterlockedExchangePointer((void**)&default_lm_engine,
+                 CRYPT_CreateChainEngine(NULL, CERT_SYSTEM_STORE_LOCAL_MACHINE, &config));
+            ReleaseSRWLockExclusive(&default_engine_lock);
+            if(!default_lm_engine)
+                return NULL;
         }
         CertControlStore(default_lm_engine->hWorld, 0, CERT_STORE_CTRL_RESYNC, NULL);
         return default_lm_engine;
