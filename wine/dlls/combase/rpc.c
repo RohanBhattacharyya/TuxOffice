@@ -104,6 +104,7 @@ struct dispatch_params
     RPCOLEMESSAGE     *msg; /* message */
     IRpcStubBuffer    *stub; /* stub buffer, if applicable */
     IRpcChannelBuffer *chan; /* server channel buffer, if applicable */
+    struct stub_manager *stub_manager; /* call reference, released in the server apartment */
     IID                iid; /* ID of interface being called */
     IUnknown          *iface; /* interface being called */
     HANDLE             handle; /* handle that will become signaled when call finishes */
@@ -1867,6 +1868,16 @@ static HRESULT unmarshal_ORPCTHAT(RPC_MESSAGE *msg, ORPCTHAT *orpcthat,
     return S_OK;
 }
 
+static void rpc_release_dispatch_refs(struct dispatch_params *params)
+{
+    if (params->chan) IRpcChannelBuffer_Release(params->chan);
+    if (params->stub) IRpcStubBuffer_Release(params->stub);
+    params->chan = NULL;
+    params->stub = NULL;
+    if (params->stub_manager) stub_manager_int_release(params->stub_manager);
+    params->stub_manager = NULL;
+}
+
 void rpc_execute_call(struct dispatch_params *params)
 {
     struct message_state *message_state = NULL;
@@ -1883,6 +1894,15 @@ void rpc_execute_call(struct dispatch_params *params)
         return;
 
     apt = com_get_current_apt();
+
+    /* The thread may have left its apartment while the apartment window
+     * still had calls queued; its objects are no longer reachable. */
+    if (!apt)
+    {
+        WARN("Call for an apartment the thread has left\n");
+        params->hr = RPC_E_DISCONNECTED;
+        goto exit;
+    }
 
     /* handle ORPCTHIS and server extensions */
 
@@ -1987,6 +2007,10 @@ exit_reset_state:
 
 exit:
     free(message_state);
+    /* Disconnecting an object during its last call can leave this call's
+     * reference as the stub manager's only reference. Destroy its interfaces
+     * here, in the apartment that owns them, before waking the RPC worker. */
+    if (params->stub_manager) rpc_release_dispatch_refs(params);
     if (params->handle) SetEvent(params->handle);
 }
 
@@ -2024,6 +2048,7 @@ static void __RPC_STUB dispatch_rpc(RPC_MESSAGE *msg)
     params->hr = S_OK;
     params->handle = NULL;
     params->bypass_rpcrt = FALSE;
+    params->stub_manager = stub_manager;
 
     /* Note: this is the important difference between STAs and MTAs - we
      * always execute RPCs to STAs in the thread that originally created the
@@ -2039,8 +2064,6 @@ static void __RPC_STUB dispatch_rpc(RPC_MESSAGE *msg)
         else
         {
             ERR("PostMessage failed with error %lu\n", GetLastError());
-            IRpcChannelBuffer_Release(params->chan);
-            IRpcStubBuffer_Release(params->stub);
         }
         CloseHandle(params->handle);
     }
@@ -2064,13 +2087,9 @@ static void __RPC_STUB dispatch_rpc(RPC_MESSAGE *msg)
     }
 
     hr = params->hr;
-    if (params->chan)
-        IRpcChannelBuffer_Release(params->chan);
-    if (params->stub)
-        IRpcStubBuffer_Release(params->stub);
+    rpc_release_dispatch_refs(params);
     free(params);
 
-    stub_manager_int_release(stub_manager);
     apartment_release(apt);
 
     /* if IRpcStubBuffer_Invoke fails, we should raise an exception to tell

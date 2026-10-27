@@ -1115,7 +1115,12 @@ static LRESULT CALLBACK apartment_wndproc(HWND hWnd, UINT msg, WPARAM wParam, LP
         rpc_execute_call((struct dispatch_params *)lParam);
         return 0;
     case DM_HOSTOBJECT:
-        return apartment_hostobject(com_get_current_apt(), (const struct host_object_params *)lParam);
+    {
+        struct apartment *apt = com_get_current_apt();
+
+        if (!apt) return CO_E_NOTINITIALIZED;
+        return apartment_hostobject(apt, (const struct host_object_params *)lParam);
+    }
     default:
         return DefWindowProcW(hWnd, msg, wParam, lParam);
     }
@@ -1150,12 +1155,34 @@ HRESULT enter_apartment(struct tlsdata *data, DWORD model)
     return hr;
 }
 
+/* Like Windows, CoUninitialize dispatches the calls already waiting for a
+ * single-threaded apartment; otherwise their callers would wait forever once
+ * the apartment window is destroyed. */
+static void apartment_dispatch_pending_calls(struct apartment *apt)
+{
+    MSG msg;
+
+    if (!apt || apt->multi_threaded || !apt->win || apt->tid != GetCurrentThreadId()) return;
+    while (PeekMessageW(&msg, apt->win, DM_EXECUTERPC, DM_EXECUTERPC, PM_REMOVE))
+    {
+        /* WM_QUIT is returned whatever the filter; leave it for the thread. */
+        if (msg.message == WM_QUIT)
+        {
+            PostQuitMessage(msg.wParam);
+            break;
+        }
+        if (msg.hwnd == apt->win && msg.message == DM_EXECUTERPC)
+            rpc_execute_call((struct dispatch_params *)msg.lParam);
+    }
+}
+
 void leave_apartment(struct tlsdata *data)
 {
     if (!--data->inits)
     {
         if (data->ole_inits)
             WARN( "Uninitializing apartment while Ole is still initialized\n" );
+        apartment_dispatch_pending_calls(data->apt);
         apartment_release(data->apt);
         if (data->implicit_mta_cookie)
         {
