@@ -151,7 +151,10 @@ class WineSyscallFrameId(object):
 
 class WineSyscallUnwinder(Unwinder):
     def __init__(self):
-        super().__init__("WineSyscallUnwinder", gdb.SIGTRAMP_FRAME)
+        try:
+            super().__init__("WineSyscallUnwinder", gdb.SIGTRAMP_FRAME)
+        except TypeError:
+            super().__init__("WineSyscallUnwinder")
         self.pattern = re.compile('__wine_(syscall|unix_call)'
                                   '|KiUserCallbackDispatcher')
 
