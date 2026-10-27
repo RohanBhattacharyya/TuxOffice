@@ -1,0 +1,855 @@
+#!/usr/bin/env bash
+# TuxOffice - run Microsoft Office natively on Linux.
+#
+# Office's x86-64 code executes directly on the CPU (no VM, no emulation);
+# Win32/COM/Direct2D calls are served by Soda, a Wine runner built from
+# Valve's Proton Wine plus Office-specific patches. This script owns the
+# runner, the prefix, the Click-to-Run install and the desktop integration.
+set -euo pipefail
+
+TUX_SRC="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+TUX_HOME="${TUXOFFICE_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/tuxoffice}"
+TUX_PREFIX="${TUXOFFICE_PREFIX:-$TUX_HOME/prefixes/office}"
+TUX_CACHE="$TUX_HOME/cache"
+
+# Pinned, checksummed downloads. Bump together with a test install.
+RUNNER_NAME="soda-11.0-33-experimental-x86_64"
+RUNNER_URL="https://github.com/bottlesdevs/wine/releases/download/soda-11.0-33-experimental/$RUNNER_NAME.tar.xz"
+RUNNER_SHA256="7c3535173ce53ab4bb380aee0267f5c8b2c4af930ba3c09916efd9440ef4f397"
+ODT_URL="https://download.microsoft.com/download/6c1eeb25-cf8b-41d9-8d0d-cc1dbc032140/officedeploymenttool_20430-20146.exe"
+ODT_SHA256="af1594121ab610cd8abc3dd6ff0a504e0cbc6ce54372e5c3813926352d1179c6"
+WINETRICKS_URL="https://raw.githubusercontent.com/Winetricks/winetricks/20250102/src/winetricks"
+CABEXTRACT_URL="https://www.cabextract.org.uk/cabextract-1.11.tar.gz"
+SELAWIK_URL="https://github.com/microsoft/Selawik/releases/download/1.01/Selawik_Release.zip"
+# Soda plus TuxOffice's Wine source changes, built by runner/build.sh.
+LOCAL_RUNNER_NAME="tuxoffice-${RUNNER_NAME#soda-}"
+
+OFFICE_ROOT="$TUX_PREFIX/drive_c/Program Files/Microsoft Office/root/Office16"
+C2R_DIR="$TUX_PREFIX/drive_c/Program Files/Common Files/Microsoft Shared/ClickToRun"
+
+# app id | exe | display name | mime types (desktop-file syntax)
+APPS=(
+  "word|WINWORD.EXE|Microsoft Word|application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/msword;application/vnd.ms-word.document.macroEnabled.12;application/vnd.openxmlformats-officedocument.wordprocessingml.template;application/rtf;"
+  "excel|EXCEL.EXE|Microsoft Excel|application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;application/vnd.ms-excel;application/vnd.ms-excel.sheet.macroEnabled.12;application/vnd.ms-excel.sheet.binary.macroEnabled.12;text/csv;"
+  "powerpoint|POWERPNT.EXE|Microsoft PowerPoint|application/vnd.openxmlformats-officedocument.presentationml.presentation;application/vnd.ms-powerpoint;application/vnd.ms-powerpoint.presentation.macroEnabled.12;application/vnd.openxmlformats-officedocument.presentationml.slideshow;"
+  "outlook|OUTLOOK.EXE|Microsoft Outlook|application/vnd.ms-outlook;"
+  "onenote|ONENOTE.EXE|Microsoft OneNote|application/onenote;"
+  "access|MSACCESS.EXE|Microsoft Access|application/vnd.ms-access;application/x-msaccess;"
+  "publisher|MSPUB.EXE|Microsoft Publisher|application/vnd.ms-publisher;"
+)
+
+msg()  { printf '\033[1;34m::\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33mwarning:\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+
+runner_env() {
+  # Prefer the runner with TuxOffice's patches; TUXOFFICE_RUNNER overrides.
+  local r="${TUXOFFICE_RUNNER:-$TUX_HOME/runners/$LOCAL_RUNNER_NAME}"
+  [[ -x "$r/bin/wine" ]] || r="$TUX_HOME/runners/$RUNNER_NAME"
+  [[ -x "$r/bin/wine" ]] || die "runner missing at $r; run: tuxoffice setup"
+  export PATH="$TUX_HOME/tools/local/bin:$r/bin:$PATH"
+  export WINE="$r/bin/wine" WINESERVER="$r/bin/wineserver"
+  export WINEPREFIX="$TUX_PREFIX"
+  export WINEDEBUG="${WINEDEBUG:--all}"
+  if [[ ${TUXOFFICE_GRAPHICS:-} == builtin ]]; then
+    export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:+$WINEDLLOVERRIDES;}d3d11,dxgi,d3d10core=b"
+  fi
+  select_display_gpu
+  # Office's Open and Save As dialogs use the desktop's own file chooser
+  # (Dolphin's dialog on Plasma); TUXOFFICE_FILE_DIALOG=wine keeps Wine's.
+  if [[ ${TUXOFFICE_FILE_DIALOG:-} == wine ]]; then
+    export TUXOFFICE_FILE_DIALOG=0
+  elif [[ -z ${TUXOFFICE_FILE_DIALOG:-} && -x "$r/bin/tuxoffice-file-dialog" ]]; then
+    export TUXOFFICE_FILE_DIALOG="$r/bin/tuxoffice-file-dialog"
+  fi
+  # TUXOFFICE_X11=1 forces XWayland when the native Wayland driver misbehaves.
+  [[ "${TUXOFFICE_X11:-0}" == 1 ]] || [[ -z "${WAYLAND_DISPLAY:-}" ]] || unset DISPLAY
+}
+
+fetch() { # url dest [sha256]
+  local url=$1 dest=$2 sum=${3:-}
+  if [[ ! -s "$dest" ]]; then
+    msg "downloading $(basename "$dest")"
+    curl -fsSL --retry 3 -o "$dest.part" "$url" && mv "$dest.part" "$dest"
+  fi
+  if [[ -n "$sum" ]]; then
+    echo "$sum  $dest" | sha256sum -c --quiet - || { rm -f "$dest"; die "checksum mismatch: $dest"; }
+  fi
+}
+
+wreg() { wine reg add "$@" /f >/dev/null 2>&1; }
+
+cmd_setup() {
+  mkdir -p "$TUX_HOME"/{runners,cache,tools,prefixes}
+
+  # Runner
+  if [[ ! -x "$TUX_HOME/runners/$RUNNER_NAME/bin/wine" ]]; then
+    fetch "$RUNNER_URL" "$TUX_CACHE/$RUNNER_NAME.tar.xz" "$RUNNER_SHA256"
+    tar -C "$TUX_HOME/runners" -xf "$TUX_CACHE/$RUNNER_NAME.tar.xz"
+  fi
+
+  # Tools: winetricks (script) and cabextract (built locally if absent).
+  fetch "$WINETRICKS_URL" "$TUX_HOME/tools/winetricks"
+  chmod +x "$TUX_HOME/tools/winetricks"
+  if ! command -v cabextract >/dev/null && [[ ! -x "$TUX_HOME/tools/local/bin/cabextract" ]]; then
+    fetch "$CABEXTRACT_URL" "$TUX_CACHE/cabextract.tar.gz"
+    (cd "$TUX_CACHE" && tar xf cabextract.tar.gz && cd cabextract-1.11 &&
+      ./configure -q --prefix="$TUX_HOME/tools/local" >/dev/null && make -s >/dev/null && make -s install >/dev/null)
+  fi
+
+  runner_env
+  if [[ ! -f "$TUX_PREFIX/system.reg" ]]; then
+    msg "creating prefix $TUX_PREFIX"
+    wine wineboot -i >/dev/null 2>&1
+  fi
+
+  msg "installing fonts and native runtime components"
+  W_OPT_UNATTENDED=1 "$TUX_HOME/tools/winetricks" -q corefonts gdiplus msxml6 riched20 msls31 \
+    >"$TUX_CACHE/winetricks.log" 2>&1 || die "winetricks failed; see $TUX_CACHE/winetricks.log"
+
+  # Selawik: Microsoft's open-source metric-compatible stand-in for Segoe UI.
+  fetch "$SELAWIK_URL" "$TUX_CACHE/selawik.zip"
+  unzip -oqj "$TUX_CACHE/selawik.zip" '*.ttf' -d "$TUX_PREFIX/drive_c/windows/Fonts"
+  for f in "$TUX_PREFIX"/drive_c/windows/Fonts/selawk*.ttf; do
+    case $(basename "$f") in
+      selawk.ttf)   wreg 'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Fonts' /v 'Selawik (TrueType)' /t REG_SZ /d selawk.ttf ;;
+      selawkb.ttf)  wreg 'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Fonts' /v 'Selawik Bold (TrueType)' /t REG_SZ /d selawkb.ttf ;;
+      selawkl.ttf)  wreg 'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Fonts' /v 'Selawik Light (TrueType)' /t REG_SZ /d selawkl.ttf ;;
+      selawksb.ttf) wreg 'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Fonts' /v 'Selawik Semibold (TrueType)' /t REG_SZ /d selawksb.ttf ;;
+      selawksl.ttf) wreg 'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Fonts' /v 'Selawik Semilight (TrueType)' /t REG_SZ /d selawksl.ttf ;;
+    esac
+  done
+  if font_registered 'Segoe UI'; then
+    set_segoe_substitutes ""
+  else
+    set_segoe_substitutes Selawik
+  fi
+
+  msg "configuring DLL overrides and graphics"
+  local o
+  for o in gdiplus=native msxml6=native,builtin riched20=native,builtin \
+           sppc=builtin winscard=builtin t2embed=native,builtin; do
+    wreg 'HKCU\Software\Wine\DllOverrides' /v "${o%%=*}" /t REG_SZ /d "${o#*=}"
+  done
+  wreg 'HKCU\Software\Wine\Direct3D' /v MaxVersionGL /t REG_DWORD /d 0x30002
+  # wined3d's GL backend finds no pixel format under the native Wayland
+  # driver and Office's UI init then fail-fasts; Vulkan works everywhere.
+  wreg 'HKCU\Software\Wine\Direct3D' /v renderer /t REG_SZ /d vulkan
+
+  # Keep the base runner on built-in D3D until the updated runner is ready.
+  # configure_graphics enables DXVK only with the required Direct2D fixes.
+  for o in d3d11 dxgi d3d10core; do
+    wreg 'HKCU\Software\Wine\DllOverrides' /v "$o" /t REG_SZ /d builtin
+  done
+
+  # Greyscale-antialiased text with Windows' default contrast.
+  wreg 'HKCU\Control Panel\Desktop' /v FontSmoothing /t REG_SZ /d 2
+  wreg 'HKCU\Control Panel\Desktop' /v FontSmoothingType /t REG_DWORD /d 2
+  wreg 'HKCU\Control Panel\Desktop' /v FontSmoothingGamma /t REG_DWORD /d 1400
+  wreg 'HKCU\Control Panel\Desktop' /v FontSmoothingOrientation /t REG_DWORD /d 1
+
+  # On a crash, exit instead of suspending Office while winedbg walks
+  # symbols for hundreds of MB of DLLs (which looks like a freeze).
+  wine reg delete 'HKLM\Software\Microsoft\Windows NT\CurrentVersion\AeDebug' /v Debugger /f >/dev/null 2>&1 || true
+
+  # Click-to-Run's service must exist before setup runs, or setup stalls.
+  wine sc create ClickToRunSvc \
+    binPath= '"C:\Program Files\Common Files\Microsoft Shared\ClickToRun\OfficeClickToRun.exe" /service' \
+    DisplayName= 'Microsoft Office Click-to-Run Service' start= auto type= own error= normal >/dev/null 2>&1 || true
+
+  if [[ ${TUXOFFICE_NO_BUILD:-0} != 1 ]]; then
+    msg "building the TuxOffice runner from wine/"
+    if "$TUX_SRC/runner/build.sh" >"$TUX_CACHE/runner-build.log" 2>&1; then
+      runner_env
+      wine wineboot -u >"$TUX_CACHE/prefix-update.log" 2>&1 || die "prefix update failed; see $TUX_CACHE/prefix-update.log"
+      msg "using runner $LOCAL_RUNNER_NAME"
+    else
+      warn "runner build failed (see $TUX_CACHE/runner-build.log); using stock Soda."
+      warn "Work/school Microsoft 365 accounts will not activate without patch 0002."
+    fi
+  fi
+
+  configure_graphics "${TUXOFFICE_GRAPHICS:-auto}"
+  configure_layout_printer
+  configure_office_ui
+  configure_chart_proxies
+  configure_installer_components
+  msg "setup complete; next: tuxoffice install"
+}
+
+configure_installer_components() {
+  local registration="$TUX_CACHE/c2r-components.reg"
+  [[ -d "$OFFICE_ROOT/../Integration" ]] || return 0
+  # Click-to-Run's App-V layer makes every manifest component visible to
+  # Windows Installer queries; Wine sees only the published ones, and Outlook
+  # then fails to start ("Cannot start Microsoft Outlook").
+  # Read the live registry: system.reg is written only when the wineserver
+  # exits, and waiting for that hangs while the Click-to-Run service runs.
+  local software="$TUX_CACHE/hklm-software.reg"
+  wine reg export 'HKLM\Software' "Z:${software//\//\\}" /y >"$TUX_CACHE/c2r-components-export.log" 2>&1 || \
+    { warn "Installer component repair failed; see $TUX_CACHE/c2r-components-export.log"; return 0; }
+  if ! python3 -I "$TUX_SRC/lib/c2rcomponents.py" "$TUX_PREFIX" "$registration" "$software" \
+      >"$TUX_CACHE/c2r-components.log" 2>&1; then
+    warn "Installer component repair failed; see $TUX_CACHE/c2r-components.log"
+    return 0
+  fi
+  wine reg import "Z:${registration//\//\\}" >"$TUX_CACHE/c2r-components-import.log" 2>&1 || \
+    warn "Installer component registration failed; see $TUX_CACHE/c2r-components-import.log"
+  # Access reconfigures itself at every start until this key exists, and that
+  # fails under Wine ("Automatic configuration of the current version of
+  # Microsoft Access has failed"); its registrations are already in place.
+  wreg 'HKLM\Software\Microsoft\Office\16.0\Access\NoRepairNeeded' /reg:64
+}
+
+configure_chart_proxies() {
+  local resources="$(dirname "$(dirname "$WINE")")/share/tuxoffice"
+  local registration="$TUX_CACHE/chart-proxies.reg"
+  [[ -f "$resources/office-graphics-v1" && -f "$OFFICE_ROOT/CHART.DLL" ]] || return 0
+  # Office's virtual registration isn't visible to Wine's COM marshaler.
+  # Read the installed DLL's own NDR tables; regsvr32 initializes Office and
+  # fails outside its application host.
+  if ! python3 -I "$TUX_SRC/lib/chartproxy.py" "$OFFICE_ROOT/CHART.DLL" \
+      'C:\Program Files\Microsoft Office\root\Office16\CHART.DLL' "$registration" \
+      >"$TUX_CACHE/chart-proxy-metadata.log" 2>&1; then
+    warn "chart proxy metadata unavailable; see $TUX_CACHE/chart-proxy-metadata.log"
+    return 0
+  fi
+  wine reg import "Z:${registration//\//\\}" >"$TUX_CACHE/chart-proxy-import.log" 2>&1 || \
+    warn "chart proxy registration failed; see $TUX_CACHE/chart-proxy-import.log"
+}
+
+# crypt32 imports the host's trusted roots in the first process that needs
+# them after they change. Do that here, not inside Office: Click-to-Run's
+# registry virtualization makes the import's registry writes crash there.
+refresh_root_certs() {
+  local resources="$(dirname "$(dirname "$WINE")")/share/tuxoffice"
+  local stamp="$TUX_CACHE/root-certs.stamp" state path
+  [[ -f "$resources/root-certs.exe" ]] || return 0
+  # The locations crypt32 reads (dlls/crypt32/unixlib.c), and this helper.
+  state=$(for path in /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs /etc/pki/tls/certs/ca-bundle.crt \
+                      /usr/share/ca-certificates/ca-bundle.crt /usr/local/share/certs /etc/sfw/openssl/certs \
+                      "$resources/root-certs.exe"; do
+            [[ -e $path ]] && stat -L -c '%n %Y' "$path"
+          done)
+  [[ -f $stamp && $(<"$stamp") == "$state" ]] && return 0
+  mkdir -p "$TUX_CACHE" "$TUX_PREFIX/drive_c/tuxoffice"
+  install -m0644 "$resources/root-certs.exe" "$TUX_PREFIX/drive_c/tuxoffice/root-certs.exe"
+  if wine 'C:\tuxoffice\root-certs.exe' >"$TUX_CACHE/root-certs.log" 2>&1; then
+    printf '%s\n' "$state" >"$stamp"
+  else
+    warn "trusted root import failed; see $TUX_CACHE/root-certs.log"
+  fi
+}
+
+# Office's default theme ("Use system setting") follows Windows' app theme.
+# Follow the desktop's light/dark preference (freedesktop appearance portal);
+# TUXOFFICE_THEME=light or dark overrides it.
+sync_app_theme() {
+  local scheme light state="$TUX_CACHE/app-theme"
+  case ${TUXOFFICE_THEME:-system} in
+    light) light=1 ;;
+    dark) light=0 ;;
+    *)
+      scheme=$(busctl --user call org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop \
+                 org.freedesktop.portal.Settings ReadOne ss org.freedesktop.appearance color-scheme 2>/dev/null |
+               awk '{print $NF}')
+      case $scheme in
+        1) light=0 ;;
+        2) light=1 ;;
+        *) return 0 ;; # no preference: leave Office's theme alone
+      esac ;;
+  esac
+  [[ -f $state && $(<"$state") == "$light" ]] && return 0
+  wreg 'HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' /v AppsUseLightTheme /t REG_DWORD /d "$light"
+  wreg 'HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' /v SystemUsesLightTheme /t REG_DWORD /d "$light"
+  mkdir -p "$TUX_CACHE" && printf '%s\n' "$light" >"$state"
+}
+
+configure_office_ui() {
+  local resources="$(dirname "$(dirname "$WINE")")/share/tuxoffice"
+  fonts_tahoma
+  configure_windows_look
+  [[ -f "$resources/office-ui.exe" ]] || return 0
+  mkdir -p "$TUX_PREFIX/drive_c/tuxoffice"
+  install -m0644 "$resources/office-ui.exe" "$TUX_PREFIX/drive_c/tuxoffice/office-ui.exe"
+  wine 'C:\tuxoffice\office-ui.exe' on >"$TUX_CACHE/office-ui.log" 2>&1 || \
+    warn "window effect setup failed; see $TUX_CACHE/office-ui.log"
+  wine 'C:\tuxoffice\office-ui.exe' fonts >"$TUX_CACHE/office-ui-fonts.log" 2>&1 || \
+    warn "UI font setup failed; see $TUX_CACHE/office-ui-fonts.log"
+}
+
+configure_layout_printer() {
+  local resources="$(dirname "$(dirname "$WINE")")/share/tuxoffice"
+  [[ -f "$resources/pdf-printer.exe" && -f "$resources/layout.ppd" ]] || return 0
+  mkdir -p "$TUX_PREFIX/drive_c/tuxoffice"
+  install -m0644 "$resources/pdf-printer.exe" "$TUX_PREFIX/drive_c/tuxoffice/pdf-printer.exe"
+  install -m0644 "$resources/layout.ppd" "$TUX_PREFIX/drive_c/tuxoffice/layout.ppd"
+  wine 'C:\tuxoffice\pdf-printer.exe' 'C:\tuxoffice\layout.ppd' >"$TUX_CACHE/print-layout.log" 2>&1 || \
+    warn "print layout setup failed; see $TUX_CACHE/print-layout.log"
+}
+
+configure_graphics() {
+  local mode=${1:-auto} resources="$(dirname "$(dirname "$WINE")")/share/tuxoffice"
+  local library architecture destination
+  case $mode in auto|builtin|dxvk) ;; *) die "unknown graphics mode: $mode";; esac
+  if [[ $mode == auto ]]; then
+    if [[ -f "$resources/office-graphics-v1" && -f "$resources/dxvk/state-lock-v1" &&
+          -f "$resources/dxvk/resource-pool-lock-v1" ]]; then mode=dxvk; else mode=builtin; fi
+  fi
+  if [[ $mode == dxvk ]]; then
+    [[ -f "$resources/office-graphics-v1" ]] || die "build the updated TuxOffice runner before enabling DXVK"
+    [[ -f "$resources/dxvk/state-lock-v1" ]] || die "the runner does not include the corrected DXVK build"
+    [[ -f "$resources/dxvk/resource-pool-lock-v1" ]] || die "rebuild DXVK with synchronized resource imports"
+    for architecture in x64 x32; do
+      if [[ $architecture == x64 ]]; then destination=system32; else destination=syswow64; fi
+      for library in d3d11 dxgi d3d10core; do
+        install -m0644 "$resources/dxvk/$architecture/$library.dll" \
+          "$TUX_PREFIX/drive_c/windows/$destination/$library.dll"
+      done
+    done
+    for library in d3d11 dxgi d3d10core; do
+      wreg 'HKCU\Software\Wine\DllOverrides' /v "$library" /t REG_SZ /d native,builtin
+    done
+  else
+    for library in d3d11 dxgi d3d10core; do
+      wreg 'HKCU\Software\Wine\DllOverrides' /v "$library" /t REG_SZ /d builtin
+    done
+  fi
+  msg "graphics: $mode"
+}
+
+cmd_graphics() { runner_env; configure_graphics "${1:-${TUXOFFICE_GRAPHICS:-auto}}"; }
+
+cmd_install() {
+  local config="$TUX_SRC/config/m365-apps.xml"
+  while (($#)); do
+    case $1 in
+      --config) config=$2; shift 2 ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  [[ -f "$config" ]] || die "config not found: $config"
+  runner_env
+
+  fetch "$ODT_URL" "$TUX_CACHE/odt.exe" "$ODT_SHA256"
+  mkdir -p "$TUX_PREFIX/drive_c/tuxoffice"
+  (cd "$TUX_CACHE" && 7z e -y -o"$TUX_PREFIX/drive_c/tuxoffice" odt.exe setup.exe >/dev/null)
+
+  # Download the payload natively: C2R's own downloader crawls under Wine.
+  local channel arch langs ver
+  channel=$(grep -oP '<Add [^>]*Channel="\K[^"]+' "$config" || echo Current)
+  arch=$(grep -oP 'OfficeClientEdition="\K[^"]+' "$config" || echo 64)
+  langs=$(grep -oP '<Language ID="\K[^"]+' "$config" | grep -vi matchos | sort -u | tr '\n' ' ')
+  msg "downloading Office ($channel, ${arch}-bit, $langs)"
+  # shellcheck disable=SC2086
+  ver=$(python3 -I "$TUX_SRC/lib/c2rfetch.py" "$TUX_CACHE/c2r" "$channel" "$arch" $langs) || die "download failed"
+  ln -sfn "$TUX_CACHE/c2r" "$TUX_PREFIX/drive_c/tuxoffice/source"
+  sed "s|<Add |<Add SourcePath=\"C:\\\\tuxoffice\\\\source\" Version=\"$ver\" |" "$config" \
+    >"$TUX_PREFIX/drive_c/tuxoffice/config.xml"
+
+  # Subscription SKUs take the sign-in ("vNext") licensing path; SPP-based
+  # licensing is not available under Wine.
+  local prid
+  for prid in $(grep -oP '<Product ID="\K[^"]+' "$config"); do
+    [[ $prid == O365* ]] && wreg 'HKCU\Software\Microsoft\Office\16.0\Common\Licensing\LicensingNext' /v "$prid" /t REG_DWORD /d 2
+  done
+
+  msg "running Click-to-Run setup (progress: tuxoffice install-status)"
+  wine 'C:\tuxoffice\setup.exe' /configure 'C:\tuxoffice\config.xml' >"$TUX_CACHE/install.log" 2>&1 || true
+  post_install
+  [[ -f "$OFFICE_ROOT/WINWORD.EXE" || -f "$OFFICE_ROOT/EXCEL.EXE" ]] || die "install did not complete; see C2R logs in %TEMP% (tuxoffice install-status)"
+  msg "Office installed"
+  cmd_integrate
+  msg "next: open an app (e.g. tuxoffice run word), sign in, then run: tuxoffice fonts cloud"
+}
+
+post_install() {
+  # Office's loader expects the AppV ISV subsystem and C2R shim beside the apps.
+  [[ -d "$OFFICE_ROOT" ]] || return 0
+  local f
+  for f in AppvIsvSubsystems64.dll C2R64.dll; do
+    [[ -f "$C2R_DIR/$f" ]] && install -m 0644 "$C2R_DIR/$f" "$OFFICE_ROOT/$f"
+  done
+  fix_locker
+  fonts_office
+  configure_chart_proxies
+  configure_installer_components
+}
+
+# ---------------------------------------------------------------------------
+# Fonts
+#
+# Office expects Windows' UI fonts (Segoe UI family, Segoe Fluent Icons /
+# MDL2 Assets) and its own bundled document fonts. Nothing here is shipped
+# with TuxOffice: fonts come from the user's Office install, a Windows
+# install they own, or Microsoft's official download links.
+
+SEGOE_PACKAGES=(
+  "https://aka.ms/SegoeUIVariable|segoe-ui-variable.zip"
+  "https://aka.ms/SegoeFluentIcons|segoe-fluent-icons.zip"
+  "https://aka.ms/segoemdl2|segoe-mdl2-assets.zip"
+)
+FONTS_KEY='HKLM\Software\Microsoft\Windows NT\CurrentVersion\Fonts'
+SUBST_KEY='HKLM\Software\Microsoft\Windows NT\CurrentVersion\FontSubstitutes'
+
+win_fonts_dir() { echo "$TUX_PREFIX/drive_c/windows/Fonts"; }
+
+has_font_file() { # name: case-insensitive match in the Windows Fonts folder
+  [[ -n "$(find "$(win_fonts_dir)" -maxdepth 1 -iname "$1" -print -quit)" ]]
+}
+
+register_fonts() { # files in the Windows Fonts folder
+  (($#)) || return 0
+  local reg="$TUX_CACHE/fonts.reg" name file
+  {
+    # .reg files need the long root name; reg.exe accepts the short one.
+    printf 'REGEDIT4\n\n[%s]\n' "HKEY_LOCAL_MACHINE${FONTS_KEY#HKLM}"
+    python3 -I "$TUX_SRC/lib/fontnames.py" "$@" | while IFS=$'\t' read -r name file; do
+      printf '"%s"="%s"\n' "${name//\"/}" "$file"
+    done
+  } >"$reg"
+  wine regedit /S "$(wine winepath -w "$reg" 2>/dev/null)" >/dev/null 2>&1
+}
+
+set_segoe_substitutes() { # target family prefix, or "" to remove the substitutes
+  local seg target
+  for seg in 'Segoe UI' 'Segoe UI Semibold' 'Segoe UI Light' 'Segoe UI Semilight' 'Segoe UI Bold'; do
+    if [[ -z $1 ]]; then
+      wine reg delete "$SUBST_KEY" /v "$seg" /f >/dev/null 2>&1 || true
+      wine reg delete 'HKCU\Software\Wine\Fonts\Replacements' /v "$seg" /f >/dev/null 2>&1 || true
+      continue
+    fi
+    target="$1${seg#Segoe UI}"
+    # Office ships the real Segoe UI Semilight; keep it.
+    [[ $seg == 'Segoe UI Semilight' ]] && has_font_file SEGOEUISL.TTF && continue
+    wreg "$SUBST_KEY" /v "$seg" /t REG_SZ /d "$target"
+    wreg 'HKCU\Software\Wine\Fonts\Replacements' /v "$seg" /t REG_SZ /d "$target"
+  done
+}
+
+fonts_office() {
+  # C2R normally exposes these through AppV font virtualization, which does
+  # not run under Wine; link them into the Windows Fonts folder instead.
+  local src="$TUX_PREFIX/drive_c/Program Files/Microsoft Office/root/vfs/Fonts/private"
+  [[ -d $src ]] || return 0
+  local f added=()
+  for f in "$src"/*; do
+    [[ -f $f ]] || continue
+    has_font_file "$(basename "$f")" && continue
+    ln -s "$f" "$(win_fonts_dir)/$(basename "$f")"
+    added+=("$(win_fonts_dir)/$(basename "$f")")
+  done
+  register_fonts "${added[@]}"
+  msg "linked ${#added[@]} Office fonts"
+}
+
+cloud_font_cache() { echo "$TUX_PREFIX/drive_c/users/$USER/AppData/Local/Microsoft/FontCache/4/CloudFonts"; }
+
+fonts_cloud() {
+  # Office fetches fonts from Microsoft's cloud font service when a document
+  # uses them, but loads them only into its own process. Prime the cache with
+  # a document that uses the UI and default document fonts, then register the
+  # cached files prefix-wide so the UI and GDI/DirectWrite lookups find them.
+  [[ -f "$OFFICE_ROOT/WINWORD.EXE" ]] || die "Word is not installed"
+  [[ -n "$(ls -A "$TUX_PREFIX/drive_c/users/$USER/AppData/Local/Microsoft/Office/Licenses" 2>/dev/null)" ]] ||
+    die "sign in to Office first (cloud fonts need an activated Office)"
+  pgrep -f 'WINWORD.EXE' >/dev/null && die "close Word first"
+  local work="$TUX_PREFIX/drive_c/tuxoffice"
+  mkdir -p "$work"
+  python3 -I "$TUX_SRC/lib/fontdoc.py" "$work/fonts.docx"
+  cp "$TUX_SRC/lib/cloudfonts.vbs" "$work/cloudfonts.vbs"
+  msg "letting Office download its cloud fonts (up to 2 minutes)"
+  wine cscript //nologo 'C:\tuxoffice\cloudfonts.vbs' 'C:\tuxoffice\fonts.docx' 120 2>/dev/null |
+    grep -a 'cloud fonts cached' || true
+
+  # Copy (not link): Office evicts cache entries it hasn't used recently.
+  local f name file added=()
+  while IFS=$'\t' read -r name file; do
+    name=${name% (TrueType)}
+    f="$(win_fonts_dir)/office-cloud-${name// /-}.ttf"
+    install -m 0644 "$file" "$f"
+    added+=("$f")
+  done < <(find "$(cloud_font_cache)" -type f -iname '*.ttf' -print0 |
+           xargs -0 -r python3 -I "$TUX_SRC/lib/fontnames.py" --paths)
+  register_fonts "${added[@]}"
+  font_registered 'Segoe UI' && set_segoe_substitutes ""
+  msg "registered ${#added[@]} Office cloud fonts"
+  configure_office_ui
+}
+
+# Microsoft's Tahoma, as winetricks fetches it. Office and Windows dialogs use
+# it (e.g. Excel notes, MS Shell Dlg); otherwise Wine's look-alike is chosen.
+TAHOMA_CAB_URL=https://downloads.sourceforge.net/corefonts/OldFiles/IELPKTH.CAB
+TAHOMA_CAB_SHA256=c1be3fb8f0042570be76ec6daa03a99142c88367c1bc810240b85827c715961a
+
+fonts_tahoma() {
+  local cab="$TUX_CACHE/IELPKTH.CAB" tmp f
+  has_font_file tahoma.ttf && has_font_file tahomabd.ttf && return 0
+  [[ -s $HOME/.cache/winetricks/tahoma/IELPKTH.CAB && ! -s $cab ]] &&
+    cp "$HOME/.cache/winetricks/tahoma/IELPKTH.CAB" "$cab"
+  fetch "$TAHOMA_CAB_URL" "$cab" "$TAHOMA_CAB_SHA256"
+  tmp=$(mktemp -d)
+  if command -v cabextract >/dev/null; then cabextract -q -d "$tmp" -F 'tahoma*.ttf' "$cab"
+  elif command -v bsdtar >/dev/null; then bsdtar -xf "$cab" -C "$tmp" tahoma.ttf tahomabd.ttf
+  elif command -v 7z >/dev/null; then 7z x -y -o"$tmp" "$cab" 'tahoma*.ttf' >/dev/null
+  else rm -rf "$tmp"; warn "no CAB extractor (cabextract, bsdtar or 7z); keeping Wine's Tahoma"; return 0; fi
+  for f in tahoma.ttf tahomabd.ttf; do
+    [[ -s $tmp/$f ]] || { rm -rf "$tmp"; warn "Tahoma cabinet had no $f"; return 0; }
+    install -m0644 "$tmp/$f" "$(win_fonts_dir)/$f"
+  done
+  rm -rf "$tmp"
+  wreg 'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Fonts' /v 'Tahoma (TrueType)' /t REG_SZ /d tahoma.ttf
+  wreg 'HKLM\Software\Microsoft\Windows NT\CurrentVersion\Fonts' /v 'Tahoma Bold (TrueType)' /t REG_SZ /d tahomabd.ttf
+  msg "installed Microsoft Tahoma"
+}
+
+# Windows 11's light appearance for what Wine draws itself: dialog captions and
+# selection colours (Office draws its own main window frames).
+configure_windows_look() {
+  local key='HKCU\Control Panel\Colors' name value
+  wreg 'HKCU\Software\Microsoft\Windows\CurrentVersion\ThemeManager' /v ThemeActive /t REG_SZ /d 1
+  # Windows' caret defaults: Office's own carets stop blinking at once without them.
+  wreg 'HKCU\Control Panel\Desktop' /v CaretTimeout /t REG_DWORD /d 5000
+  wreg 'HKCU\Control Panel\Desktop' /v CursorBlinkRate /t REG_SZ /d 530
+  for name in ActiveTitle:'255 255 255' GradientActiveTitle:'255 255 255' TitleText:'0 0 0' \
+              InactiveTitle:'255 255 255' GradientInactiveTitle:'255 255 255' InactiveTitleText:'153 153 153' \
+              ActiveBorder:'255 255 255' InactiveBorder:'255 255 255' Hilight:'0 120 215' HotTrackingColor:'0 102 204'; do
+    value=${name#*:}
+    wreg "$key" /v "${name%%:*}" /t REG_SZ /d "$value"
+  done
+}
+
+font_registered() { # full font name, e.g. "Segoe UI Bold"
+  wine reg query "$FONTS_KEY" /v "$1 (TrueType)" >/dev/null 2>&1 ||
+    wine reg query "$FONTS_KEY" /v "$1 (OpenType)" >/dev/null 2>&1
+}
+
+fonts_import() { # PATH [--all]
+  local path=${1:-} all=0 src="" f base added=()
+  [[ ${2:-} == --all ]] && all=1
+  [[ -n $path ]] || die "usage: tuxoffice fonts import PATH [--all]   (Windows root, Windows/Fonts, or a folder of fonts)"
+  for src in "$path/Windows/Fonts" "$path/windows/Fonts" "$path/WINDOWS/Fonts" "$path/Fonts" "$path"; do
+    [[ -d $src ]] && break
+  done
+  [[ -d $src ]] || die "no fonts folder under $path"
+  while IFS= read -r -d '' f; do
+    base=$(basename "$f")
+    if ((!all)) && has_font_file "$base"; then continue; fi
+    install -m 0644 "$f" "$(win_fonts_dir)/$base"
+    added+=("$(win_fonts_dir)/$base")
+  done < <(find "$src" -maxdepth 1 -type f \( -iname '*.ttf' -o -iname '*.ttc' -o -iname '*.otf' \) -print0)
+  register_fonts "${added[@]}"
+  # With the real Segoe UI present, stop substituting it.
+  font_registered 'Segoe UI' && set_segoe_substitutes ""
+  msg "imported ${#added[@]} fonts from $src"
+}
+
+fonts_segoe() { # [--accept-eula]
+  local accept=0 entry url file eula added=() f
+  [[ ${1:-} == --accept-eula ]] && accept=1
+  mkdir -p "$TUX_CACHE/fonts"
+  for entry in "${SEGOE_PACKAGES[@]}"; do
+    url=${entry%%|*} file=${entry#*|}
+    fetch "$url" "$TUX_CACHE/fonts/$file"
+  done
+  eula=$(unzip -p "$TUX_CACHE/fonts/segoe-ui-variable.zip" EULA.txt | sed '1s/^\xEF\xBB\xBF//' | tr -d '\r')
+  if ((!accept)); then
+    printf '\nMicrosoft licence terms for these fonts:\n\n%s\n\n' "$eula" | fold -s -w 78
+    [[ -t 0 ]] || die "re-run with --accept-eula to accept the terms non-interactively"
+    read -rp "Accept these terms and install the fonts into the Office prefix? [y/N] " ans
+    [[ $ans == [yY]* ]] || die "fonts not installed"
+  fi
+  for entry in "${SEGOE_PACKAGES[@]}"; do
+    file=${entry#*|}
+    # Static instances only: Wine's DirectWrite handles them better than the VF.
+    unzip -oqj "$TUX_CACHE/fonts/$file" '*.ttf' -x 'SegoeUI-VF.ttf' -d "$(win_fonts_dir)"
+    while IFS= read -r f; do added+=("$(win_fonts_dir)/$f"); done \
+      < <(unzip -Z1 "$TUX_CACHE/fonts/$file" '*.ttf' -x 'SegoeUI-VF.ttf')
+  done
+  register_fonts "${added[@]}"
+  font_registered 'Segoe UI' || set_segoe_substitutes 'Segoe UI Variable Static Text'
+  msg "installed ${#added[@]} Segoe fonts"
+}
+
+fonts_status() {
+  local ok='\033[32mok\033[0m' bad='\033[31mmissing\033[0m' name
+  for name in 'Segoe UI' 'Segoe UI Semibold' 'Segoe UI Variable Static Text' 'Segoe Fluent Icons' \
+              'Segoe MDL2 Assets' 'Calibri' 'Cambria' 'Consolas' 'Aptos'; do
+    printf '%-30s %b\n' "$name" "$(font_registered "$name" && echo "$ok" || echo "$bad")"
+  done
+  local sub; sub=$(wine reg query "$SUBST_KEY" /v 'Segoe UI' 2>/dev/null | grep -oP 'REG_SZ\s+\K.*' || true)
+  [[ -n $sub ]] && printf 'Segoe UI is substituted by: %s\n' "$sub"
+  return 0
+}
+
+cmd_fonts() {
+  runner_env
+  local sub=${1:-status}; shift || true
+  case $sub in
+    office) fonts_office ;;
+    cloud) fonts_cloud ;;
+    import) fonts_import "$@" ;;
+    segoe) fonts_segoe "$@" ;;
+    status) fonts_status ;;
+    tahoma) fonts_tahoma ;;
+    *) die "usage: tuxoffice fonts [status|office|cloud|import PATH [--all]|segoe [--accept-eula]|tahoma]" ;;
+  esac
+}
+
+fix_locker() {
+  local locker="$TUX_PREFIX/drive_c/ProgramData/Microsoft/Office/ClickToRunPackageLocker"
+  [[ -e "$locker" ]] && chmod 0770 "$locker" || true
+}
+
+cmd_install_status() {
+  local log
+  log=$(ls -t "$TUX_PREFIX"/drive_c/users/*/AppData/Local/Temp/*.log 2>/dev/null | head -1) || true
+  [[ -n "$log" ]] || die "no Click-to-Run log yet"
+  iconv -f utf-16le -t utf-8 "$log" 2>/dev/null | grep -aoE 'total progress is now [0-9]+' | tail -1 || true
+  du -sh "$TUX_PREFIX/drive_c/Program Files/Microsoft Office" 2>/dev/null || true
+}
+
+app_field() { # id field-index
+  local a
+  for a in "${APPS[@]}"; do
+    IFS='|' read -r id exe name mime <<<"$a"
+    if [[ $id == "$1" ]]; then
+      case $2 in exe) echo "$exe" ;; name) echo "$name" ;; mime) echo "$mime" ;; esac
+      return 0
+    fi
+  done
+  return 1
+}
+
+# The Windows path of an absolute Linux path. With the prefix's standard
+# drives this needs no Wine process (winepath takes about half a second).
+windows_path() {
+  local path=$1 drive_c
+  drive_c=$(readlink -f "$TUX_PREFIX/drive_c")
+  if [[ $(readlink "$TUX_PREFIX/dosdevices/c:") != ../drive_c || $(readlink "$TUX_PREFIX/dosdevices/z:") != / ]]; then
+    wine winepath -w "$path" 2>/dev/null
+    return
+  fi
+  if [[ $path == "$drive_c" || $path == "$drive_c"/* ]]; then path="C:${path#"$drive_c"}"
+  else path="Z:$path"
+  fi
+  [[ $path == ?: ]] && path+=/
+  printf '%s\n' "${path//\//\\}"
+}
+
+cmd_run() {
+  (($#)) || die "usage: tuxoffice run <word|excel|powerpoint|outlook|onenote|access|publisher> [files...]"
+  local app=$1; shift
+  local exe; exe=$(app_field "$app" exe) || die "unknown app: $app"
+  runner_env
+  [[ -f "$OFFICE_ROOT/$exe" ]] || die "$exe not installed"
+  fix_locker
+  refresh_root_certs
+  sync_app_theme
+
+  # Translate Linux paths and file:// URIs to Windows paths.
+  local args=() f
+  for f in "$@"; do
+    [[ $f == file://* ]] && f=$(python3 -c 'import sys,urllib.parse as u;print(u.unquote(u.urlparse(sys.argv[1]).path))' "$f")
+    if [[ -e $f ]]; then
+      args+=("$(windows_path "$(readlink -f "$f")")")
+    else
+      args+=("$f")
+    fi
+  done
+  apply_display_settings
+
+  # Prefetch the DLLs the last launches mapped while Wine boots, and record
+  # this launch for next time (see lib/readahead.py).
+  local pdir="$TUX_HOME/profiles"
+  mkdir -p "$pdir/$app.d"
+  python3 -I "$TUX_SRC/lib/readahead.py" "$pdir/$app.d" "$pdir/$app.list" &
+  export SODA_ADAPTIVE_TRACE_DIR="$pdir/$app.d"
+
+  exec wine "C:\\Program Files\\Microsoft Office\\root\\Office16\\$exe" "${args[@]}"
+}
+
+# Desktop scale factor of the primary output (KDE, GNOME, then Xft.dpi).
+display_scale() {
+  local s=""
+  if [[ -n ${TUXOFFICE_SCALE:-} ]]; then
+    echo "$TUXOFFICE_SCALE"
+    return
+  fi
+  if command -v kscreen-doctor >/dev/null; then
+    s=$(kscreen-doctor -j 2>/dev/null | python3 -I -c '
+import json, sys
+outs = [o for o in json.load(sys.stdin).get("outputs", []) if o.get("enabled")]
+outs.sort(key=lambda o: o.get("priority") or 99)
+print(outs[0].get("scale", 1) if outs else "")' 2>/dev/null)
+  fi
+  if [[ -z $s ]] && command -v gsettings >/dev/null; then
+    s=$(gsettings get org.gnome.desktop.interface text-scaling-factor 2>/dev/null)
+  fi
+  if [[ -z $s ]] && command -v xrdb >/dev/null; then
+    s=$(xrdb -query 2>/dev/null | awk '/^Xft.dpi:/ {print $2 / 96}')
+  fi
+  echo "${s:-1}"
+}
+
+apply_display_settings() {
+  # Office renders at physical resolution; give it the DPI that matches the
+  # desktop scale so the UI is sized like Windows at that scale, instead of
+  # 96 DPI text that the compositor would have to stretch (blurry).
+  local dpi stamp="$TUX_HOME/dpi"
+  dpi=$(awk -v s="$(display_scale)" 'BEGIN { printf "%d", 96 * s + 0.5 }')
+  if [[ "$(cat "$stamp" 2>/dev/null)" != "$dpi" ]]; then
+    wreg 'HKCU\Control Panel\Desktop' /v LogPixels /t REG_DWORD /d "$dpi"
+    wreg 'HKLM\System\CurrentControlSet\Hardware Profiles\Current\Software\Fonts' /v LogPixels /t REG_DWORD /d "$dpi"
+    echo "$dpi" >"$stamp"
+  fi
+
+}
+
+select_display_gpu() {
+  # Set this before the first Wine client starts rpcss/Office services, so
+  # COM-launched and embedded Office applications inherit the same choice.
+  # Hybrid graphics: render on the GPU that drives the display. Rendering on
+  # a discrete GPU and copying every frame across PRIME to the compositor's
+  # GPU adds latency and glitches for no benefit to Office.
+  if [[ -z ${DXVK_FILTER_DEVICE_NAME:-} ]]; then
+    local card vendor boot="" count=0
+    for card in /sys/class/drm/card[0-9]; do
+      [[ -r $card/device/vendor ]] || continue
+      count=$((count + 1))
+      [[ "$(cat "$card/device/boot_vga" 2>/dev/null)" == 1 ]] && boot=$(cat "$card/device/vendor")
+    done
+    if ((count > 1)); then
+      case $boot in
+        0x8086) export DXVK_FILTER_DEVICE_NAME=Intel ;;
+        0x1002) export DXVK_FILTER_DEVICE_NAME=AMD ;;
+        0x10de) export DXVK_FILTER_DEVICE_NAME=NVIDIA ;;
+      esac
+    fi
+  fi
+}
+
+cmd_integrate() {
+  runner_env
+  local apps_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+  local icon_dir="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps"
+  mkdir -p "$apps_dir" "$icon_dir"
+  local self; self=$(readlink -f "${BASH_SOURCE[0]}")
+  local a id exe name mime n=0
+  for a in "${APPS[@]}"; do
+    IFS='|' read -r id exe name mime <<<"$a"
+    [[ -f "$OFFICE_ROOT/$exe" ]] || continue
+    extract_icon "$OFFICE_ROOT/$exe" "$icon_dir/tuxoffice-$id.png" || true
+    cat >"$apps_dir/tuxoffice-$id.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=$name
+Comment=$name (TuxOffice)
+Exec="$self" run $id %F
+Icon=tuxoffice-$id
+Terminal=false
+Categories=Office;
+MimeType=$mime
+StartupNotify=true
+StartupWMClass=$(tr '[:upper:]' '[:lower:]' <<<"$exe")
+EOF
+    n=$((n+1))
+  done
+  command -v update-desktop-database >/dev/null && update-desktop-database "$apps_dir" >/dev/null 2>&1 || true
+  command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q "${icon_dir%/256x256/apps}" 2>/dev/null || true
+  msg "installed $n desktop entries (set as default handler with: tuxoffice set-default)"
+}
+
+extract_icon() { # exe out.png
+  command -v python3 >/dev/null || return 1
+  python3 -I "$TUX_SRC/lib/peicon.py" "$1" "$2"
+}
+
+cmd_set_default() {
+  local a id exe name mime m
+  for a in "${APPS[@]}"; do
+    IFS='|' read -r id exe name mime <<<"$a"
+    [[ -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/tuxoffice-$id.desktop" ]] || continue
+    IFS=';' read -ra ms <<<"$mime"
+    for m in "${ms[@]}"; do [[ -n $m ]] && xdg-mime default "tuxoffice-$id.desktop" "$m"; done
+  done
+  msg "TuxOffice apps are now the default handlers for Office documents"
+}
+
+cmd_unintegrate() {
+  rm -f "${XDG_DATA_HOME:-$HOME/.local/share}"/applications/tuxoffice-*.desktop \
+        "${XDG_DATA_HOME:-$HOME/.local/share}"/icons/hicolor/256x256/apps/tuxoffice-*.png
+  msg "removed desktop entries"
+}
+
+cmd_doctor() {
+  local ok='\033[32mok\033[0m' bad='\033[31mmissing\033[0m'
+  local runner=$LOCAL_RUNNER_NAME
+  [[ -x $TUX_HOME/runners/$runner/bin/wine ]] || runner=$RUNNER_NAME
+  printf 'runner      %b  %s\n' "$([[ -x $TUX_HOME/runners/$runner/bin/wine ]] && echo "$ok" || echo "$bad")" "$runner"
+  printf 'prefix      %b  %s\n' "$([[ -f $TUX_PREFIX/system.reg ]] && echo "$ok" || echo "$bad")" "$TUX_PREFIX"
+  printf 'ntsync      %b\n' "$([[ -e /dev/ntsync ]] && echo "$ok" || echo "$bad (older kernel: falls back to wineserver sync)")"
+  printf 'vulkan      %b\n' "$(command -v vulkaninfo >/dev/null && vulkaninfo --summary >/dev/null 2>&1 && echo "$ok" || echo "$bad")"
+  printf 'session     %s\n' "${XDG_SESSION_TYPE:-unknown}${WAYLAND_DISPLAY:+ (native Wayland driver)}"
+  local a id exe name mime
+  for a in "${APPS[@]}"; do
+    IFS='|' read -r id exe name mime <<<"$a"
+    printf '%-11s %b\n' "$id" "$([[ -f $OFFICE_ROOT/$exe ]] && echo "$ok" || echo "$bad")"
+  done
+}
+
+cmd_wine() { runner_env; exec wine "$@"; }
+
+cmd_kill() { runner_env; wineserver -k 2>/dev/null || true; }
+
+usage() {
+  cat <<EOF
+usage: tuxoffice <command> [args]
+
+  setup                     download the runner and build the Office prefix
+  install [--config FILE]   install Office via Click-to-Run (default: config/m365-apps.xml)
+  install-status            show Click-to-Run progress
+  run APP [FILES...]        launch word|excel|powerpoint|outlook|onenote|access|publisher
+  integrate                 create desktop entries and icons
+  fonts [status]            show which Office/Windows UI fonts are present
+  fonts office              register the fonts bundled with Office (done by install)
+  fonts cloud               after signing in: have Office fetch Segoe UI, Calibri,
+                            Cambria, Consolas, Aptos... from its cloud font service
+                            and register them for the whole prefix
+  fonts import PATH [--all] copy fonts from a Windows install you own (missing ones only)
+  fonts segoe [--accept-eula]
+                            download Segoe UI Variable, Fluent Icons and MDL2 Assets
+                            from Microsoft (shows Microsoft's licence terms first)
+  set-default               make TuxOffice the default handler for Office files
+  unintegrate               remove desktop entries
+  doctor                    check the environment
+  graphics [auto|builtin|dxvk] configure Office graphics (auto requires the updated runner)
+  ui                        re-apply Windows UI fonts, colours and window effects to the prefix
+  repair                    re-register Office's chart proxies and Windows Installer components
+  wine ARGS...              run a command inside the Office prefix (winecfg, regedit, ...)
+  kill                      stop every process in the Office prefix
+EOF
+}
+
+main() {
+  local c=${1:-}; shift || true
+  case $c in
+    setup) cmd_setup "$@" ;;
+    install) cmd_install "$@" ;;
+    install-status) cmd_install_status ;;
+    run) cmd_run "$@" ;;
+    integrate) cmd_integrate ;;
+    fonts) cmd_fonts "$@" ;;
+    set-default) cmd_set_default ;;
+    unintegrate) cmd_unintegrate ;;
+    doctor) cmd_doctor ;;
+    wine) cmd_wine "$@" ;;
+    kill) cmd_kill ;;
+    graphics) cmd_graphics "$@" ;;
+    ui) runner_env; configure_office_ui; msg "UI fonts, colours and window effects applied" ;;
+    repair) runner_env; configure_chart_proxies; configure_installer_components; msg "Office registrations repaired" ;;
+    ""|-h|--help|help) usage ;;
+    *) die "unknown command: $c" ;;
+  esac
+}
+main "$@"

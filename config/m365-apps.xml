@@ -1,0 +1,17 @@
+<!-- Microsoft 365 Apps (subscription). Activated by signing in with the
+     Microsoft account / work account that holds the licence. -->
+<Configuration>
+  <Add OfficeClientEdition="64" Channel="Current">
+    <Product ID="O365ProPlusRetail">
+      <Language ID="en-us" />
+      <ExcludeApp ID="Groove" />
+      <ExcludeApp ID="Lync" />
+      <ExcludeApp ID="OneDrive" />
+      <ExcludeApp ID="Teams" />
+      <ExcludeApp ID="Bing" />
+    </Product>
+  </Add>
+  <Display Level="None" AcceptEULA="TRUE" />
+  <Updates Enabled="FALSE" />
+  <Property Name="FORCEAPPSHUTDOWN" Value="TRUE" />
+</Configuration>
