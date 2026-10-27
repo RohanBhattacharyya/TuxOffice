@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Office also creates hidden OpusApp windows. Exercise the document window. */
 static const WCHAR *office_window_class = L"OpusApp";
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Turn text and key names into tests/eis-input.c commands (US layout).
 
 Usage: eis-type.py ITEM... | eis-input

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Z-order edges must follow restacking, destruction and cross-process reparenting. */
 #include <windows.h>
 #include <stdio.h>

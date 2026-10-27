@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Apply a suggestion in the rendering test document and verify a saved DOCX.
 # Run through isolated-run.py; never use a document with unsaved user work.
 # Usage: tests/spelling-functional.sh OUTDIR

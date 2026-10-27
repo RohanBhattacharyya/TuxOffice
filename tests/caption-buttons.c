@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Check the caption buttons Wine draws for ordinary windows and dialogs.
  *
  * Usage: caption-buttons.exe OUTDIR

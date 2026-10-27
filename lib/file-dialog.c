@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Show the desktop's file chooser for a Windows program running under Wine.
  *
  * Wine's comdlg32 runs this through __wine_unix_spawnvp and waits for OUT.

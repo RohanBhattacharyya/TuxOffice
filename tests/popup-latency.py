@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Measure spelling-card visibility and completed pixels in a test prefix.
 
 Usage: popup-latency.py OUTDIR [DOCUMENT] [REPEATS]

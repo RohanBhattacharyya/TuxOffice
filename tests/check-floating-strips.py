@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Reject thin Office drawing helpers exposed as normal desktop windows."""
 import json
 from pathlib import Path

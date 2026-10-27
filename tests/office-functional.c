@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Automated Office object-model round trips, using fresh documents only.
  * Requires an isolated TuxOffice prefix. No account or messaging operations.
  */

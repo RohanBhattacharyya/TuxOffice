@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Cold-start prefetch from Soda launch traces.
 
 Usage: readahead.py TRACE_DIR LIST

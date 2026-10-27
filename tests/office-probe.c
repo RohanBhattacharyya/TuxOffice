@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Word automation probe for an isolated test prefix. Build with winegcc -b x86_64-windows
  * -mconsole -o office-probe.exe office-probe.c -loleaut32 -lole32 -loleacc -luser32 -luuid.
  * word-point [text]: wait for proofing, find text and report its screen bounds.

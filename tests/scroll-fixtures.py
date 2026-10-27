@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Write the Word and Excel documents used by the scrolling benchmarks.
 
 Usage: scroll-fixtures.py OUTDIR [PARAGRAPHS=1000] [ROWS=50000]

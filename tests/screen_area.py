@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """KWin pixel capture shared by the Office latency measurements."""
 import os
 import threading

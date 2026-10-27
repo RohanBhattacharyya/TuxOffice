@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Download an Office Click-to-Run source tree natively.
 
 Usage: c2rfetch.py DEST CHANNEL ARCH LANG [LANG...]

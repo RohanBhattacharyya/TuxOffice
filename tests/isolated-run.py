@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Run a command in an already running isolated-session.sh environment."""
 import json
 import os

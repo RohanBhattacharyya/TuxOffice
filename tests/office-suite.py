@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Exercise Word, Excel and PowerPoint with fresh documents in a test prefix.
 
 Build helpers first with tests/build-helpers.sh. Usage: office-suite.py OUTDIR

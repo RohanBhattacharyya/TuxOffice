@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* A popup can be destroyed while its last Present is queued on Wine's CS.
  * Changing the interval then recreates the Vulkan swapchain for a dead HWND.
  * Build with winegcc -b x86_64-windows -mconsole -o swapchain-lifetime.exe

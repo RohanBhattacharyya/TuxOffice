@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Run a one-off KWin script on the live Plasma session and print its output.
 # Usage: tests/kwin-run.sh SCRIPT.js
 # The script is loaded over D-Bus and unloaded again; nothing is written to

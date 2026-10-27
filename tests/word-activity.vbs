@@ -1,3 +1,4 @@
+' SPDX-License-Identifier: LGPL-2.1-or-later
 ' Drive visible activity in the running Word for rendering tests:
 ' typing, new paragraphs, scrolling and a selection, at roughly human pace.
 ' Usage: cscript //nologo word-activity.vbs [seconds]

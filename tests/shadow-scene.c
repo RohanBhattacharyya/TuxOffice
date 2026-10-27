@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Visible WinRT drop-shadow fixture, captured by shadow-render.py. */
 #define COBJMACROS
 #include <windows.h>

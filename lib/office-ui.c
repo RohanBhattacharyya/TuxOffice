@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Configure Office's window effects through the Windows preference API. */
 #include <windows.h>
 #include <stdio.h>

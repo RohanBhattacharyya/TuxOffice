@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Open common Office dialogs and report windows the compositor must scale.
 
 Usage (inside tests/isolated-run.py): dialog-audit.py OUTDIR APP DOCUMENT

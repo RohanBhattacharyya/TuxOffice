@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Cross-process DPI mapping must preserve negative screen coordinates. */
 #include <windows.h>
 #include <stdio.h>

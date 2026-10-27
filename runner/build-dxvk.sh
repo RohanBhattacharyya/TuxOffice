@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Build the pinned DXVK release with the immediate-context state-swap lock.
 # Sources, compiler and incremental build files stay outside the repository.
 set -euo pipefail

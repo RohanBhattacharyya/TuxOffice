@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Register Click-to-Run's Windows Installer components that Wine cannot see.
 
 Usage: c2rcomponents.py PREFIX OUTPUT.reg [HKLM-SOFTWARE.reg]

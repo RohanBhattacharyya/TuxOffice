@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Read a chart workbook saved directly or inside an OLE Package stream."""
 import io
 from pathlib import Path

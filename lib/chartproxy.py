@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Read Office's NDR chart proxy metadata and write its COM registration.
 
 CHART.DLL's DllRegisterServer initializes Office before registering its proxies;

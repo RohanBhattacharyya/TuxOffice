@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Catch Word hangs with native stacks. Launches Word under tests/gdb-word.sh,
 # waits until its UI thread answers, runs a scenario, then pings the UI thread
 # every 300 ms; on the first missed ping (or an unhandled exception) gdb dumps

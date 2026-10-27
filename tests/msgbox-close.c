@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Check what closing a message box returns, as Windows documents it.
  *
  * Usage: msgbox-close.exe

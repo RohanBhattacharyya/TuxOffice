@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Activate an Office document in the selected prefix, leaving other prefixes alone."""
 from pathlib import Path
 import subprocess as sp

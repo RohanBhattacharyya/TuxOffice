@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Capture GPU children across layout/present delays, without Office.
 
 Usage: child-surface.py OUTDIR SCENE.exe [transparent]

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Render one document position with two runners and compare the pixels.
 
 Usage (inside tests/isolated-run.py): render-compare.py OUTDIR DOCUMENT RUNNER_A RUNNER_B [WHEEL_TICKS]

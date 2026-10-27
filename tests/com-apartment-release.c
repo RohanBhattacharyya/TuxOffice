@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* A local-server STA object disconnects itself during an RPC. Every reference
  * to its interfaces must still be released in the owning apartment. */
 #define COBJMACROS

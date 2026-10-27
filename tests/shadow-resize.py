@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Resize an Office window with KDE's Meta+right-drag and check its frame shadow.
 
 Usage (inside tests/isolated-run.py, with tests/backdrop.qml showing):

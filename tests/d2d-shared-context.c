@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Direct2D must preserve its draw transaction while another user of the shared
  * immediate D3D context changes state. This models composition/application
  * interop without Office. Each completed frame must remain solid red. */

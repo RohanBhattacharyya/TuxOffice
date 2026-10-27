@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Exercise DXVK's shared allocation-object pool through its public Vulkan
  * interop interface, concurrently with ordinary D3D resource allocations.
  * The source image stays alive until every imported wrapper is released.

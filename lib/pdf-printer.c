@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Install a prefix-local file printer so Office can compute print layout and
  * export PDFs even when the host has no configured printers. */
 #include <windows.h>

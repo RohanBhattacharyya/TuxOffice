@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Is Word's text caret visible? Bring Word forward, put the caret at the end
 # of the document, then capture frames while idle: the blinking caret is the
 # only thing that should change between them.

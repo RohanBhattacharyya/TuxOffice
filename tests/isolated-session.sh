@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Start an isolated KWin virtual display and a reflinked test prefix.
 # Usage: isolated-session.sh OUTDIR
 set -euo pipefail

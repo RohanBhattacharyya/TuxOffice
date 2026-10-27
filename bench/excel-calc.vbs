@@ -1,3 +1,4 @@
+' SPDX-License-Identifier: LGPL-2.1-or-later
 ' Excel compute benchmark, driven over COM automation.
 ' Run inside the prefix:  tuxoffice wine cscript //nologo bench\excel-calc.vbs
 ' Run the same file on Windows (VM or bare metal) to compare.

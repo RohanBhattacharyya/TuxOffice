@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Detect graphics access violations even when Office catches the exception."""
 from pathlib import Path
 import re

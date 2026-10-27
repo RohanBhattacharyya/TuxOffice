@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Show a common item dialog the way Office does and print the result.
  *
  * Usage: file-dialog-probe.exe save|open [NAME]

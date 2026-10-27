@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Inject compositor-level input into a KWin session through libei.
  *
  * Only for the isolated test session: KWin's RemoteDesktop EIS endpoint is

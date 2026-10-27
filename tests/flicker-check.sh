@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Self-test for the Word flicker: bring Word to the front, drive typing and
 # scrolling over COM, capture the active window repeatedly, and report frames
 # whose ribbon or page area turns (near-)white compared to the median frame.

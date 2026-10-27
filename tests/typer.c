@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Inject keyboard/mouse input into the foreground window via SendInput, for
  * rendering and latency tests inside the Office prefix.
  *

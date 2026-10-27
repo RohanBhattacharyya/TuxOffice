@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Launch Word, wait for a trigger file, then dump native stacks of every Word
 # thread with gdb. Works with kernel.yama.ptrace_scope=1: this script stays an
 # ancestor of Word and exec()s into gdb (same PID), which is allowed to attach.

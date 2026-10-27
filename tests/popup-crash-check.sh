@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Regression test for the popup hang/crash: open Word's spelling context menu
 # on a misspelled word, hover around in it, close it, repeat; then verify Word
 # is alive, raised no unhandled exception, and still answers input.

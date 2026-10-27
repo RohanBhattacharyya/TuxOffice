@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Expand office-suite.py's native PowerPoint output for scrolling tests.
 
 Usage: presentation-fixture.py TEMPLATE.pptx OUTPUT.pptx [SLIDES=250]

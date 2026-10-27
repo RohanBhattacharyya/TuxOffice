@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Exercise Excel's Recommended Charts UI in the isolated Office prefix."""
 import json
 import os

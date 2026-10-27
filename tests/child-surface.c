@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* A layout update must keep a child GPU surface visible until its next
  * present. Uses Win32/D3D only; no Office or private driver APIs. */
 #define COBJMACROS

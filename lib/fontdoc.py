@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Write a .docx that references every font Office should fetch from its
 cloud font service (UI fonts and the default document fonts).
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Capture stable document pixels during cell entry and ribbon changes.
 
 Usage: office-flicker.py OUTDIR word|excel|powerpoint ribbon|cells [PRESENTATION.pptx]

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* A COM call that reaches an apartment thread after it has uninitialized COM.
  *
  * Usage: com-uninit-call.exe

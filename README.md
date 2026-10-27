@@ -13,6 +13,7 @@
   <img alt="Session: Wayland" src="https://img.shields.io/badge/session-Wayland-blue">
   <img alt="Office: Microsoft 365 Apps x64" src="https://img.shields.io/badge/Office-Microsoft%20365%20Apps%20x64-orange">
   <img alt="Status: in development" src="https://img.shields.io/badge/status-in%20development-yellow">
+  <img alt="License: LGPL-2.1-or-later" src="https://img.shields.io/badge/license-LGPL--2.1--or--later-green">
 </p>
 
 <p align="center">
@@ -207,11 +208,17 @@ TuxOffice stands on the work of [Wine](https://www.winehq.org/),
 [Bottles' Soda](https://github.com/bottlesdevs/wine) and
 [DXVK](https://github.com/doitsujin/dxvk).
 
+The logo is built on Tux, the classic Linux penguin, by Larry Ewing
+(lewing@isc.tamu.edu), created with [The GIMP](https://www.gimp.org/).
+
 ## License and trademarks
 
-The Wine source in [`wine/`](wine), including TuxOffice's changes to it, is
-licensed under the GNU LGPL 2.1 or later, like Wine; see
-[`wine/COPYING.LIB`](wine/COPYING.LIB).
+TuxOffice is licensed under the GNU Lesser General Public License, version
+2.1 or (at your option) any later version; see [`LICENSE`](LICENSE). This
+covers the launcher, helpers, build scripts and tests as well as the Wine
+source in [`wine/`](wine), which carries Wine's own copyright notices (see
+[`wine/COPYING.LIB`](wine/COPYING.LIB) and [`wine/AUTHORS`](wine/AUTHORS)).
+Source files are marked with `SPDX-License-Identifier: LGPL-2.1-or-later`.
 
 TuxOffice is not affiliated with or endorsed by Microsoft. Microsoft, Microsoft
 365, Word, Excel, PowerPoint, Outlook, OneNote, Access and Publisher are

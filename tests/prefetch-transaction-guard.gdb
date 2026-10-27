@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Office 16.0.20527.20088 (x64) only: offsets are mso40uiWin32Client.dll RVAs.
 # Reports PrefetchScope transaction save/restore that is not LIFO per thread.
 # Use: TUX_GDB_COMMANDS=tests/prefetch-transaction-guard.gdb TUXOFFICE_GDB_EARLY=1 tests/office-flicker.py ...

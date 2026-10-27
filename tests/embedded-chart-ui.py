@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Edit PowerPoint's chart in full Excel and close it through the desktop UI.
 
 Unlike the embedded data grid, full Excel is opened asynchronously in a new

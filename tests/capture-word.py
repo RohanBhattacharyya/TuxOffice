@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Capture Word by KWin window ID, even when another application has focus."""
 import os
 import json

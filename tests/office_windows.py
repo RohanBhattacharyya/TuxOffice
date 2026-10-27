@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Select KWin windows belonging to the chosen Office prefix."""
 import json
 import os

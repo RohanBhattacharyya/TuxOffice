@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # Build the TuxOffice runner from wine/ (Valve's Proton Wine + Soda's Office
 # patches, imported in the commit whose subject starts with "soda", followed
 # by TuxOffice's own Wine commits).

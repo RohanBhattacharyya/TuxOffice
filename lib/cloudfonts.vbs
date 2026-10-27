@@ -1,3 +1,4 @@
+' SPDX-License-Identifier: LGPL-2.1-or-later
 ' Open a document in an invisible Word and force layout so Office fetches
 ' every cloud font it references, then quit once the font cache settles.
 ' Usage: cscript //nologo cloudfonts.vbs C:\path\fonts.docx [max-seconds]

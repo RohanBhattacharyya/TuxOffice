@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # TuxOffice - run Microsoft Office natively on Linux.
 #
 # Office's x86-64 code executes directly on the CPU (no VM, no emulation);

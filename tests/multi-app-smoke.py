@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Check scrolling and responsiveness with all three Office apps open.
 
 Usage: multi-app-smoke.py OUTDIR WORD.docx EXCEL.xlsx POWERPOINT.pptx

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Bring the prefix's trusted root store up to date with the host's.
  *
  * Opening the Root store makes crypt32 import new host certificates. The

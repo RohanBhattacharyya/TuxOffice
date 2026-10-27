@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Extract the largest icon from a PE executable's first icon group as PNG.
 
 Usage: peicon.py APP.EXE OUT.png

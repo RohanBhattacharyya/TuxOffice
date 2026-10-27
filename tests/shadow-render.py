@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Compare an actual composition scene with and without a drop shadow.
 
 Usage: shadow-render.py OUTDIR SCENE.exe

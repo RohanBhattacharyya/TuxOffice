@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Measure visible scrolling changes in a small KWin capture area.
 
 Usage: scroll-capture.py OUTDIR LOGICAL_X LOGICAL_Y [word|excel|powerpoint]

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Print Windows font-registry entries for font files.
 
 Usage: fontnames.py [--paths] FILE...

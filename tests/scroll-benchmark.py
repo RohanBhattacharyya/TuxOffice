@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 """Repeat Office scrolling on the desktop using a disposable Office prefix.
 
 Usage: scroll-benchmark.py OUTDIR DOCUMENT LOGICAL_X LOGICAL_Y [REPEATS] [APP] [TYPE_TEXT]
