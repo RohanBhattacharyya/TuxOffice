@@ -1,0 +1,1616 @@
+{
+  "status": "rejected_for_deployment",
+  "protocol_version": 933,
+  "regression": {
+    "parent_checks": 63,
+    "child_checks": 27,
+    "failures": 0,
+    "coverage": "Creation, explicit restacking, destruction, local reparenting, cross-process children/reparenting, foreign-parent destruction, LastError preservation",
+    "control_log": "/tmp/tuxoffice-window-order-control-3.log",
+    "candidate_log": "/tmp/tuxoffice-window-order-candidate-2.log"
+  },
+  "microbenchmark": {
+    "queries": 200000,
+    "control_ms": 2214.655,
+    "candidate_ms": 43.18,
+    "measurement": "Hidden-window GetWindow(GW_HWNDFIRST/GW_HWNDLAST) loop, not application FPS"
+  },
+  "powerpoint": {
+    "control": {
+      "status": "passed",
+      "app": "powerpoint",
+      "action": "scrolling",
+      "document": "/tmp/tuxoffice-performance-fixtures/powerpoint-scroll-250.pptx",
+      "runner": "/tmp/tuxoffice-order-control-runner",
+      "rounds": [
+        {
+          "app": "powerpoint",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5878,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 720,
+          "visible_changes_during_input": 61,
+          "visible_changes_per_second": 10.38,
+          "first_visible_change_ms": 131.21,
+          "median_change_interval_ms": 87.11,
+          "p95_change_interval_ms": 254.22,
+          "longest_change_interval_ms": 257.94,
+          "app_process_cpu_seconds": 9.35,
+          "capture_area_logical": [
+            40,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "powerpoint",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5864,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 715,
+          "visible_changes_during_input": 73,
+          "visible_changes_per_second": 12.45,
+          "first_visible_change_ms": 92.21,
+          "median_change_interval_ms": 66.37,
+          "p95_change_interval_ms": 151.32,
+          "longest_change_interval_ms": 216.22,
+          "app_process_cpu_seconds": 9.4,
+          "capture_area_logical": [
+            40,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "powerpoint",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5875,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 719,
+          "visible_changes_during_input": 81,
+          "visible_changes_per_second": 13.79,
+          "first_visible_change_ms": 107.36,
+          "median_change_interval_ms": 60.38,
+          "p95_change_interval_ms": 165.3,
+          "longest_change_interval_ms": 174.06,
+          "app_process_cpu_seconds": 8.97,
+          "capture_area_logical": [
+            40,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        }
+      ],
+      "median": {
+        "first_visible_change_ms": 107.36,
+        "p95_change_interval_ms": 165.3,
+        "longest_change_interval_ms": 216.22,
+        "visible_changes_per_second": 12.45,
+        "app_process_cpu_seconds": 9.35
+      }
+    },
+    "candidate": {
+      "status": "passed",
+      "app": "powerpoint",
+      "action": "scrolling",
+      "document": "/tmp/tuxoffice-performance-fixtures/powerpoint-scroll-250.pptx",
+      "runner": "/tmp/tuxoffice-order-runner",
+      "rounds": [
+        {
+          "app": "powerpoint",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5871,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 726,
+          "visible_changes_during_input": 58,
+          "visible_changes_per_second": 9.88,
+          "first_visible_change_ms": 185.38,
+          "median_change_interval_ms": 78.91,
+          "p95_change_interval_ms": 235.42,
+          "longest_change_interval_ms": 317.56,
+          "app_process_cpu_seconds": 9.42,
+          "capture_area_logical": [
+            40,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "powerpoint",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5891,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 728,
+          "visible_changes_during_input": 84,
+          "visible_changes_per_second": 14.26,
+          "first_visible_change_ms": 91.28,
+          "median_change_interval_ms": 55.55,
+          "p95_change_interval_ms": 143.13,
+          "longest_change_interval_ms": 248.96,
+          "app_process_cpu_seconds": 9.61,
+          "capture_area_logical": [
+            40,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "powerpoint",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5892,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 716,
+          "visible_changes_during_input": 77,
+          "visible_changes_per_second": 13.07,
+          "first_visible_change_ms": 104.42,
+          "median_change_interval_ms": 59.63,
+          "p95_change_interval_ms": 158.82,
+          "longest_change_interval_ms": 217.48,
+          "app_process_cpu_seconds": 9.45,
+          "capture_area_logical": [
+            40,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        }
+      ],
+      "median": {
+        "first_visible_change_ms": 104.42,
+        "p95_change_interval_ms": 158.82,
+        "longest_change_interval_ms": 248.96,
+        "visible_changes_per_second": 13.07,
+        "app_process_cpu_seconds": 9.45
+      }
+    },
+    "installed": {
+      "status": "passed",
+      "app": "powerpoint",
+      "action": "scrolling",
+      "document": "/tmp/tuxoffice-performance-fixtures/powerpoint-scroll-250.pptx",
+      "runner": null,
+      "rounds": [
+        {
+          "app": "powerpoint",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5869,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 707,
+          "visible_changes_during_input": 83,
+          "visible_changes_per_second": 14.14,
+          "first_visible_change_ms": 127.53,
+          "median_change_interval_ms": 54.05,
+          "p95_change_interval_ms": 128.91,
+          "longest_change_interval_ms": 220.79,
+          "app_process_cpu_seconds": 8.96,
+          "capture_area_logical": [
+            40,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "powerpoint",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5879,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 716,
+          "visible_changes_during_input": 66,
+          "visible_changes_per_second": 11.23,
+          "first_visible_change_ms": 98.0,
+          "median_change_interval_ms": 54.89,
+          "p95_change_interval_ms": 146.11,
+          "longest_change_interval_ms": 1100.6,
+          "app_process_cpu_seconds": 6.5,
+          "capture_area_logical": [
+            40,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "powerpoint",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5867,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 742,
+          "visible_changes_during_input": 71,
+          "visible_changes_per_second": 12.1,
+          "first_visible_change_ms": 90.53,
+          "median_change_interval_ms": 60.13,
+          "p95_change_interval_ms": 186.38,
+          "longest_change_interval_ms": 305.93,
+          "app_process_cpu_seconds": 9.1,
+          "capture_area_logical": [
+            40,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        }
+      ],
+      "median": {
+        "first_visible_change_ms": 98.0,
+        "p95_change_interval_ms": 146.11,
+        "longest_change_interval_ms": 305.93,
+        "visible_changes_per_second": 12.1,
+        "app_process_cpu_seconds": 8.96
+      }
+    }
+  },
+  "matched_control": "Same rebuilt ntdll clients, server and graphics stack; control uses installed pre-cache win32u.so. Both select Intel and enable shadows.",
+  "preliminary_result": "Compared with the installed runner at high-rate input: Word scrolling is similar; Excel 19.15 versus 25.26 region changes/second and 11.04 versus 8.14 CPU seconds; PowerPoint 12.1 versus 13.07. Relative to rebuilt matching clients without the cache, most Excel update-rate gain comes from the rebuilt client, while shared window order reduces CPU use. No matched Windows baseline. Candidate is not deployed.",
+  "word": {
+    "control": {
+      "status": "passed",
+      "app": "word",
+      "action": "scrolling",
+      "document": "~/.cache/tuxoffice-test/home/prefix/drive_c/tuxoffice/scroll-benchmark.docx",
+      "runner": "/tmp/tuxoffice-order-control-runner",
+      "rounds": [
+        {
+          "app": "word",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5857,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 584,
+          "visible_changes_during_input": 131,
+          "visible_changes_per_second": 22.37,
+          "first_visible_change_ms": 72.69,
+          "median_change_interval_ms": 45.0,
+          "p95_change_interval_ms": 63.51,
+          "longest_change_interval_ms": 87.27,
+          "app_process_cpu_seconds": 11.44,
+          "capture_area_logical": [
+            704,
+            340,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "word",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5853,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 598,
+          "visible_changes_during_input": 128,
+          "visible_changes_per_second": 21.87,
+          "first_visible_change_ms": 71.2,
+          "median_change_interval_ms": 46.73,
+          "p95_change_interval_ms": 63.12,
+          "longest_change_interval_ms": 127.88,
+          "app_process_cpu_seconds": 11.96,
+          "capture_area_logical": [
+            704,
+            340,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "word",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5863,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 600,
+          "visible_changes_during_input": 125,
+          "visible_changes_per_second": 21.32,
+          "first_visible_change_ms": 93.08,
+          "median_change_interval_ms": 47.29,
+          "p95_change_interval_ms": 64.03,
+          "longest_change_interval_ms": 74.27,
+          "app_process_cpu_seconds": 11.62,
+          "capture_area_logical": [
+            704,
+            340,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        }
+      ],
+      "median": {
+        "first_visible_change_ms": 72.69,
+        "p95_change_interval_ms": 63.51,
+        "longest_change_interval_ms": 87.27,
+        "visible_changes_per_second": 21.87,
+        "app_process_cpu_seconds": 11.62
+      }
+    },
+    "candidate": {
+      "status": "passed",
+      "app": "word",
+      "action": "scrolling",
+      "document": "~/.cache/tuxoffice-test/home/prefix/drive_c/tuxoffice/scroll-benchmark.docx",
+      "runner": "/tmp/tuxoffice-order-runner",
+      "rounds": [
+        {
+          "app": "word",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5860,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 601,
+          "visible_changes_during_input": 129,
+          "visible_changes_per_second": 22.01,
+          "first_visible_change_ms": 82.63,
+          "median_change_interval_ms": 45.62,
+          "p95_change_interval_ms": 63.9,
+          "longest_change_interval_ms": 79.7,
+          "app_process_cpu_seconds": 11.32,
+          "capture_area_logical": [
+            704,
+            340,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "word",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5872,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 637,
+          "visible_changes_during_input": 79,
+          "visible_changes_per_second": 13.45,
+          "first_visible_change_ms": 72.17,
+          "median_change_interval_ms": 46.61,
+          "p95_change_interval_ms": 76.52,
+          "longest_change_interval_ms": 1268.76,
+          "app_process_cpu_seconds": 8.67,
+          "capture_area_logical": [
+            704,
+            340,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "word",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5860,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 616,
+          "visible_changes_during_input": 129,
+          "visible_changes_per_second": 22.01,
+          "first_visible_change_ms": 75.19,
+          "median_change_interval_ms": 45.23,
+          "p95_change_interval_ms": 60.66,
+          "longest_change_interval_ms": 69.63,
+          "app_process_cpu_seconds": 11.62,
+          "capture_area_logical": [
+            704,
+            340,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        }
+      ],
+      "median": {
+        "first_visible_change_ms": 75.19,
+        "p95_change_interval_ms": 63.9,
+        "longest_change_interval_ms": 79.7,
+        "visible_changes_per_second": 22.01,
+        "app_process_cpu_seconds": 11.32
+      }
+    },
+    "installed": {
+      "status": "passed",
+      "app": "word",
+      "action": "scrolling",
+      "document": "~/.cache/tuxoffice-test/home/prefix/drive_c/tuxoffice/scroll-benchmark.docx",
+      "runner": null,
+      "rounds": [
+        {
+          "app": "word",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5853,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 600,
+          "visible_changes_during_input": 132,
+          "visible_changes_per_second": 22.55,
+          "first_visible_change_ms": 98.2,
+          "median_change_interval_ms": 43.88,
+          "p95_change_interval_ms": 60.66,
+          "longest_change_interval_ms": 62.31,
+          "app_process_cpu_seconds": 11.27,
+          "capture_area_logical": [
+            704,
+            340,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "word",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5860,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 622,
+          "visible_changes_during_input": 125,
+          "visible_changes_per_second": 21.33,
+          "first_visible_change_ms": 53.61,
+          "median_change_interval_ms": 45.62,
+          "p95_change_interval_ms": 65.04,
+          "longest_change_interval_ms": 149.35,
+          "app_process_cpu_seconds": 11.87,
+          "capture_area_logical": [
+            704,
+            340,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "word",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5860,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 610,
+          "visible_changes_during_input": 128,
+          "visible_changes_per_second": 21.84,
+          "first_visible_change_ms": 91.33,
+          "median_change_interval_ms": 45.94,
+          "p95_change_interval_ms": 61.66,
+          "longest_change_interval_ms": 85.37,
+          "app_process_cpu_seconds": 11.62,
+          "capture_area_logical": [
+            704,
+            340,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        }
+      ],
+      "median": {
+        "first_visible_change_ms": 91.33,
+        "p95_change_interval_ms": 61.66,
+        "longest_change_interval_ms": 85.37,
+        "visible_changes_per_second": 21.84,
+        "app_process_cpu_seconds": 11.62
+      }
+    }
+  },
+  "excel": {
+    "control": {
+      "status": "passed",
+      "app": "excel",
+      "action": "scrolling",
+      "document": "/tmp/tuxoffice-performance-fixtures/excel-scroll-50000.xlsx",
+      "runner": "/tmp/tuxoffice-order-control-runner",
+      "rounds": [
+        {
+          "app": "excel",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5854,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 635,
+          "visible_changes_during_input": 106,
+          "visible_changes_per_second": 18.11,
+          "first_visible_change_ms": 121.9,
+          "median_change_interval_ms": 52.45,
+          "p95_change_interval_ms": 88.26,
+          "longest_change_interval_ms": 104.46,
+          "app_process_cpu_seconds": 10.98,
+          "capture_area_logical": [
+            60,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "excel",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5857,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 627,
+          "visible_changes_during_input": 145,
+          "visible_changes_per_second": 24.76,
+          "first_visible_change_ms": 95.66,
+          "median_change_interval_ms": 40.04,
+          "p95_change_interval_ms": 56.48,
+          "longest_change_interval_ms": 81.64,
+          "app_process_cpu_seconds": 12.09,
+          "capture_area_logical": [
+            60,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "excel",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5842,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 636,
+          "visible_changes_during_input": 148,
+          "visible_changes_per_second": 25.33,
+          "first_visible_change_ms": 100.47,
+          "median_change_interval_ms": 39.7,
+          "p95_change_interval_ms": 53.68,
+          "longest_change_interval_ms": 61.83,
+          "app_process_cpu_seconds": 12.25,
+          "capture_area_logical": [
+            60,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        }
+      ],
+      "median": {
+        "first_visible_change_ms": 100.47,
+        "p95_change_interval_ms": 56.48,
+        "longest_change_interval_ms": 81.64,
+        "visible_changes_per_second": 24.76,
+        "app_process_cpu_seconds": 12.09
+      }
+    },
+    "candidate": {
+      "status": "passed",
+      "app": "excel",
+      "action": "scrolling",
+      "document": "/tmp/tuxoffice-performance-fixtures/excel-scroll-50000.xlsx",
+      "runner": "/tmp/tuxoffice-order-runner",
+      "rounds": [
+        {
+          "app": "excel",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5840,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 636,
+          "visible_changes_during_input": 147,
+          "visible_changes_per_second": 25.17,
+          "first_visible_change_ms": 97.64,
+          "median_change_interval_ms": 40.3,
+          "p95_change_interval_ms": 59.69,
+          "longest_change_interval_ms": 71.86,
+          "app_process_cpu_seconds": 8.47,
+          "capture_area_logical": [
+            60,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "excel",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5859,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 627,
+          "visible_changes_during_input": 150,
+          "visible_changes_per_second": 25.6,
+          "first_visible_change_ms": 82.65,
+          "median_change_interval_ms": 39.94,
+          "p95_change_interval_ms": 54.28,
+          "longest_change_interval_ms": 59.79,
+          "app_process_cpu_seconds": 7.88,
+          "capture_area_logical": [
+            60,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "excel",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5858,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 640,
+          "visible_changes_during_input": 148,
+          "visible_changes_per_second": 25.26,
+          "first_visible_change_ms": 87.66,
+          "median_change_interval_ms": 39.25,
+          "p95_change_interval_ms": 54.72,
+          "longest_change_interval_ms": 74.57,
+          "app_process_cpu_seconds": 8.14,
+          "capture_area_logical": [
+            60,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        }
+      ],
+      "median": {
+        "first_visible_change_ms": 87.66,
+        "p95_change_interval_ms": 54.72,
+        "longest_change_interval_ms": 71.86,
+        "visible_changes_per_second": 25.26,
+        "app_process_cpu_seconds": 8.14
+      }
+    },
+    "installed": {
+      "status": "passed",
+      "app": "excel",
+      "action": "scrolling",
+      "document": "/tmp/tuxoffice-performance-fixtures/excel-scroll-50000.xlsx",
+      "runner": null,
+      "rounds": [
+        {
+          "app": "excel",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5848,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 630,
+          "visible_changes_during_input": 112,
+          "visible_changes_per_second": 19.15,
+          "first_visible_change_ms": 94.92,
+          "median_change_interval_ms": 44.83,
+          "p95_change_interval_ms": 93.79,
+          "longest_change_interval_ms": 131.3,
+          "app_process_cpu_seconds": 10.84,
+          "capture_area_logical": [
+            60,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "excel",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5863,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 628,
+          "visible_changes_during_input": 114,
+          "visible_changes_per_second": 19.44,
+          "first_visible_change_ms": 94.71,
+          "median_change_interval_ms": 44.18,
+          "p95_change_interval_ms": 87.55,
+          "longest_change_interval_ms": 97.09,
+          "app_process_cpu_seconds": 11.04,
+          "capture_area_logical": [
+            60,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "excel",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5855,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 627,
+          "visible_changes_during_input": 110,
+          "visible_changes_per_second": 18.79,
+          "first_visible_change_ms": 86.84,
+          "median_change_interval_ms": 45.71,
+          "p95_change_interval_ms": 90.33,
+          "longest_change_interval_ms": 104.44,
+          "app_process_cpu_seconds": 11.27,
+          "capture_area_logical": [
+            60,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        }
+      ],
+      "median": {
+        "first_visible_change_ms": 94.71,
+        "p95_change_interval_ms": 90.33,
+        "longest_change_interval_ms": 104.44,
+        "visible_changes_per_second": 19.15,
+        "app_process_cpu_seconds": 11.04
+      }
+    }
+  },
+  "regression_32bit": {
+    "checks": 90,
+    "failures": 0,
+    "mode": "WINEARCH=wow64",
+    "control_ms": 2052.485,
+    "candidate_ms": 78.026,
+    "queries": 200000,
+    "candidate_log": "/tmp/tuxoffice-window-order32-wow64-candidate.log",
+    "baseline_legacy_issue": "Legacy graphical window creation fails in both previous and candidate runners because host 32-bit XKB libraries are missing. Explicit WINEARCH=wow64 passes the graphical regression, but selecting it globally breaks this Office configuration; the launcher retains its original mode.",
+    "headless_com": {
+      "status": "passed",
+      "child_exit": 0,
+      "wrong_thread_releases": 0,
+      "refs": 1,
+      "log": "/tmp/tuxoffice-order-com-release32-flush.log"
+    }
+  },
+  "commit_notification_coalescing": {
+    "unit_checks": 232,
+    "failures": 0,
+    "unit_log": "/tmp/tuxoffice-combined-composition.log",
+    "powerpoint_only": {
+      "status": "passed",
+      "app": "powerpoint",
+      "action": "scrolling",
+      "document": "/tmp/tuxoffice-performance-fixtures/powerpoint-scroll-250.pptx",
+      "runner": "/tmp/tuxoffice-coalesce-runner",
+      "rounds": [
+        {
+          "app": "powerpoint",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5869,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 713,
+          "visible_changes_during_input": 79,
+          "visible_changes_per_second": 13.46,
+          "first_visible_change_ms": 116.32,
+          "median_change_interval_ms": 55.24,
+          "p95_change_interval_ms": 178.9,
+          "longest_change_interval_ms": 316.51,
+          "app_process_cpu_seconds": 8.87,
+          "capture_area_logical": [
+            40,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "powerpoint",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5875,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 704,
+          "visible_changes_during_input": 79,
+          "visible_changes_per_second": 13.45,
+          "first_visible_change_ms": 100.34,
+          "median_change_interval_ms": 59.74,
+          "p95_change_interval_ms": 161.64,
+          "longest_change_interval_ms": 215.4,
+          "app_process_cpu_seconds": 9.12,
+          "capture_area_logical": [
+            40,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "powerpoint",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5879,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 725,
+          "visible_changes_during_input": 84,
+          "visible_changes_per_second": 14.29,
+          "first_visible_change_ms": 96.06,
+          "median_change_interval_ms": 58.77,
+          "p95_change_interval_ms": 144.38,
+          "longest_change_interval_ms": 188.68,
+          "app_process_cpu_seconds": 9.25,
+          "capture_area_logical": [
+            40,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        }
+      ],
+      "median": {
+        "first_visible_change_ms": 100.34,
+        "p95_change_interval_ms": 161.64,
+        "longest_change_interval_ms": 215.4,
+        "visible_changes_per_second": 13.46,
+        "app_process_cpu_seconds": 9.12
+      }
+    },
+    "combined_powerpoint": {
+      "status": "passed",
+      "app": "powerpoint",
+      "action": "scrolling",
+      "document": "/tmp/tuxoffice-performance-fixtures/powerpoint-scroll-250.pptx",
+      "runner": "/tmp/tuxoffice-order-runner",
+      "rounds": [
+        {
+          "app": "powerpoint",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5876,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 731,
+          "visible_changes_during_input": 65,
+          "visible_changes_per_second": 11.06,
+          "first_visible_change_ms": 119.27,
+          "median_change_interval_ms": 81.07,
+          "p95_change_interval_ms": 192.01,
+          "longest_change_interval_ms": 342.83,
+          "app_process_cpu_seconds": 9.4,
+          "capture_area_logical": [
+            40,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "powerpoint",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5866,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 748,
+          "visible_changes_during_input": 83,
+          "visible_changes_per_second": 14.15,
+          "first_visible_change_ms": 91.16,
+          "median_change_interval_ms": 57.46,
+          "p95_change_interval_ms": 150.13,
+          "longest_change_interval_ms": 308.02,
+          "app_process_cpu_seconds": 9.19,
+          "capture_area_logical": [
+            40,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        },
+        {
+          "app": "powerpoint",
+          "action": "scrolling",
+          "input_events": 360,
+          "requested_input_interval_ms": 16,
+          "input_duration_ms": 5871,
+          "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+          "capture_samples": 744,
+          "visible_changes_during_input": 78,
+          "visible_changes_per_second": 13.29,
+          "first_visible_change_ms": 94.58,
+          "median_change_interval_ms": 59.35,
+          "p95_change_interval_ms": 141.92,
+          "longest_change_interval_ms": 225.1,
+          "app_process_cpu_seconds": 8.86,
+          "capture_area_logical": [
+            40,
+            260,
+            320,
+            180
+          ],
+          "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+        }
+      ],
+      "median": {
+        "first_visible_change_ms": 94.58,
+        "p95_change_interval_ms": 150.13,
+        "longest_change_interval_ms": 308.02,
+        "visible_changes_per_second": 13.29,
+        "app_process_cpu_seconds": 9.19
+      }
+    },
+    "popup_cycles": 20,
+    "popup_cycle_log": "/tmp/tuxoffice-popup-combined-cycle-legacy/summary.txt",
+    "resize_maximize_cycles": 4,
+    "resize_log": "/tmp/tuxoffice-resize-combined-final/summary.txt",
+    "card_pixels": {
+      "status": "passed",
+      "clock": "CLOCK_MONOTONIC_RAW",
+      "rounds": [
+        {
+          "round": 1,
+          "visible_window_ms": 196,
+          "completed_pixels_upper_bound_ms": 728.42,
+          "samples": 81,
+          "rect_logical": [
+            884,
+            458,
+            1084,
+            646
+          ],
+          "toolbar_dark_pixels": [
+            62,
+            67,
+            12
+          ]
+        },
+        {
+          "round": 2,
+          "visible_window_ms": 78,
+          "completed_pixels_upper_bound_ms": 490.47,
+          "samples": 82,
+          "rect_logical": [
+            884,
+            458,
+            1084,
+            646
+          ],
+          "toolbar_dark_pixels": [
+            62,
+            67,
+            12
+          ]
+        },
+        {
+          "round": 3,
+          "visible_window_ms": 76,
+          "completed_pixels_upper_bound_ms": 407.31,
+          "samples": 82,
+          "rect_logical": [
+            884,
+            458,
+            1084,
+            646
+          ],
+          "toolbar_dark_pixels": [
+            62,
+            67,
+            12
+          ]
+        },
+        {
+          "round": 4,
+          "visible_window_ms": 90,
+          "completed_pixels_upper_bound_ms": 425.88,
+          "samples": 83,
+          "rect_logical": [
+            884,
+            458,
+            1084,
+            646
+          ],
+          "toolbar_dark_pixels": [
+            62,
+            67,
+            12
+          ]
+        },
+        {
+          "round": 5,
+          "visible_window_ms": 161,
+          "completed_pixels_upper_bound_ms": 482.13,
+          "samples": 79,
+          "rect_logical": [
+            884,
+            458,
+            1084,
+            646
+          ],
+          "toolbar_dark_pixels": [
+            62,
+            67,
+            12
+          ]
+        }
+      ],
+      "wine_to_desktop_offset_logical": [
+        0,
+        -22
+      ],
+      "median_completed_pixels_upper_bound_ms": 482.13,
+      "measurement": "First capture matching final card pixels; includes capture overhead and requires inspection of saved final images."
+    }
+  },
+  "incompatible_wow64_default": "Rejected: it passes the 32-bit standalone graphical test but Office window enumeration/startup fails in this configuration. Default launcher mode was restored; normal-mode startup and menu tests pass.",
+  "packaging": {
+    "status": "independent_directory_verified",
+    "symlink_base_handling": "Build resolves the base directory before copying; a linked staging base stays unmodified. Pristine Soda restored from the checksum-verified pinned archive.",
+    "candidate_manifest": "/tmp/tuxoffice-matched-final-package.json"
+  },
+  "reason": "GetWindow API loop improves about 51x, but matched three-round desktop scrolling with detailed traces disabled shows no material throughput or CPU improvement. Word still stalls. Cache and notification batching were removed from source before final packaging; server protocol remains 932.",
+  "quiet_matched_comparison": {
+    "word": {
+      "previous": {
+        "status": "passed",
+        "app": "word",
+        "action": "scrolling",
+        "document": "~/.cache/tuxoffice-test/home/prefix/drive_c/tuxoffice/scroll-benchmark.docx",
+        "runner": "~/.local/share/tuxoffice/runners/tuxoffice-11.0-33-experimental-x86_64",
+        "wine_debug": "-all,err+all,warn+seh",
+        "rounds": [
+          {
+            "app": "word",
+            "action": "scrolling",
+            "input_events": 360,
+            "requested_input_interval_ms": 16,
+            "input_duration_ms": 5862,
+            "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+            "capture_samples": 599,
+            "visible_changes_during_input": 129,
+            "visible_changes_per_second": 22.01,
+            "first_visible_change_ms": 162.86,
+            "median_change_interval_ms": 46.15,
+            "p95_change_interval_ms": 61.35,
+            "longest_change_interval_ms": 75.17,
+            "app_process_cpu_seconds": 11.4,
+            "capture_area_logical": [
+              704,
+              340,
+              320,
+              180
+            ],
+            "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+          },
+          {
+            "app": "word",
+            "action": "scrolling",
+            "input_events": 360,
+            "requested_input_interval_ms": 16,
+            "input_duration_ms": 5848,
+            "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+            "capture_samples": 585,
+            "visible_changes_during_input": 123,
+            "visible_changes_per_second": 21.03,
+            "first_visible_change_ms": 105.01,
+            "median_change_interval_ms": 47.44,
+            "p95_change_interval_ms": 65.77,
+            "longest_change_interval_ms": 161.91,
+            "app_process_cpu_seconds": 11.66,
+            "capture_area_logical": [
+              704,
+              340,
+              320,
+              180
+            ],
+            "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+          },
+          {
+            "app": "word",
+            "action": "scrolling",
+            "input_events": 360,
+            "requested_input_interval_ms": 16,
+            "input_duration_ms": 5856,
+            "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+            "capture_samples": 577,
+            "visible_changes_during_input": 125,
+            "visible_changes_per_second": 21.35,
+            "first_visible_change_ms": 125.72,
+            "median_change_interval_ms": 46.15,
+            "p95_change_interval_ms": 67.14,
+            "longest_change_interval_ms": 83.28,
+            "app_process_cpu_seconds": 11.45,
+            "capture_area_logical": [
+              704,
+              340,
+              320,
+              180
+            ],
+            "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+          }
+        ],
+        "median": {
+          "first_visible_change_ms": 125.72,
+          "p95_change_interval_ms": 65.77,
+          "longest_change_interval_ms": 83.28,
+          "visible_changes_per_second": 21.35,
+          "app_process_cpu_seconds": 11.45
+        }
+      },
+      "candidate": {
+        "status": "passed",
+        "app": "word",
+        "action": "scrolling",
+        "document": "~/.cache/tuxoffice-test/home/prefix/drive_c/tuxoffice/scroll-benchmark.docx",
+        "runner": "/tmp/tuxoffice-package-check-home/runners/tuxoffice-11.0-33-experimental-x86_64",
+        "wine_debug": "-all,err+all,warn+seh",
+        "rounds": [
+          {
+            "app": "word",
+            "action": "scrolling",
+            "input_events": 360,
+            "requested_input_interval_ms": 16,
+            "input_duration_ms": 5860,
+            "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+            "capture_samples": 566,
+            "visible_changes_during_input": 131,
+            "visible_changes_per_second": 22.35,
+            "first_visible_change_ms": 61.71,
+            "median_change_interval_ms": 44.15,
+            "p95_change_interval_ms": 65.05,
+            "longest_change_interval_ms": 84.0,
+            "app_process_cpu_seconds": 11.65,
+            "capture_area_logical": [
+              704,
+              340,
+              320,
+              180
+            ],
+            "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+          },
+          {
+            "app": "word",
+            "action": "scrolling",
+            "input_events": 360,
+            "requested_input_interval_ms": 16,
+            "input_duration_ms": 5859,
+            "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+            "capture_samples": 581,
+            "visible_changes_during_input": 126,
+            "visible_changes_per_second": 21.51,
+            "first_visible_change_ms": 129.38,
+            "median_change_interval_ms": 45.91,
+            "p95_change_interval_ms": 62.65,
+            "longest_change_interval_ms": 159.65,
+            "app_process_cpu_seconds": 12.36,
+            "capture_area_logical": [
+              704,
+              340,
+              320,
+              180
+            ],
+            "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+          },
+          {
+            "app": "word",
+            "action": "scrolling",
+            "input_events": 360,
+            "requested_input_interval_ms": 16,
+            "input_duration_ms": 5863,
+            "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+            "capture_samples": 560,
+            "visible_changes_during_input": 83,
+            "visible_changes_per_second": 14.16,
+            "first_visible_change_ms": 68.15,
+            "median_change_interval_ms": 46.42,
+            "p95_change_interval_ms": 71.91,
+            "longest_change_interval_ms": 382.07,
+            "app_process_cpu_seconds": 10.1,
+            "capture_area_logical": [
+              704,
+              340,
+              320,
+              180
+            ],
+            "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+          }
+        ],
+        "median": {
+          "first_visible_change_ms": 68.15,
+          "p95_change_interval_ms": 65.05,
+          "longest_change_interval_ms": 159.65,
+          "visible_changes_per_second": 21.51,
+          "app_process_cpu_seconds": 11.65
+        }
+      }
+    },
+    "excel": {
+      "previous": {
+        "status": "passed",
+        "app": "excel",
+        "action": "scrolling",
+        "document": "/tmp/tuxoffice-performance-fixtures/excel-scroll-50000.xlsx",
+        "runner": "~/.local/share/tuxoffice/runners/tuxoffice-11.0-33-experimental-x86_64",
+        "wine_debug": "-all,err+all,warn+seh",
+        "rounds": [
+          {
+            "app": "excel",
+            "action": "scrolling",
+            "input_events": 360,
+            "requested_input_interval_ms": 16,
+            "input_duration_ms": 5851,
+            "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+            "capture_samples": 617,
+            "visible_changes_during_input": 148,
+            "visible_changes_per_second": 25.29,
+            "first_visible_change_ms": 89.05,
+            "median_change_interval_ms": 40.46,
+            "p95_change_interval_ms": 53.61,
+            "longest_change_interval_ms": 63.46,
+            "app_process_cpu_seconds": 8.66,
+            "capture_area_logical": [
+              60,
+              260,
+              320,
+              180
+            ],
+            "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+          },
+          {
+            "app": "excel",
+            "action": "scrolling",
+            "input_events": 360,
+            "requested_input_interval_ms": 16,
+            "input_duration_ms": 5853,
+            "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+            "capture_samples": 628,
+            "visible_changes_during_input": 145,
+            "visible_changes_per_second": 24.77,
+            "first_visible_change_ms": 97.21,
+            "median_change_interval_ms": 41.03,
+            "p95_change_interval_ms": 55.75,
+            "longest_change_interval_ms": 84.22,
+            "app_process_cpu_seconds": 8.15,
+            "capture_area_logical": [
+              60,
+              260,
+              320,
+              180
+            ],
+            "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+          },
+          {
+            "app": "excel",
+            "action": "scrolling",
+            "input_events": 360,
+            "requested_input_interval_ms": 16,
+            "input_duration_ms": 5866,
+            "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+            "capture_samples": 632,
+            "visible_changes_during_input": 145,
+            "visible_changes_per_second": 24.72,
+            "first_visible_change_ms": 97.18,
+            "median_change_interval_ms": 41.22,
+            "p95_change_interval_ms": 55.35,
+            "longest_change_interval_ms": 66.67,
+            "app_process_cpu_seconds": 8.19,
+            "capture_area_logical": [
+              60,
+              260,
+              320,
+              180
+            ],
+            "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+          }
+        ],
+        "median": {
+          "first_visible_change_ms": 97.18,
+          "p95_change_interval_ms": 55.35,
+          "longest_change_interval_ms": 66.67,
+          "visible_changes_per_second": 24.77,
+          "app_process_cpu_seconds": 8.19
+        }
+      },
+      "candidate": {
+        "status": "passed",
+        "app": "excel",
+        "action": "scrolling",
+        "document": "/tmp/tuxoffice-performance-fixtures/excel-scroll-50000.xlsx",
+        "runner": "/tmp/tuxoffice-package-check-home/runners/tuxoffice-11.0-33-experimental-x86_64",
+        "wine_debug": "-all,err+all,warn+seh",
+        "rounds": [
+          {
+            "app": "excel",
+            "action": "scrolling",
+            "input_events": 360,
+            "requested_input_interval_ms": 16,
+            "input_duration_ms": 5872,
+            "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+            "capture_samples": 610,
+            "visible_changes_during_input": 145,
+            "visible_changes_per_second": 24.69,
+            "first_visible_change_ms": 106.05,
+            "median_change_interval_ms": 40.16,
+            "p95_change_interval_ms": 58.49,
+            "longest_change_interval_ms": 74.68,
+            "app_process_cpu_seconds": 8.07,
+            "capture_area_logical": [
+              60,
+              260,
+              320,
+              180
+            ],
+            "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+          },
+          {
+            "app": "excel",
+            "action": "scrolling",
+            "input_events": 360,
+            "requested_input_interval_ms": 16,
+            "input_duration_ms": 5858,
+            "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+            "capture_samples": 611,
+            "visible_changes_during_input": 148,
+            "visible_changes_per_second": 25.26,
+            "first_visible_change_ms": 86.45,
+            "median_change_interval_ms": 39.95,
+            "p95_change_interval_ms": 59.92,
+            "longest_change_interval_ms": 62.41,
+            "app_process_cpu_seconds": 7.95,
+            "capture_area_logical": [
+              60,
+              260,
+              320,
+              180
+            ],
+            "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+          },
+          {
+            "app": "excel",
+            "action": "scrolling",
+            "input_events": 360,
+            "requested_input_interval_ms": 16,
+            "input_duration_ms": 5867,
+            "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+            "capture_samples": 630,
+            "visible_changes_during_input": 147,
+            "visible_changes_per_second": 25.06,
+            "first_visible_change_ms": 89.69,
+            "median_change_interval_ms": 40.77,
+            "p95_change_interval_ms": 54.1,
+            "longest_change_interval_ms": 60.94,
+            "app_process_cpu_seconds": 8.04,
+            "capture_area_logical": [
+              60,
+              260,
+              320,
+              180
+            ],
+            "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+          }
+        ],
+        "median": {
+          "first_visible_change_ms": 89.69,
+          "p95_change_interval_ms": 58.49,
+          "longest_change_interval_ms": 62.41,
+          "visible_changes_per_second": 25.06,
+          "app_process_cpu_seconds": 8.04
+        }
+      }
+    },
+    "powerpoint": {
+      "previous": {
+        "status": "passed",
+        "app": "powerpoint",
+        "action": "scrolling",
+        "document": "/tmp/tuxoffice-performance-fixtures/powerpoint-scroll-250.pptx",
+        "runner": "~/.local/share/tuxoffice/runners/tuxoffice-11.0-33-experimental-x86_64",
+        "wine_debug": "-all,err+all,warn+seh",
+        "rounds": [
+          {
+            "app": "powerpoint",
+            "action": "scrolling",
+            "input_events": 360,
+            "requested_input_interval_ms": 16,
+            "input_duration_ms": 5891,
+            "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+            "capture_samples": 690,
+            "visible_changes_during_input": 78,
+            "visible_changes_per_second": 13.24,
+            "first_visible_change_ms": 130.2,
+            "median_change_interval_ms": 59.55,
+            "p95_change_interval_ms": 159.49,
+            "longest_change_interval_ms": 282.35,
+            "app_process_cpu_seconds": 9.77,
+            "capture_area_logical": [
+              40,
+              260,
+              320,
+              180
+            ],
+            "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+          },
+          {
+            "app": "powerpoint",
+            "action": "scrolling",
+            "input_events": 360,
+            "requested_input_interval_ms": 16,
+            "input_duration_ms": 5866,
+            "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+            "capture_samples": 706,
+            "visible_changes_during_input": 87,
+            "visible_changes_per_second": 14.83,
+            "first_visible_change_ms": 107.13,
+            "median_change_interval_ms": 55.89,
+            "p95_change_interval_ms": 134.89,
+            "longest_change_interval_ms": 181.41,
+            "app_process_cpu_seconds": 9.52,
+            "capture_area_logical": [
+              40,
+              260,
+              320,
+              180
+            ],
+            "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+          },
+          {
+            "app": "powerpoint",
+            "action": "scrolling",
+            "input_events": 360,
+            "requested_input_interval_ms": 16,
+            "input_duration_ms": 5893,
+            "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+            "capture_samples": 715,
+            "visible_changes_during_input": 78,
+            "visible_changes_per_second": 13.24,
+            "first_visible_change_ms": 71.4,
+            "median_change_interval_ms": 59.3,
+            "p95_change_interval_ms": 183.44,
+            "longest_change_interval_ms": 287.84,
+            "app_process_cpu_seconds": 8.79,
+            "capture_area_logical": [
+              40,
+              260,
+              320,
+              180
+            ],
+            "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+          }
+        ],
+        "median": {
+          "first_visible_change_ms": 107.13,
+          "p95_change_interval_ms": 159.49,
+          "longest_change_interval_ms": 282.35,
+          "visible_changes_per_second": 13.24,
+          "app_process_cpu_seconds": 9.52
+        }
+      },
+      "candidate": {
+        "status": "passed",
+        "app": "powerpoint",
+        "action": "scrolling",
+        "document": "/tmp/tuxoffice-performance-fixtures/powerpoint-scroll-250.pptx",
+        "runner": "/tmp/tuxoffice-package-check-home/runners/tuxoffice-11.0-33-experimental-x86_64",
+        "wine_debug": "-all,err+all,warn+seh",
+        "rounds": [
+          {
+            "app": "powerpoint",
+            "action": "scrolling",
+            "input_events": 360,
+            "requested_input_interval_ms": 16,
+            "input_duration_ms": 5884,
+            "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+            "capture_samples": 710,
+            "visible_changes_during_input": 74,
+            "visible_changes_per_second": 12.58,
+            "first_visible_change_ms": 99.98,
+            "median_change_interval_ms": 61.85,
+            "p95_change_interval_ms": 203.34,
+            "longest_change_interval_ms": 263.97,
+            "app_process_cpu_seconds": 8.82,
+            "capture_area_logical": [
+              40,
+              260,
+              320,
+              180
+            ],
+            "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+          },
+          {
+            "app": "powerpoint",
+            "action": "scrolling",
+            "input_events": 360,
+            "requested_input_interval_ms": 16,
+            "input_duration_ms": 5865,
+            "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+            "capture_samples": 689,
+            "visible_changes_during_input": 82,
+            "visible_changes_per_second": 13.98,
+            "first_visible_change_ms": 66.08,
+            "median_change_interval_ms": 57.79,
+            "p95_change_interval_ms": 144.15,
+            "longest_change_interval_ms": 234.34,
+            "app_process_cpu_seconds": 9.64,
+            "capture_area_logical": [
+              40,
+              260,
+              320,
+              180
+            ],
+            "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+          },
+          {
+            "app": "powerpoint",
+            "action": "scrolling",
+            "input_events": 360,
+            "requested_input_interval_ms": 16,
+            "input_duration_ms": 5854,
+            "clock": "CLOCK_MONOTONIC_RAW (same source as Wine GetTickCount64)",
+            "capture_samples": 708,
+            "visible_changes_during_input": 80,
+            "visible_changes_per_second": 13.67,
+            "first_visible_change_ms": 66.2,
+            "median_change_interval_ms": 56.2,
+            "p95_change_interval_ms": 157.28,
+            "longest_change_interval_ms": 234.13,
+            "app_process_cpu_seconds": 9.31,
+            "capture_area_logical": [
+              40,
+              260,
+              320,
+              180
+            ],
+            "measurement": "Pixel changes in one screen area; includes capture overhead and does not establish Windows parity."
+          }
+        ],
+        "median": {
+          "first_visible_change_ms": 66.2,
+          "p95_change_interval_ms": 157.28,
+          "longest_change_interval_ms": 234.34,
+          "visible_changes_per_second": 13.67,
+          "app_process_cpu_seconds": 9.31
+        }
+      }
+    }
+  },
+  "earlier_measurements_limit": "Earlier traced app measurements are profiling results. They do not establish the claimed gain for ordinary use; use the quiet matched comparison instead."
+}

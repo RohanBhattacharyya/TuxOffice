@@ -1,0 +1,60 @@
+{
+  "fix": "Serialize external image/buffer imports with resource allocation and release",
+  "patch": "runner/patches/dxvk-resource-import-lock.patch",
+  "test": "tests/dxvk-resource-import.cpp",
+  "control": "Unpatched allocation pool crashes on both x64 and x86",
+  "fixed_trials": [
+    {
+      "bits": 64,
+      "trial": 1,
+      "status": "passed",
+      "imports": 80000,
+      "buffers": 80000,
+      "log": "/tmp/tuxoffice-import-fixed64-1.log"
+    },
+    {
+      "bits": 64,
+      "trial": 2,
+      "status": "passed",
+      "imports": 80000,
+      "buffers": 80000,
+      "log": "/tmp/tuxoffice-import-fixed64-2.log"
+    },
+    {
+      "bits": 64,
+      "trial": 3,
+      "status": "passed",
+      "imports": 80000,
+      "buffers": 80000,
+      "log": "/tmp/tuxoffice-import-fixed64-3.log"
+    },
+    {
+      "bits": 32,
+      "trial": 1,
+      "status": "passed",
+      "imports": 80000,
+      "buffers": 80000,
+      "log": "/tmp/tuxoffice-import-fixed32-1.log"
+    },
+    {
+      "bits": 32,
+      "trial": 2,
+      "status": "passed",
+      "imports": 80000,
+      "buffers": 80000,
+      "log": "/tmp/tuxoffice-import-fixed32-2.log"
+    },
+    {
+      "bits": 32,
+      "trial": 3,
+      "status": "passed",
+      "imports": 80000,
+      "buffers": 80000,
+      "log": "/tmp/tuxoffice-import-fixed32-3.log"
+    }
+  ],
+  "import_count": 480000,
+  "buffer_count": 480000,
+  "failures": 0,
+  "installed": true
+}

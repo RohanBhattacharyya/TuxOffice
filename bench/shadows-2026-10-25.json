@@ -1,0 +1,198 @@
+{
+  "status": "passed",
+  "composition_unit_checks": 232,
+  "composition_unit_failures": 0,
+  "unit_log": "/tmp/tuxoffice-order-package-composition.log",
+  "pixel_cases": {
+    "none": {
+      "red_bounds": [
+        164,
+        164,
+        226,
+        227
+      ],
+      "probe": [
+        235,
+        205
+      ],
+      "mean_brightness": 255.0
+    },
+    "shadow": {
+      "red_bounds": [
+        164,
+        164,
+        226,
+        227
+      ],
+      "probe": [
+        235,
+        205
+      ],
+      "mean_brightness": 57.8
+    },
+    "masked": {
+      "red_bounds": [
+        164,
+        164,
+        226,
+        227
+      ],
+      "probe": [
+        235,
+        205
+      ],
+      "mean_brightness": 255.0
+    },
+    "inherit": {
+      "red_bounds": [
+        164,
+        164,
+        226,
+        227
+      ],
+      "probe": [
+        235,
+        205
+      ],
+      "mean_brightness": 57.8
+    },
+    "surface": {
+      "red_bounds": [
+        164,
+        164,
+        226,
+        227
+      ],
+      "probe": [
+        235,
+        205
+      ],
+      "mean_brightness": 62.44
+    },
+    "status": "passed"
+  },
+  "wayland_fix": "Child surfaces use their real root. Unowned Office frame strips match cached managed-frame edges; unmatched strips defer presentation instead of becoming desktop toplevels.",
+  "popup_latency": {
+    "status": "passed",
+    "clock": "CLOCK_MONOTONIC_RAW",
+    "rounds": [
+      {
+        "round": 1,
+        "visible_window_ms": 195,
+        "completed_pixels_upper_bound_ms": 1162.25,
+        "samples": 77,
+        "rect_logical": [
+          884,
+          458,
+          1084,
+          646
+        ],
+        "toolbar_dark_pixels": [
+          62,
+          67,
+          12
+        ]
+      },
+      {
+        "round": 2,
+        "visible_window_ms": 83,
+        "completed_pixels_upper_bound_ms": 439.62,
+        "samples": 79,
+        "rect_logical": [
+          884,
+          458,
+          1084,
+          646
+        ],
+        "toolbar_dark_pixels": [
+          62,
+          67,
+          12
+        ]
+      },
+      {
+        "round": 3,
+        "visible_window_ms": 88,
+        "completed_pixels_upper_bound_ms": 475.03,
+        "samples": 79,
+        "rect_logical": [
+          884,
+          458,
+          1084,
+          646
+        ],
+        "toolbar_dark_pixels": [
+          62,
+          67,
+          12
+        ]
+      },
+      {
+        "round": 4,
+        "visible_window_ms": 90,
+        "completed_pixels_upper_bound_ms": 484.73,
+        "samples": 80,
+        "rect_logical": [
+          884,
+          458,
+          1084,
+          646
+        ],
+        "toolbar_dark_pixels": [
+          62,
+          67,
+          12
+        ]
+      },
+      {
+        "round": 5,
+        "visible_window_ms": 75,
+        "completed_pixels_upper_bound_ms": 440.61,
+        "samples": 79,
+        "rect_logical": [
+          884,
+          458,
+          1084,
+          646
+        ],
+        "toolbar_dark_pixels": [
+          62,
+          67,
+          12
+        ]
+      }
+    ],
+    "wine_to_desktop_offset_logical": [
+      0,
+      -22
+    ],
+    "median_completed_pixels_upper_bound_ms": 475.03,
+    "measurement": "First capture matching final card pixels; includes capture overhead and requires inspection of saved final images."
+  },
+  "regular_prefix_resize_log": "/tmp/tuxoffice-main-wayland-final/summary.txt",
+  "live_popup_resize": {
+    "status": "passed",
+    "cycles": 4,
+    "conditions": "Open card before resize, open again while restored, capture active document, maximize while card open, reopen/close card, responsiveness polling and caught-fault scan",
+    "log": "/tmp/tuxoffice-border-parent-live/summary.txt",
+    "restored_capture_sizes": [
+      [
+        1391,
+        954
+      ],
+      [
+        1891,
+        1204
+      ],
+      [
+        1141,
+        829
+      ],
+      [
+        2141,
+        1266
+      ]
+    ],
+    "regression": "Earlier build focused 8px-high standalone frame shadows; current build keeps their surfaces attached to a managed document frame."
+  }
+}

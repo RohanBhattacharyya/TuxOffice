@@ -1,0 +1,34 @@
+{
+  "runner": "~/.local/share/tuxoffice/runners/tuxoffice-11.0-33-experimental-x86_64",
+  "prefix": "~/.local/share/tuxoffice/prefixes/office",
+  "backend": "bundled DXVK 3.1.1, LLVM-MinGW 20261020, context-state and resource-import locks",
+  "libraries_sha256": {
+    "x64/d3d11": "4e282271cd2a93e44a5fdf9593867362c13d436dca0d24cafb0436f3aa66b74f",
+    "x64/dxgi": "000565356af5050164fddabd2f05365aa3ec49f96d7fb745cc80341efb41d089",
+    "x64/d3d10core": "59a7521e7c0dbe733a18c8f8c9e6036b3e5c0f00a0a7f1f366c5f17e1356209a",
+    "x32/d3d11": "6fadf9cd82b02a55dd3fb72ff07301b9849ee79a906e3aa42165bcaa8af3cf8e",
+    "x32/dxgi": "225bc2504ca989c3c5c7b43d4784824782096f3541a27ca84a951ba28975e2c1",
+    "x32/d3d10core": "0da70392ebc1efb33fe07fafc12bb808e7ab72b3d562da8bc71c585aac58342f"
+  },
+  "default_printer": "preserved",
+  "wineboot_update": "passed",
+  "regular_word_validation": {
+    "status": "passed",
+    "fixed_exception": "MSO40 AirSpace LayerWinComp InitializeDropShadow; WinRT DropShadow API now implemented",
+    "resize_maximize_cycles": 4,
+    "suggestions_between_resizes": true,
+    "unhandled_exceptions": 0,
+    "caught_graphics_access_violations": 0,
+    "window_shadows": "enabled through Windows preference API",
+    "log": "/tmp/tuxoffice-main-wayland-final/gdb.txt.wine.log",
+    "screenshot": "bench/suggestion-card-2026-10-25.png"
+  },
+  "deployed_at": "2026-10-25T09:33:14-07:00",
+  "protocol_version": 932,
+  "recovery_backup": "~/.local/share/tuxoffice/recovery-backups/office-tested-upgrade-20261025-093314",
+  "latest_driver_candidate": {
+    "installed": false,
+    "change": "Keep GPU children attached to the root during layout updates",
+    "status": "cross-app flicker and crash stress testing"
+  }
+}

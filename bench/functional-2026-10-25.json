@@ -1,0 +1,217 @@
+{
+  "suite": [
+    {
+      "app": "word",
+      "status": "passed",
+      "checks": 8,
+      "elapsed_ms": 13178,
+      "pdf_pages": 3
+    },
+    {
+      "app": "excel",
+      "status": "passed",
+      "checks": 10,
+      "elapsed_ms": 13837,
+      "pdf_pages": 1
+    },
+    {
+      "app": "powerpoint",
+      "status": "passed",
+      "checks": 3,
+      "elapsed_ms": 14183,
+      "pdf_pages": 5
+    }
+  ],
+  "recommended_scatter": {
+    "scenario": "recommended-scatter",
+    "status": "passed",
+    "chart_type": "chart_type=74",
+    "workbook": "/tmp/tuxoffice-recommended-wayland-final/recommended-result.xlsx"
+  },
+  "word_resize": {
+    "cycles_on_final_wayland_build": 8,
+    "regular_prefix_cycles": 4,
+    "cloned_prefix_cycles": 4,
+    "unhandled_exceptions": 0,
+    "caught_graphics_access_violations": 0,
+    "conditions": "Visible document, suggestion cards between resizes, shadows enabled; desktop scale 1.25",
+    "logs": [
+      "/tmp/tuxoffice-main-wayland-final/summary.txt",
+      "/tmp/tuxoffice-shadow-wayland-resize/summary.txt"
+    ]
+  },
+  "word_spelling": "Applied nonsecretor suggestion and inspected saved DOCX XML; /tmp/tuxoffice-spelling-final-custom/",
+  "backends": "Locally compiled DXVK 3.1.1 and patched Wine; normal-packaged suite explicitly selects Intel GPU",
+  "concurrent_apps": [
+    {
+      "app": "word",
+      "round": 1,
+      "status": "passed"
+    },
+    {
+      "app": "excel",
+      "round": 1,
+      "status": "passed"
+    },
+    {
+      "app": "powerpoint",
+      "round": 1,
+      "status": "passed"
+    },
+    {
+      "app": "word",
+      "round": 2,
+      "status": "passed"
+    },
+    {
+      "app": "excel",
+      "round": 2,
+      "status": "passed"
+    },
+    {
+      "app": "powerpoint",
+      "round": 2,
+      "status": "passed"
+    }
+  ],
+  "concurrent_apps_scenario": "Word, Excel and PowerPoint open together; two switches/scroll checks per app, ping all three after each operation, caught-render-fault scan, clean Quit calls.",
+  "expanded_suite": [
+    {
+      "app": "word",
+      "status": "passed",
+      "checks": 11,
+      "elapsed_ms": 13285,
+      "pdf_pages": 3
+    },
+    {
+      "app": "excel",
+      "status": "passed",
+      "checks": 17,
+      "elapsed_ms": 17089,
+      "pdf_pages": 1
+    },
+    {
+      "app": "powerpoint",
+      "status": "passed",
+      "checks": 8,
+      "elapsed_ms": 23043,
+      "pdf_pages": 5
+    }
+  ],
+  "embedded_chart_investigation": {
+    "status": "user_workflows_passed",
+    "registration": "16 chart interfaces extracted from installed CHART.DLL NDR tables; applied to regular and cloned prefixes; included in setup and post-install",
+    "grid": "Create scatter, edit B2 to 37, close grid, save/reopen PPTX and PDF, verify OLE Package workbook: passed",
+    "full_editor": "Open full Excel, wait for actual document window, edit B2 to 74 through UI, close with Alt+F4, verify embedded saved value and no remaining Office processes: passed",
+    "remaining_automation_failure": "Calling Workbook.Close on a pre-transition COM workbook proxy while full Excel opens asynchronously can crash the new Excel process; holding it longer instead yields RPC server-unavailable. Native Windows behavior not compared.",
+    "logs": [
+      "/tmp/tuxoffice-suite-expanded-final/summary.json",
+      "/tmp/tuxoffice-embedded-chart-ui-final/summary.json",
+      "/tmp/tuxoffice-ppt-chart-registered/actions.log"
+    ]
+  },
+  "full_excel_chart_editor_ui": {
+    "status": "passed",
+    "scenario": "PowerPoint chart edited in full Excel",
+    "edited_cell": "B2",
+    "saved_value": 74,
+    "editor": "full Excel",
+    "close": "Alt+F4",
+    "office_processes_after_quit": 0
+  },
+  "latest_packaged_suite": [
+    {
+      "app": "word",
+      "status": "passed",
+      "checks": 11,
+      "elapsed_ms": 14272,
+      "pdf_pages": 3
+    },
+    {
+      "app": "excel",
+      "status": "passed",
+      "checks": 17,
+      "elapsed_ms": 14267,
+      "pdf_pages": 1
+    },
+    {
+      "app": "powerpoint",
+      "status": "passed",
+      "checks": 8,
+      "elapsed_ms": 21294,
+      "pdf_pages": 5
+    }
+  ],
+  "latest_recommended_scatter": {
+    "scenario": "recommended-scatter",
+    "status": "passed",
+    "chart_type": "chart_type=74",
+    "workbook": "/tmp/tuxoffice-final-border-scatter/recommended-result.xlsx"
+  },
+  "latest_full_chart_editor": {
+    "status": "passed",
+    "scenario": "PowerPoint chart edited in full Excel",
+    "edited_cell": "B2",
+    "saved_value": 74,
+    "editor": "full Excel",
+    "close": "Alt+F4",
+    "office_processes_after_quit": 0
+  },
+  "latest_concurrent_apps": [
+    {
+      "app": "word",
+      "round": 1,
+      "status": "passed"
+    },
+    {
+      "app": "excel",
+      "round": 1,
+      "status": "passed"
+    },
+    {
+      "app": "powerpoint",
+      "round": 1,
+      "status": "passed"
+    },
+    {
+      "app": "word",
+      "round": 2,
+      "status": "passed"
+    },
+    {
+      "app": "excel",
+      "round": 2,
+      "status": "passed"
+    },
+    {
+      "app": "powerpoint",
+      "round": 2,
+      "status": "passed"
+    }
+  ],
+  "live_popup_resize": {
+    "status": "passed",
+    "cycles": 4,
+    "conditions": "Open card before resize, open again while restored, capture active document, maximize while card open, reopen/close card, responsiveness polling and caught-fault scan",
+    "log": "/tmp/tuxoffice-border-parent-live/summary.txt",
+    "restored_capture_sizes": [
+      [
+        1391,
+        954
+      ],
+      [
+        1891,
+        1204
+      ],
+      [
+        1141,
+        829
+      ],
+      [
+        2141,
+        1266
+      ]
+    ],
+    "regression": "Earlier build focused 8px-high standalone frame shadows; current build keeps their surfaces attached to a managed document frame."
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "formulas": 600000,
+  "full_recalculations": 5,
+  "checksum": 91287640.72137734,
+  "sumproduct": 37500425467.39893,
+  "status": "passed",
+  "gpu": "NVIDIA (COM-launched calculation; desktop scrolling uses Intel)",
+  "timings_seconds": {
+    "excel_start_s": 5.09,
+    "fill_s": 3.26,
+    "calcfull_x5_s": 0.38,
+    "readback_s": 1.55
+  },
+  "windows_comparison": "No matched baseline available",
+  "default_gpu_verification": {
+    "gpu": "Intel",
+    "explicit_filter_override": false,
+    "status": "passed",
+    "timings_seconds": {
+      "excel_start_s": 5.09,
+      "fill_s": 3.3,
+      "calcfull_x5_s": 0.4,
+      "readback_s": 1.56
+    }
+  }
+}

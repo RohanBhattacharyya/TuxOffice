@@ -1,0 +1,471 @@
+{
+  "status": "candidate_under_test",
+  "installed": false,
+  "driver_sha256": "6a41e76d4a66047e4f75c61a98531b19e9e0990c346c6292ff302d4fa32bcd3a",
+  "fix": "Keep child GPU surfaces in the real root stack during layout updates",
+  "runs": {
+    "functional": {
+      "artifact": "~/.cache/tuxoffice-validation/runs/functional/summary.json",
+      "result": [
+        {
+          "app": "word",
+          "status": "passed",
+          "checks": 11,
+          "elapsed_ms": 8052,
+          "pdf_pages": 3
+        },
+        {
+          "app": "excel",
+          "status": "passed",
+          "checks": 17,
+          "elapsed_ms": 8321,
+          "pdf_pages": 1
+        },
+        {
+          "app": "powerpoint",
+          "status": "passed",
+          "checks": 8,
+          "elapsed_ms": 13126,
+          "pdf_pages": 5
+        }
+      ]
+    },
+    "child-control": {
+      "artifact": "~/.cache/tuxoffice-validation/runs/child-control/summary.json",
+      "result": {
+        "status": "passed",
+        "frames": 1009,
+        "flash_frames": 0,
+        "process_exit": 0
+      }
+    },
+    "child-candidate": {
+      "artifact": "~/.cache/tuxoffice-validation/runs/child-candidate/summary.json",
+      "result": {
+        "status": "passed",
+        "frames": 1021,
+        "flash_frames": 0,
+        "process_exit": 0
+      }
+    },
+    "child-stacking-control": {
+      "artifact": "~/.cache/tuxoffice-validation/runs/child-stacking-control/summary.json",
+      "result": {
+        "status": "passed",
+        "frames": 1001,
+        "flash_frames": 0,
+        "process_exit": 0
+      }
+    },
+    "child-stacking-candidate": {
+      "artifact": "~/.cache/tuxoffice-validation/runs/child-stacking-candidate/summary.json",
+      "result": {
+        "status": "passed",
+        "frames": 1009,
+        "flash_frames": 0,
+        "process_exit": 0
+      }
+    },
+    "child-transparent-control": {
+      "artifact": "~/.cache/tuxoffice-validation/runs/child-transparent-control/summary.json",
+      "result": {
+        "status": "flicker-detected",
+        "frames": 954,
+        "flash_frames": 1,
+        "process_exit": 0
+      }
+    },
+    "child-transparent-candidate": {
+      "artifact": "~/.cache/tuxoffice-validation/runs/child-transparent-candidate/summary.json",
+      "result": {
+        "status": "passed",
+        "frames": 966,
+        "flash_frames": 0,
+        "process_exit": 0
+      }
+    },
+    "word-control-stress": {
+      "artifact": "~/.cache/tuxoffice-validation/runs/word-control-stress/summary.json",
+      "result": {
+        "status": "flicker-detected",
+        "app": "word",
+        "action": "ribbon",
+        "rounds": [
+          {
+            "trial": 1,
+            "frames": 228,
+            "document_flash_frames": 2,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 2,
+            "frames": 231,
+            "document_flash_frames": 3,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 3,
+            "frames": 236,
+            "document_flash_frames": 4,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 4,
+            "frames": 231,
+            "document_flash_frames": 2,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 5,
+            "frames": 237,
+            "document_flash_frames": 1,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 6,
+            "frames": 235,
+            "document_flash_frames": 4,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 7,
+            "frames": 237,
+            "document_flash_frames": 3,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 8,
+            "frames": 237,
+            "document_flash_frames": 3,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 9,
+            "frames": 231,
+            "document_flash_frames": 2,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 10,
+            "frames": 234,
+            "document_flash_frames": 2,
+            "ribbon_blank_frames": 0
+          }
+        ],
+        "marker": {
+          "window_pixel_rect": [
+            979,
+            449,
+            1279,
+            569
+          ],
+          "saturated_fraction": 1.0,
+          "capture_method": "KWin CaptureWindow, independent of desktop focus"
+        }
+      }
+    },
+    "word-candidate-stress": {
+      "artifact": "~/.cache/tuxoffice-validation/runs/word-candidate-stress/summary.json",
+      "result": {
+        "status": "failed",
+        "app": "word",
+        "action": "ribbon",
+        "rounds": [
+          {
+            "trial": 1,
+            "frames": 254,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 2,
+            "frames": 254,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 3,
+            "frames": 253,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 4,
+            "frames": 255,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 5,
+            "frames": 257,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 6,
+            "frames": 258,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 7,
+            "frames": 241,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 8,
+            "frames": 235,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 9,
+            "frames": 235,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 10,
+            "frames": 233,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          }
+        ],
+        "marker": {
+          "window_pixel_rect": [
+            979,
+            449,
+            1279,
+            569
+          ],
+          "saturated_fraction": 1.0,
+          "capture_method": "KWin CaptureWindow, independent of desktop focus"
+        },
+        "error": "Office crashed; see the original exception in gdb.txt.wine.log",
+        "active_window_at_failure": "TUXACTIVE {\"pid\":33483,\"app\":\"winword.exe\",\"officeCaption\":\"flicker-word - Compatibility Mode - Word\"}"
+      }
+    },
+    "word-layout-memory": {
+      "artifact": "~/.cache/tuxoffice-validation/runs/word-layout-memory/summary.json",
+      "result": {
+        "status": "passed",
+        "app": "word",
+        "action": "ribbon",
+        "rounds": [
+          {
+            "trial": 1,
+            "frames": 257,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 2,
+            "frames": 268,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 3,
+            "frames": 260,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 4,
+            "frames": 251,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 5,
+            "frames": 253,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 6,
+            "frames": 268,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 7,
+            "frames": 253,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          }
+        ],
+        "marker": {
+          "window_pixel_rect": [
+            979,
+            449,
+            1279,
+            569
+          ],
+          "saturated_fraction": 1.0,
+          "capture_method": "KWin CaptureWindow, independent of desktop focus"
+        }
+      }
+    },
+    "word-layout-memory-2": {
+      "artifact": "~/.cache/tuxoffice-validation/runs/word-layout-memory-2/summary.json",
+      "result": {
+        "status": "failed",
+        "app": "word",
+        "action": "ribbon",
+        "rounds": [
+          {
+            "trial": 1,
+            "frames": 247,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 2,
+            "frames": 249,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 3,
+            "frames": 253,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 4,
+            "frames": 234,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 5,
+            "frames": 230,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 6,
+            "frames": 232,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 7,
+            "frames": 232,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 8,
+            "frames": 238,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 9,
+            "frames": 237,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 10,
+            "frames": 238,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          }
+        ],
+        "marker": {
+          "window_pixel_rect": [
+            979,
+            449,
+            1279,
+            569
+          ],
+          "saturated_fraction": 1.0,
+          "capture_method": "KWin CaptureWindow, independent of desktop focus"
+        },
+        "error": "Office crashed; see the original exception in gdb.txt.wine.log",
+        "active_window_at_failure": "TUXACTIVE {\"pid\":58794,\"app\":\"winword.exe\",\"officeCaption\":\"flicker-word - Compatibility Mode - Word\"}"
+      }
+    },
+    "excel-cells": {
+      "artifact": "~/.cache/tuxoffice-validation/runs/excel-cells/summary.json",
+      "result": {
+        "status": "passed",
+        "app": "excel",
+        "action": "cells",
+        "rounds": [
+          {
+            "trial": 1,
+            "frames": 251,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 2,
+            "frames": 248,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 3,
+            "frames": 251,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          }
+        ],
+        "marker": {
+          "window_pixel_rect": [
+            1158,
+            369,
+            1639,
+            514
+          ],
+          "saturated_fraction": 1.0,
+          "capture_method": "KWin CaptureWindow, independent of desktop focus"
+        }
+      }
+    },
+    "powerpoint-ribbon": {
+      "artifact": "~/.cache/tuxoffice-validation/runs/powerpoint-ribbon/summary.json",
+      "result": {
+        "status": "flicker-detected",
+        "app": "powerpoint",
+        "action": "ribbon",
+        "rounds": [
+          {
+            "trial": 1,
+            "frames": 273,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 5
+          },
+          {
+            "trial": 2,
+            "frames": 271,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          },
+          {
+            "trial": 3,
+            "frames": 270,
+            "document_flash_frames": 0,
+            "ribbon_blank_frames": 0
+          }
+        ],
+        "marker": {
+          "window_pixel_rect": [
+            763,
+            715,
+            1134,
+            950
+          ],
+          "saturated_fraction": 1.0,
+          "capture_method": "KWin CaptureWindow, independent of desktop focus"
+        }
+      }
+    }
+  },
+  "known_failure": "Intermittent Office PrefetchAxis::Add crash after repeated Word tab switches; prevents promotion"
+}
