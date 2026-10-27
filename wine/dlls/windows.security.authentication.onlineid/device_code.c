@@ -437,15 +437,31 @@ static BOOL CALLBACK prompt_initialize( INIT_ONCE *once, void *param, void **con
 
 static void CALLBACK prompt_timer( HWND window, UINT message, UINT_PTR timer, DWORD time )
 {
-    if (cancelled( GetPropW( window, L"SodaIdentityCancel" ) )) EndDialog( window, IDCANCEL );
+    HANDLE cancel = GetPropW( window, L"SodaIdentityCancel" );
+    HWND front = GetForegroundWindow();
+    DWORD pid;
+
+    if (cancel && cancelled( cancel ))
+    {
+        EndDialog( window, IDCANCEL );
+        return;
+    }
+    /* Office may open its own sign-in dialog after the prompt; keep the
+     * prompt owned by the window in front so it stays above it. */
+    if (front && front != window && GetWindow( window, GW_OWNER ) != front &&
+        GetWindowThreadProcessId( front, &pid ) && pid == GetCurrentProcessId())
+    {
+        SetWindowLongPtrW( window, GWLP_HWNDPARENT, (LONG_PTR)front );
+        SetWindowPos( window, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE );
+    }
 }
 
 static LRESULT CALLBACK prompt_hook( int code, WPARAM wparam, LPARAM lparam )
 {
-    HANDLE cancel = TlsGetValue( prompt_tls );
-    if (code == HCBT_ACTIVATE && cancel)
+    if (code == HCBT_ACTIVATE && !GetPropW( (HWND)wparam, L"SodaIdentityPrompt" ))
     {
-        SetPropW( (HWND)wparam, L"SodaIdentityCancel", cancel );
+        SetPropW( (HWND)wparam, L"SodaIdentityPrompt", (HANDLE)1 );
+        SetPropW( (HWND)wparam, L"SodaIdentityCancel", TlsGetValue( prompt_tls ) );
         SetTimer( (HWND)wparam, 1, 100, prompt_timer );
     }
     return CallNextHookEx( NULL, code, wparam, lparam );
@@ -455,6 +471,8 @@ static HRESULT show_device_prompt( const char *verification_uri, const char *use
 {
     WCHAR uri[1024], code[128], message[1400];
     HHOOK hook = NULL;
+    HWND owner;
+    DWORD pid;
     int result;
 
     if (!MultiByteToWideChar( CP_UTF8, MB_ERR_INVALID_CHARS, verification_uri, -1, uri, ARRAY_SIZE(uri) ) ||
@@ -463,19 +481,19 @@ static HRESULT show_device_prompt( const char *verification_uri, const char *use
     swprintf( message, ARRAY_SIZE(message),
               L"Sign in to Microsoft 365 in your browser.\n\nCode: %s\n\nThe browser will open after you continue.", code );
     if (cancelled( cancel )) return HRESULT_FROM_WIN32( ERROR_CANCELLED );
-    if (cancel)
-    {
-        if (!InitOnceExecuteOnce( &prompt_once, prompt_initialize, NULL, NULL ) || !TlsSetValue( prompt_tls, cancel ))
-            return HRESULT_FROM_WIN32( GetLastError() );
-        if (!(hook = SetWindowsHookExW( WH_CBT, prompt_hook, NULL, GetCurrentThreadId() )))
-        {
-            TlsSetValue( prompt_tls, NULL );
-            return HRESULT_FROM_WIN32( GetLastError() );
-        }
-    }
-    result = MessageBoxW( NULL, message, L"Microsoft 365 sign-in", MB_OKCANCEL | MB_ICONINFORMATION );
-    if (hook) UnhookWindowsHookEx( hook );
-    if (cancel) TlsSetValue( prompt_tls, NULL );
+    if (!InitOnceExecuteOnce( &prompt_once, prompt_initialize, NULL, NULL ) || !TlsSetValue( prompt_tls, cancel ))
+        return HRESULT_FROM_WIN32( GetLastError() );
+    if (!(hook = SetWindowsHookExW( WH_CBT, prompt_hook, NULL, GetCurrentThreadId() )))
+        return HRESULT_FROM_WIN32( GetLastError() );
+    /* The request runs on a worker thread; without an owner the prompt can
+     * open behind Office's own sign-in dialog, where nobody sees the code. */
+    if ((owner = GetForegroundWindow()) && (!GetWindowThreadProcessId( owner, &pid ) || pid != GetCurrentProcessId()))
+        owner = NULL;
+    /* Office's own sign-in dialog is a popup of the window in front. */
+    if (owner) owner = GetLastActivePopup( owner );
+    result = MessageBoxW( owner, message, L"Microsoft 365 sign-in", MB_OKCANCEL | MB_ICONINFORMATION | MB_SETFOREGROUND );
+    UnhookWindowsHookEx( hook );
+    TlsSetValue( prompt_tls, NULL );
     if (result != IDOK || cancelled( cancel ))
         return HRESULT_FROM_WIN32( ERROR_CANCELLED );
     if ((INT_PTR)ShellExecuteW( NULL, L"open", uri, NULL, NULL, SW_SHOWNORMAL ) <= 32)
@@ -1070,6 +1088,83 @@ done:
     return hr;
 }
 
+/* Office asks for tokens from several threads at once; each request that
+ * misses the cache would start its own browser sign-in, and the user would
+ * see a prompt with a different code for every one of them. Run one
+ * interactive sign-in at a time; the others then find its tokens. */
+static SRWLOCK interactive_lock = SRWLOCK_INIT;
+static DWORD interactive_owner;
+static BOOL interactive_declined; /* the user cancelled the last sign-in */
+static HANDLE interactive_idle;
+static INIT_ONCE interactive_once = INIT_ONCE_STATIC_INIT;
+
+static BOOL CALLBACK interactive_initialize( INIT_ONCE *once, void *param, void **context )
+{
+    return !!(interactive_idle = CreateEventW( NULL, TRUE, TRUE, NULL ));
+}
+
+/* Returns S_OK with *owned set when this call must release, S_OK without it
+ * when this thread already runs a sign-in, or ERROR_CANCELLED, also when
+ * the user cancelled the sign-in this call waited for. *waited is set when
+ * another sign-in finished first. */
+static HRESULT begin_interactive( HANDLE cancel, BOOL *owned, BOOL *waited )
+{
+    HANDLE handles[2];
+    DWORD count, ret;
+    MSG msg;
+
+    *owned = *waited = FALSE;
+    if (!InitOnceExecuteOnce( &interactive_once, interactive_initialize, NULL, NULL ))
+        return HRESULT_FROM_WIN32( GetLastError() );
+    for (;;)
+    {
+        AcquireSRWLockExclusive( &interactive_lock );
+        if (!interactive_owner || interactive_owner == GetCurrentThreadId())
+        {
+            if (*waited && interactive_declined)
+            {
+                ReleaseSRWLockExclusive( &interactive_lock );
+                return HRESULT_FROM_WIN32( ERROR_CANCELLED );
+            }
+            if (!interactive_owner)
+            {
+                interactive_owner = GetCurrentThreadId();
+                ResetEvent( interactive_idle );
+                *owned = TRUE;
+            }
+            ReleaseSRWLockExclusive( &interactive_lock );
+            return S_OK;
+        }
+        ReleaseSRWLockExclusive( &interactive_lock );
+        *waited = TRUE;
+        handles[0] = interactive_idle;
+        handles[1] = cancel;
+        count = cancel ? 2 : 1;
+        /* Keep messages flowing, as the prompt itself would. */
+        ret = MsgWaitForMultipleObjects( count, handles, FALSE, INFINITE, QS_ALLINPUT );
+        if (ret == WAIT_OBJECT_0 + 1 && cancel) return HRESULT_FROM_WIN32( ERROR_CANCELLED );
+        if (ret == WAIT_OBJECT_0 + count)
+        {
+            while (PeekMessageW( &msg, NULL, 0, 0, PM_REMOVE ))
+            {
+                TranslateMessage( &msg );
+                DispatchMessageW( &msg );
+            }
+        }
+        else if (ret == WAIT_FAILED) return HRESULT_FROM_WIN32( GetLastError() );
+    }
+}
+
+static void end_interactive( BOOL owned, BOOL declined )
+{
+    if (!owned) return;
+    AcquireSRWLockExclusive( &interactive_lock );
+    interactive_owner = 0;
+    interactive_declined = declined;
+    SetEvent( interactive_idle );
+    ReleaseSRWLockExclusive( &interactive_lock );
+}
+
 HRESULT identity_device_authorize( const GUID *application_id, HSTRING service, HSTRING authority, HSTRING login_hint,
                                    BOOL force, HANDLE cancel, struct identity_reply *reply )
 {
@@ -1082,6 +1177,7 @@ HRESULT identity_device_authorize( const GUID *application_id, HSTRING service, 
     HRESULT hr = E_FAIL;
     ULONG trace_id = InterlockedIncrement( &trace_counter );
     WCHAR device_path[80], token_path[80];
+    BOOL owned = FALSE, waited = FALSE, declined = FALSE;
 
     eagle_trace_native_identity( trace_id, 2, EAGLE_IDENTITY_BEGIN, E_PENDING, __builtin_return_address(0) );
     if (!application_id || !reply)
@@ -1115,6 +1211,21 @@ HRESULT identity_device_authorize( const GUID *application_id, HSTRING service, 
         eagle_trace_native_identity( trace_id, 2, EAGLE_IDENTITY_COMPLETE, hr, __builtin_return_address(0) );
         return hr;
     }
+    if (FAILED(hr = begin_interactive( cancel, &owned, &waited )))
+    {
+        reply->error = hr;
+        eagle_trace_native_identity( trace_id, 2, EAGLE_IDENTITY_COMPLETE, hr, __builtin_return_address(0) );
+        return hr;
+    }
+    /* A sign-in that finished while this request waited has the tokens. */
+    if (waited && !force && SUCCEEDED(identity_device_get_token( application_id, service, authority, NULL,
+                                                              login_hint, cancel, reply )))
+    {
+        end_interactive( owned, FALSE );
+        eagle_trace_native_identity( trace_id, 2, EAGLE_IDENTITY_COMPLETE, S_OK, __builtin_return_address(0) );
+        return S_OK;
+    }
+    identity_reply_clear( reply );
     if (FAILED(hr = guid_to_utf8( application_id, client_id )) ||
         FAILED(hr = build_endpoint( authority, L"devicecode", device_path )) ||
         FAILED(hr = build_endpoint( authority, L"token", token_path )) ||
@@ -1157,6 +1268,7 @@ HRESULT identity_device_authorize( const GUID *application_id, HSTRING service, 
     eagle_trace_native_identity( trace_id, 2, EAGLE_IDENTITY_PROMPT, E_PENDING, __builtin_return_address(0) );
     hr = show_device_prompt( verification_uri, user_code, cancel );
     eagle_trace_native_identity( trace_id, 2, EAGLE_IDENTITY_PROMPT, hr, __builtin_return_address(0) );
+    declined = hr == HRESULT_FROM_WIN32( ERROR_CANCELLED ) && !cancelled( cancel );
     if (FAILED(hr)) goto done;
     if (!(encoded_code = form_encode( device_code )))
     {
@@ -1198,7 +1310,8 @@ HRESULT identity_device_authorize( const GUID *application_id, HSTRING service, 
         if (!strcmp( error, "slow_down" )) interval += 5;
         else if (strcmp( error, "authorization_pending" ))
         {
-            hr = !strcmp( error, "authorization_declined" ) ? HRESULT_FROM_WIN32( ERROR_CANCELLED ) : E_ACCESSDENIED;
+            declined = !strcmp( error, "authorization_declined" );
+            hr = declined ? HRESULT_FROM_WIN32( ERROR_CANCELLED ) : E_ACCESSDENIED;
             goto done;
         }
     } while (elapsed < expires);
@@ -1238,6 +1351,7 @@ done:
     free( user_code );
     free( verification_uri );
     free( error );
+    end_interactive( owned, declined );
     eagle_trace_native_identity( trace_id, 2, EAGLE_IDENTITY_COMPLETE, hr, __builtin_return_address(0) );
     return hr;
 }
