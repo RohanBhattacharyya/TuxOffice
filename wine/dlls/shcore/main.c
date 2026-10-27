@@ -755,6 +755,14 @@ static HRESULT WINAPI shstream_Commit(IStream *iface, DWORD flags)
     return E_NOTIMPL;
 }
 
+static HRESULT WINAPI memstream_Commit(IStream *iface, DWORD flags)
+{
+    TRACE("%p, %#lx.\n", iface, flags);
+
+    /* Writes already update the backing buffer of this direct-mode stream. */
+    return S_OK;
+}
+
 static HRESULT WINAPI shstream_Revert(IStream *iface)
 {
     struct shstream *stream = impl_from_IStream(iface);
@@ -821,7 +829,7 @@ static const IStreamVtbl memstreamvtbl =
     memstream_Seek,
     memstream_SetSize,
     shstream_CopyTo,
-    shstream_Commit,
+    memstream_Commit,
     shstream_Revert,
     shstream_LockRegion,
     shstream_UnlockRegion,

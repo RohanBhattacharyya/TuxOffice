@@ -769,6 +769,9 @@ static void test_SHCreateMemStream(void)
     ok(hr == S_OK, "Failed to write, hr %#lx.\n", hr);
     ok(num == sizeof(buff), "expected %Iu, got %lu\n", sizeof(buff), num);
 
+    hr = IStream_Commit(stream, STGC_DEFAULT);
+    ok(hr == S_OK, "Failed to commit memory stream, hr %#lx.\n", hr);
+
     off.QuadPart = 0;
     hr = IStream_Seek(stream, off, STREAM_SEEK_SET, NULL);
     ok(hr == S_OK, "Failed to seek, hr %#lx.\n", hr);
