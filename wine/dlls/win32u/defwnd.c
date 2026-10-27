@@ -24,6 +24,9 @@
 #pragma makedep unix
 #endif
 
+#include <float.h>
+#include <math.h>
+
 #include "ntgdi_private.h"
 #include "ntuser_private.h"
 #include "wine/server.h"
@@ -1113,6 +1116,8 @@ void get_sys_popup_pos( HWND hwnd, RECT *rect )
     }
 }
 
+static BOOL flat_caption_buttons( DWORD ex_style );
+
 /* Draw a window frame inside the given rectangle, and update the rectangle. */
 static void draw_nc_frame( HDC  hdc, RECT  *rect, BOOL  active, DWORD style, DWORD ex_style )
 {
@@ -1147,6 +1152,9 @@ static void draw_nc_frame( HDC  hdc, RECT  *rect, BOOL  active, DWORD style, DWO
         else if (ex_style & WS_EX_STATICEDGE) color = COLOR_WINDOWFRAME;
         else if (style & (WS_DLGFRAME|WS_THICKFRAME)) color = COLOR_3DFACE;
         else color = COLOR_WINDOWFRAME;
+        /* Flat resizable frames are one colour, as on Windows 10 and later. */
+        if ((style & WS_THICKFRAME) && (style & WS_CAPTION) == WS_CAPTION && flat_caption_buttons( ex_style ))
+            color = active ? COLOR_ACTIVEBORDER : COLOR_INACTIVEBORDER;
         NtGdiSelectBrush( hdc, get_sys_color_brush( color ));
 
         /* Draw frame */
@@ -1487,6 +1495,204 @@ BOOL draw_frame_menu( HDC dc, RECT *r, UINT flags )
     return retval;
 }
 
+/* With visual styles on, Windows 10 and later draw flat caption buttons
+ * 46 pixels wide at 96 DPI, with thin glyphs and a hover highlight, instead
+ * of the classic raised buttons. */
+static BOOL flat_caption_buttons( DWORD ex_style )
+{
+    static int enabled = -1;
+
+    if (ex_style & WS_EX_TOOLWINDOW) return FALSE;
+    if (enabled == -1)
+    {
+        char buffer[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data[4 * sizeof(WCHAR)])];
+        KEY_VALUE_PARTIAL_INFORMATION *value = (void *)buffer;
+        HKEY key;
+        int theme = 0;
+
+        if ((key = reg_open_hkcu_key( "Software\\Microsoft\\Windows\\CurrentVersion\\ThemeManager" )))
+        {
+            if (query_reg_ascii_value( key, "ThemeActive", value, sizeof(buffer) ) && value->Type == REG_SZ)
+                theme = ((WCHAR *)value->Data)[0] == '1';
+            NtClose( key );
+        }
+        enabled = theme;
+    }
+    return enabled;
+}
+
+/* Hit testing, caption layout and drawing must agree on these widths. */
+static int caption_button_width( DWORD ex_style, UINT hit )
+{
+    if (flat_caption_buttons( ex_style )) return muldiv( 46, get_thread_dpi(), 96 );
+    return hit == HTCLOSE ? get_system_metrics( SM_CYCAPTION ) : get_system_metrics( SM_CXSIZE );
+}
+
+/* The caption button under the mouse; there is only one mouse. */
+static HWND hot_caption_hwnd;
+static UINT hot_caption_button;
+
+static void get_flat_caption_button_rect( HWND hwnd, UINT hit, RECT *rect )
+{
+    DWORD style = get_window_long( hwnd, GWL_STYLE );
+    DWORD ex_style = get_window_long( hwnd, GWL_EXSTYLE );
+    int width = caption_button_width( ex_style, hit );
+
+    get_inside_rect( hwnd, COORDS_WINDOW, rect, style, ex_style );
+    rect->bottom = rect->top + get_system_metrics( SM_CYCAPTION ) - 1;
+    if (hit != HTCLOSE && (style & WS_SYSMENU)) rect->right -= width;
+    if (hit == HTMINBUTTON) rect->right -= width;
+    rect->left = rect->right - width;
+}
+
+static COLORREF blend_color( COLORREF back, COLORREF fore, float amount )
+{
+    return RGB( GetRValue( back ) + (GetRValue( fore ) - GetRValue( back )) * amount + 0.5f,
+                GetGValue( back ) + (GetGValue( fore ) - GetGValue( back )) * amount + 0.5f,
+                GetBValue( back ) + (GetBValue( fore ) - GetBValue( back )) * amount + 0.5f );
+}
+
+struct glyph_line { float x0, y0, x1, y1; };
+
+static float glyph_line_distance( const struct glyph_line *line, float x, float y )
+{
+    float dx = line->x1 - line->x0, dy = line->y1 - line->y0, length = dx * dx + dy * dy, t = 0;
+
+    if (length > 0) t = max( 0.0f, min( 1.0f, ((x - line->x0) * dx + (y - line->y0) * dy) / length ));
+    dx = x - (line->x0 + t * dx);
+    dy = y - (line->y0 + t * dy);
+    return sqrtf( dx * dx + dy * dy );
+}
+
+/* Draws antialiased lines over a known solid background, pixel by pixel. */
+static void draw_glyph_lines( HDC hdc, int x, int y, int size, const struct glyph_line *lines,
+                              unsigned int count, float width, COLORREF back, COLORREF fore )
+{
+    int px, py;
+    unsigned int i;
+
+    for (py = -1; py <= size; py++)
+    {
+        for (px = -1; px <= size; px++)
+        {
+            float distance = FLT_MAX, coverage;
+
+            for (i = 0; i < count; i++)
+                distance = min( distance, glyph_line_distance( &lines[i], px + 0.5f, py + 0.5f ));
+            coverage = width / 2 + 0.5f - distance;
+            if (coverage <= 0) continue;
+            NtGdiSetPixel( hdc, x + px, y + py, blend_color( back, fore, min( coverage, 1.0f )));
+        }
+    }
+}
+
+static BOOL is_nc_active( HWND hwnd )
+{
+    WND *win = get_win_ptr( hwnd );
+    BOOL active = FALSE;
+
+    if (win && win != WND_OTHER_PROCESS && win != WND_DESKTOP)
+    {
+        active = !!(win->flags & WIN_NCACTIVATED);
+        release_win_ptr( win );
+    }
+    return active;
+}
+
+static void draw_flat_caption_button( HWND hwnd, HDC hdc, UINT hit, BOOL down, BOOL grayed )
+{
+    UINT dpi = get_thread_dpi();
+    BOOL active = is_nc_active( hwnd ), gradient = FALSE;
+    BOOL hot = !grayed && hot_caption_hwnd == hwnd && hot_caption_button == hit;
+    int size = muldiv( 10, dpi, 96 ), offset = muldiv( 2, dpi, 96 ), x, y;
+    float width = max( 1, dpi / 96 ), a, b, c;
+    struct glyph_line lines[8];
+    unsigned int count = 0;
+    COLORREF back, fore;
+    DWORD style;
+    HBRUSH brush;
+    RECT rect;
+
+    get_flat_caption_button_rect( hwnd, hit, &rect );
+    NtUserSystemParametersInfo( SPI_GETGRADIENTCAPTIONS, 0, &gradient, 0 );
+    if (gradient) back = get_sys_color( active ? COLOR_GRADIENTACTIVECAPTION : COLOR_GRADIENTINACTIVECAPTION );
+    else back = get_sys_color( active ? COLOR_ACTIVECAPTION : COLOR_INACTIVECAPTION );
+    fore = get_sys_color( active ? COLOR_CAPTIONTEXT : COLOR_INACTIVECAPTIONTEXT );
+    if (grayed) fore = blend_color( back, fore, 0.35f );
+    else if (hit == HTCLOSE && (hot || down))
+    {
+        back = down ? RGB( 0xc8, 0x40, 0x31 ) : RGB( 0xc4, 0x2b, 0x1c );
+        fore = RGB( 0xff, 0xff, 0xff );
+    }
+    else if (down) back = blend_color( back, RGB( 0, 0, 0 ), 0.2f );
+    else if (hot) back = blend_color( back, RGB( 0, 0, 0 ), 0.1f );
+
+    brush = NtGdiCreateSolidBrush( back, NULL );
+    fill_rect( hdc, &rect, brush );
+    NtGdiDeleteObjectApp( brush );
+
+    x = rect.left + (rect.right - rect.left - size) / 2;
+    y = rect.top + (rect.bottom - rect.top - size) / 2;
+    /* Line centres fall on pixel centres so that straight lines stay sharp. */
+    a = 0.5f;
+    b = size - 0.5f;
+    c = size - offset - 0.5f;
+    style = get_window_long( hwnd, GWL_STYLE );
+    if ((hit == HTMINBUTTON && (style & WS_MINIMIZE)) || (hit == HTMAXBUTTON && (style & WS_MAXIMIZE)))
+    {
+        /* The front window, then the visible edges of the one behind it. */
+        lines[count++] = (struct glyph_line){ a, a + offset, c, a + offset };
+        lines[count++] = (struct glyph_line){ c, a + offset, c, b };
+        lines[count++] = (struct glyph_line){ c, b, a, b };
+        lines[count++] = (struct glyph_line){ a, b, a, a + offset };
+        lines[count++] = (struct glyph_line){ a + offset, a + offset, a + offset, a };
+        lines[count++] = (struct glyph_line){ a + offset, a, b, a };
+        lines[count++] = (struct glyph_line){ b, a, b, c };
+        lines[count++] = (struct glyph_line){ b, c, c, c };
+    }
+    else if (hit == HTCLOSE)
+    {
+        lines[count++] = (struct glyph_line){ a, a, b, b };
+        lines[count++] = (struct glyph_line){ b, a, a, b };
+    }
+    else if (hit == HTMINBUTTON)
+        lines[count++] = (struct glyph_line){ a, size / 2 + 0.5f, b, size / 2 + 0.5f };
+    else
+    {
+        lines[count++] = (struct glyph_line){ a, a, b, a };
+        lines[count++] = (struct glyph_line){ b, a, b, b };
+        lines[count++] = (struct glyph_line){ b, b, a, b };
+        lines[count++] = (struct glyph_line){ a, b, a, a };
+    }
+    draw_glyph_lines( hdc, x, y, size, lines, count, width, back, fore );
+}
+
+static void frame_rect( HDC hdc, const RECT *rect, HBRUSH brush )
+{
+    HBRUSH prev = NtGdiSelectBrush( hdc, brush );
+    int width = rect->right - rect->left, height = rect->bottom - rect->top;
+
+    NtGdiPatBlt( hdc, rect->left, rect->top, width, 1, PATCOPY );
+    NtGdiPatBlt( hdc, rect->left, rect->bottom - 1, width, 1, PATCOPY );
+    NtGdiPatBlt( hdc, rect->left, rect->top, 1, height, PATCOPY );
+    NtGdiPatBlt( hdc, rect->right - 1, rect->top, 1, height, PATCOPY );
+    NtGdiSelectBrush( hdc, prev );
+}
+
+/* With flat captions, a uniform one-pixel border replaces the raised edge. */
+static void draw_flat_frame_edge( HDC hdc, RECT *rect, BOOL active, DWORD style )
+{
+    HBRUSH border = NtGdiCreateSolidBrush( active ? RGB( 0x99, 0x99, 0x99 ) : RGB( 0xbb, 0xbb, 0xbb ), NULL );
+    UINT inner = COLOR_3DFACE;
+
+    if (style & WS_THICKFRAME) inner = active ? COLOR_ACTIVEBORDER : COLOR_INACTIVEBORDER;
+    frame_rect( hdc, rect, border );
+    InflateRect( rect, -1, -1 );
+    frame_rect( hdc, rect, get_sys_color_brush( inner ));
+    InflateRect( rect, -1, -1 );
+    NtGdiDeleteObjectApp( border );
+}
+
 static void draw_close_button( HWND hwnd, HDC hdc, BOOL down, BOOL grayed )
 {
     RECT rect;
@@ -1494,6 +1700,11 @@ static void draw_close_button( HWND hwnd, HDC hdc, BOOL down, BOOL grayed )
     DWORD ex_style = get_window_long( hwnd, GWL_EXSTYLE );
     UINT flags = DFCS_CAPTIONCLOSE;
 
+    if (flat_caption_buttons( ex_style ))
+    {
+        draw_flat_caption_button( hwnd, hdc, HTCLOSE, down, grayed );
+        return;
+    }
     get_inside_rect( hwnd, COORDS_WINDOW, &rect, style, ex_style );
 
     /* A tool window has a smaller Close button */
@@ -1532,6 +1743,11 @@ static void draw_max_button( HWND hwnd, HDC hdc, BOOL down, BOOL grayed )
 
     /* never draw maximize box when window has WS_EX_TOOLWINDOW style */
     if (ex_style & WS_EX_TOOLWINDOW) return;
+    if (flat_caption_buttons( ex_style ))
+    {
+        draw_flat_caption_button( hwnd, hdc, HTMAXBUTTON, down, grayed );
+        return;
+    }
 
     flags = (style & WS_MAXIMIZE) ? DFCS_CAPTIONRESTORE : DFCS_CAPTIONMAX;
 
@@ -1555,6 +1771,11 @@ static void draw_min_button( HWND hwnd, HDC hdc, BOOL down, BOOL grayed )
 
     /* never draw minimize box when window has WS_EX_TOOLWINDOW style */
     if (ex_style & WS_EX_TOOLWINDOW) return;
+    if (flat_caption_buttons( ex_style ))
+    {
+        draw_flat_caption_button( hwnd, hdc, HTMINBUTTON, down, grayed );
+        return;
+    }
 
     flags = (style & WS_MINIMIZE) ? DFCS_CAPTIONRESTORE : DFCS_CAPTIONMIN;
 
@@ -1585,6 +1806,9 @@ static void draw_nc_caption( HDC hdc, RECT *rect, HWND hwnd, DWORD  style,
 
     if ((ex_style & (WS_EX_STATICEDGE|WS_EX_CLIENTEDGE|WS_EX_DLGMODALFRAME)) == WS_EX_STATICEDGE)
         pen_color = COLOR_WINDOWFRAME;
+    /* Flat captions have no line separating them from the client area. */
+    if (flat_caption_buttons( ex_style ))
+        pen_color = active ? COLOR_ACTIVECAPTION : COLOR_INACTIVECAPTION;
     prev_pen = NtGdiSelectPen( hdc, get_sys_color_pen( pen_color ));
     NtGdiMoveTo( hdc, r.left, r.bottom - 1, NULL );
     NtGdiLineTo( hdc, r.right, r.bottom - 1 );
@@ -1611,15 +1835,15 @@ static void draw_nc_caption( HDC hdc, RECT *rect, HWND hwnd, DWORD  style,
         /* Draw a grayed close button if disabled or if SC_CLOSE is not there */
         draw_close_button( hwnd, hdc, FALSE,
                            (state & (MF_DISABLED | MF_GRAYED)) || (state == 0xFFFFFFFF) );
-        r.right -= get_system_metrics( SM_CYCAPTION ) - 1;
+        if (flat_caption_buttons( ex_style )) r.right -= caption_button_width( ex_style, HTCLOSE );
+        else r.right -= get_system_metrics( SM_CYCAPTION ) - 1;
 
         if ((style & WS_MAXIMIZEBOX) || (style & WS_MINIMIZEBOX))
         {
             draw_max_button( hwnd, hdc, FALSE, !(style & WS_MAXIMIZEBOX) );
-            r.right -= get_system_metrics( SM_CXSIZE ) + 1;
-
             draw_min_button( hwnd, hdc, FALSE, !(style & WS_MINIMIZEBOX) );
-            r.right -= get_system_metrics( SM_CXSIZE ) + 1;
+            if (flat_caption_buttons( ex_style )) r.right -= 2 * caption_button_width( ex_style, HTMAXBUTTON );
+            else r.right -= 2 * (get_system_metrics( SM_CXSIZE ) + 1);
         }
     }
 
@@ -1787,6 +2011,9 @@ static void nc_paint( HWND hwnd, HRGN clip )
 
     if (has_static_outer_frame( ex_style ))
         draw_rect_edge( hdc, &rect, BDR_SUNKENOUTER, BF_RECT | BF_ADJUST, 1 );
+    else if (has_big_frame( style, ex_style ) && (style & WS_CAPTION) == WS_CAPTION &&
+             flat_caption_buttons( ex_style ))
+        draw_flat_frame_edge( hdc, &rect, active, style );
     else if (has_big_frame( style, ex_style ))
         draw_rect_edge( hdc, &rect, EDGE_RAISED, BF_RECT | BF_ADJUST, 1 );
 
@@ -2045,18 +2272,18 @@ LRESULT handle_nc_hit_test( HWND hwnd, POINT pt )
                 /* Check close button */
                 if (style & WS_SYSMENU)
                 {
-                    rects.window.left += get_system_metrics( SM_CYCAPTION );
+                    rects.window.left += caption_button_width( ex_style, HTCLOSE );
                     if (pt.x < rects.window.left) return HTCLOSE;
                 }
 
                 if (min_or_max_box && !(ex_style & WS_EX_TOOLWINDOW))
                 {
                     /* Check maximize box */
-                    rects.window.left += get_system_metrics( SM_CXSIZE );
+                    rects.window.left += caption_button_width( ex_style, HTMAXBUTTON );
                     if (pt.x < rects.window.left) return HTMAXBUTTON;
 
                     /* Check minimize box */
-                    rects.window.left += get_system_metrics( SM_CXSIZE );
+                    rects.window.left += caption_button_width( ex_style, HTMINBUTTON );
                     if (pt.x < rects.window.left) return HTMINBUTTON;
                 }
             }
@@ -2073,18 +2300,20 @@ LRESULT handle_nc_hit_test( HWND hwnd, POINT pt )
                 /* Check close button */
                 if (style & WS_SYSMENU)
                 {
-                    rects.window.right -= get_system_metrics( SM_CYCAPTION );
+                    /* Flat buttons respond exactly where they are drawn. */
+                    if (flat_caption_buttons( ex_style )) rects.window.right--;
+                    rects.window.right -= caption_button_width( ex_style, HTCLOSE );
                     if (pt.x > rects.window.right) return HTCLOSE;
                 }
 
                 if (min_or_max_box && !(ex_style & WS_EX_TOOLWINDOW))
                 {
                     /* Check maximize box */
-                    rects.window.right -= get_system_metrics( SM_CXSIZE );
+                    rects.window.right -= caption_button_width( ex_style, HTMAXBUTTON );
                     if (pt.x > rects.window.right) return HTMAXBUTTON;
 
                     /* Check minimize box */
-                    rects.window.right -= get_system_metrics( SM_CXSIZE );
+                    rects.window.right -= caption_button_width( ex_style, HTMINBUTTON );
                     if (pt.x > rects.window.right) return HTMINBUTTON;
                 }
             }
@@ -2402,6 +2631,50 @@ static HBRUSH handle_control_color( HDC hdc, UINT type )
     return get_sys_color_brush( COLOR_WINDOW );
 }
 
+static void redraw_caption_button( HWND hwnd, UINT hit )
+{
+    DWORD style = get_window_long( hwnd, GWL_STYLE );
+    HMENU sys_menu;
+    UINT state;
+    HDC hdc;
+
+    if ((style & WS_CAPTION) != WS_CAPTION || !(style & WS_SYSMENU)) return;
+    if (hit != HTCLOSE && !(style & (WS_MAXIMIZEBOX | WS_MINIMIZEBOX))) return;
+    if (!(hdc = NtUserGetWindowDC( hwnd ))) return;
+    if (hit == HTCLOSE)
+    {
+        sys_menu = NtUserGetSystemMenu( hwnd, FALSE );
+        state = get_menu_state( sys_menu, SC_CLOSE, MF_BYCOMMAND );
+        draw_close_button( hwnd, hdc, FALSE, (state & (MF_DISABLED | MF_GRAYED)) || state == 0xffffffff );
+    }
+    else if (hit == HTMAXBUTTON) draw_max_button( hwnd, hdc, FALSE, !(style & WS_MAXIMIZEBOX) );
+    else draw_min_button( hwnd, hdc, FALSE, !(style & WS_MINIMIZEBOX) );
+    NtUserReleaseDC( hwnd, hdc );
+}
+
+/* Highlights the flat caption button under the mouse, as Windows does. */
+static void set_hot_caption_button( HWND hwnd, UINT hit )
+{
+    HWND old_hwnd = hot_caption_hwnd;
+    UINT old_hit = hot_caption_button;
+
+    if (!flat_caption_buttons( get_window_long( hwnd, GWL_EXSTYLE ))) return;
+    if (hit != HTCLOSE && hit != HTMAXBUTTON && hit != HTMINBUTTON) hit = 0;
+    if (old_hwnd == hwnd && old_hit == hit) return;
+    if (old_hwnd != hwnd && !hit) return;
+
+    hot_caption_hwnd = hit ? hwnd : 0;
+    hot_caption_button = hit;
+    if (old_hwnd && old_hit) redraw_caption_button( old_hwnd, old_hit );
+    if (hit)
+    {
+        TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE | TME_NONCLIENT, hwnd, 0 };
+
+        redraw_caption_button( hwnd, hit );
+        NtUserTrackMouseEvent( &tme );
+    }
+}
+
 static LRESULT handle_nc_mouse_move( HWND hwnd, WPARAM wparam, LPARAM lparam )
 {
     RECT rect;
@@ -2409,6 +2682,7 @@ static LRESULT handle_nc_mouse_move( HWND hwnd, WPARAM wparam, LPARAM lparam )
 
     TRACE( "hwnd=%p wparam=%#lx lparam=%#lx\n", hwnd, (long)wparam, lparam );
 
+    set_hot_caption_button( hwnd, wparam );
     if (wparam != HTHSCROLL && wparam != HTVSCROLL)
         return 0;
 
@@ -2430,6 +2704,7 @@ static LRESULT handle_nc_mouse_leave( HWND hwnd )
 
     TRACE( "hwnd=%p\n", hwnd );
 
+    set_hot_caption_button( hwnd, 0 );
     if (style & WS_HSCROLL)
         handle_scroll_event( hwnd, SB_HORZ, WM_NCMOUSELEAVE, pt );
     if (style & WS_VSCROLL)
