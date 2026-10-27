@@ -186,8 +186,64 @@ install_system() {
   TUXOFFICE=$(command -v tuxoffice || echo /usr/bin/tuxoffice)
 }
 
+# What the runner and launcher need from the system, as "tool:NAME" or
+# "lib:SONAME", with the package that provides each on deb and Arch systems
+# (dnf and zypper install by file or library name directly).
+REQUIREMENTS=(
+  "tool:python3|python3|python" "tool:7z|7zip|7zip" "tool:unzip|unzip|unzip"
+  "tool:cabextract|cabextract|cabextract"
+  "lib:libunwind.so.8|libunwind8|libunwind" "lib:libvulkan.so.1|libvulkan1|vulkan-icd-loader"
+  "lib:libwayland-client.so.0|libwayland-client0|wayland" "lib:libwayland-egl.so.1|libwayland-egl1|wayland"
+  "lib:libxkbcommon.so.0|libxkbcommon0|libxkbcommon" "lib:libxkbregistry.so.0|libxkbregistry0|libxkbcommon"
+  "lib:libEGL.so.1|libegl1|libglvnd" "lib:libfreetype.so.6|libfreetype6|freetype2"
+  "lib:libfontconfig.so.1|libfontconfig1|fontconfig" "lib:libgnutls.so.30|libgnutls30t64|gnutls"
+  "lib:libsecret-1.so.0|libsecret-1-0|libsecret" "lib:libdbus-1.so.3|libdbus-1-3|dbus"
+)
+
+have_library() { # soname
+  local dir
+  if command -v ldconfig >/dev/null || [[ -x /sbin/ldconfig ]]; then
+    "$(command -v ldconfig || echo /sbin/ldconfig)" -p 2>/dev/null | grep -q " $1 " && return 0
+  fi
+  for dir in /usr/lib64 /usr/lib /usr/lib/x86_64-linux-gnu /lib64 /lib/x86_64-linux-gnu; do
+    [[ -e $dir/$1 ]] && return 0
+  done
+  return 1
+}
+
+missing_requirements() { # -> lines "kind:name|deb|arch" that are missing
+  local entry what name
+  for entry in "${REQUIREMENTS[@]}"; do
+    what=${entry%%|*} name=${what#*:}
+    case $what in
+      tool:*) command -v "$name" >/dev/null || echo "$entry" ;;
+      lib:*) have_library "$name" || echo "$entry" ;;
+    esac
+  done
+}
+
+install_requirements() { # entries...
+  local entry what name names=()
+  for entry in "$@"; do
+    what=${entry%%|*} name=${what#*:}
+    case $FAMILY in
+      deb) names+=("$(cut -d'|' -f2 <<<"$entry")") ;;
+      arch) names+=("$(cut -d'|' -f3 <<<"$entry")") ;;
+      rpm-dnf|rpm-zypper)
+        if [[ $what == tool:* ]]; then names+=("/usr/bin/$name"); else names+=("$name()(64bit)"); fi ;;
+    esac
+  done
+  mapfile -t names < <(printf '%s\n' "${names[@]}" | sort -u)
+  case $FAMILY in
+    deb) sudo_cmd apt-get install -y "${names[@]}" ;;
+    rpm-dnf) sudo_cmd dnf install -y "${names[@]}" ;;
+    rpm-zypper) sudo_cmd zypper --non-interactive install "${names[@]}" ;;
+    arch) sudo_cmd pacman -S --noconfirm --needed "${names[@]}" ;;
+  esac
+}
+
 install_user() {
-  local file missing=() tool
+  local file entry missing=() names=()
   command -v xz >/dev/null || die "xz is needed to unpack TuxOffice; install it (xz or xz-utils) and rerun"
   fetch_release_file "$(asset_name user)"
   file=$(cat "$WORK/.fetched")
@@ -198,11 +254,22 @@ install_user() {
   rm -rf "$USER_ROOT" && mv "$USER_ROOT.new" "$USER_ROOT"
   ln -sfn "$USER_ROOT/usr/share/tuxoffice/tuxoffice" "$USER_BIN/tuxoffice"
   TUXOFFICE="$USER_BIN/tuxoffice"
-  for tool in python3 7z unzip cabextract; do command -v "$tool" >/dev/null || missing+=("$tool"); done
+
+  mapfile -t missing < <(missing_requirements)
   if ((${#missing[@]})); then
-    warn "missing tools: ${missing[*]}; install them with your package manager before running tuxoffice setup"
+    for entry in "${missing[@]}"; do names+=("$(cut -d'|' -f1 <<<"$entry" | cut -d: -f2)"); done
+    warn "TuxOffice needs these from your system: ${names[*]}"
+    if [[ $FAMILY =~ ^(deb|rpm-dnf|rpm-zypper|arch)$ ]] &&
+       [[ $(ask "Install them with $(package_tool) now? [Y/n] " y) =~ ^[Yy] ]]; then
+      install_requirements "${missing[@]}"
+    else
+      warn "install them with your package manager before running tuxoffice setup"
+    fi
   fi
-  case ":$PATH:" in *":$USER_BIN:"*) ;; *) warn "$USER_BIN is not on your PATH; add it, or run $TUXOFFICE" ;; esac
+  case ":$PATH:" in
+    *":$USER_BIN:"*) ;;
+    *) warn "$USER_BIN is not on your PATH; add it to your shell's PATH to type just \"tuxoffice\"" ;;
+  esac
 }
 
 uninstall() {
@@ -298,24 +365,27 @@ main() {
     "$TUXOFFICE" install
   fi
 
+  # The command to show: plain "tuxoffice" when it is on the PATH.
+  local run=tuxoffice
+  [[ $(command -v tuxoffice 2>/dev/null) ]] || run=$TUXOFFICE
   printf '\n%sDone.%s ' "$GREEN" "$R"
   case $NEXT in
     office) cat <<EOF
 Start an app from your application menu or with:
-  tuxoffice run word
+  $run run word
 Sign in with the Microsoft account that holds your Microsoft 365 subscription,
-then run "tuxoffice fonts cloud" once to fetch Office's fonts.
+then run "$run fonts cloud" once to fetch Office's fonts.
 EOF
       ;;
     setup) cat <<EOF
 Install Microsoft 365 when you are ready with:
-  tuxoffice install
+  $run install
 EOF
       ;;
     *) cat <<EOF
 Continue with:
-  tuxoffice setup      # prepare TuxOffice
-  tuxoffice install    # install Microsoft 365
+  $run setup      # prepare TuxOffice
+  $run install    # install Microsoft 365
 EOF
       ;;
   esac

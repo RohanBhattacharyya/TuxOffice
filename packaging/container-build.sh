@@ -41,8 +41,11 @@ TUXOFFICE_HOME=/work/home TUXOFFICE_BUILD_DIR=/cache/build TUXOFFICE_DXVK_BUILD_
 runner=/work/home/runners/tuxoffice-${RUNNER_NAME#soda-}
 [[ -f $runner/share/tuxoffice/dxvk/resource-pool-lock-v1 ]] || { echo "DXVK bundle missing" >&2; exit 1; }
 [[ -x $runner/bin/tuxoffice-file-dialog ]] || { echo "file chooser helper missing" >&2; exit 1; }
-# Development headers are not needed to run Office.
-rm -rf "$runner/include" "$runner/lib/wine/x86_64-unix/.debug"
+# Development headers are not needed to run Office. Without Soda's legacy
+# 32-bit Unix loader, Wine runs 32-bit Windows code (such as Office's
+# installer) through WoW64 in 64-bit processes, so distributions need no
+# 32-bit libraries at all.
+rm -rf "$runner/include" "$runner/lib/wine/x86_64-unix/.debug" "$runner/lib/wine/i386-unix"
 rm -rf /out/runner && cp -a "$runner" /out/runner
 chown -R "${OUT_UID:-0}:${OUT_GID:-0}" /out/runner
 echo ":: portable runner ready"
