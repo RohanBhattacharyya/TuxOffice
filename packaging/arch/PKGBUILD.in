@@ -8,10 +8,12 @@ pkgdesc="Microsoft 365 desktop apps on Linux, running natively"
 arch=('x86_64')
 url="@HOMEPAGE@"
 license=('LGPL-2.1-or-later')
-depends=('bash' 'curl' 'python' 'unzip' 'cabextract' '7zip' 'vulkan-icd-loader' 'wayland'
+depends=('bash' 'curl' 'python' 'unzip' 'cabextract' '7zip' 'libunwind' 'vulkan-icd-loader' 'wayland'
          'libxkbcommon' 'libglvnd' 'freetype2' 'fontconfig' 'gnutls' 'libsecret' 'dbus' 'systemd-libs')
 optdepends=('xdg-desktop-portal: the desktop file chooser for Open and Save As'
-            'vulkan-driver: GPU rendering')
+            'vulkan-driver: GPU rendering'
+            'libpulse: sound'
+            'libx11: X11 sessions')
 provides=('tuxoffice')
 conflicts=('tuxoffice')
 # The runner holds Windows (PE) libraries; leave every binary as built.

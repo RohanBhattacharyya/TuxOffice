@@ -83,10 +83,10 @@ sudo_cmd() {
 detect_family() {
   local id="" like=""
   if [[ -r /etc/os-release ]]; then
-    # shellcheck disable=SC1091
-    . /etc/os-release
-    id=${ID:-} like=${ID_LIKE:-}
-    DISTRO_NAME=${PRETTY_NAME:-$id}
+    # In a subshell: os-release defines VERSION and other common names.
+    id=$(. /etc/os-release && echo "${ID:-}")
+    like=$(. /etc/os-release && echo "${ID_LIKE:-}")
+    DISTRO_NAME=$(. /etc/os-release && echo "${PRETTY_NAME:-${ID:-}}")
   fi
   [[ -e /run/ostree-booted ]] && { FAMILY=immutable; return; }
   for word in $id $like; do
@@ -112,10 +112,10 @@ package_tool() {
 
 asset_name() { # family -> release file
   case $1 in
-    deb) echo "tuxoffice_${VERSION}-1_amd64.deb" ;;
-    rpm-dnf|rpm-zypper) echo "tuxoffice-${VERSION}-1.x86_64.rpm" ;;
-    arch) echo "tuxoffice-${VERSION}-1-x86_64.pkg.tar.zst" ;;
-    user) echo "tuxoffice-${VERSION}-x86_64.tar.xz" ;;
+    deb) echo "tuxoffice_${TUX_VERSION}-1_amd64.deb" ;;
+    rpm-dnf|rpm-zypper) echo "tuxoffice-${TUX_VERSION}-1.x86_64.rpm" ;;
+    arch) echo "tuxoffice-${TUX_VERSION}-1-x86_64.pkg.tar.zst" ;;
+    user) echo "tuxoffice-${TUX_VERSION}-x86_64.tar.xz" ;;
   esac
 }
 
@@ -137,16 +137,16 @@ check_system() {
 }
 
 resolve_version() {
-  [[ -n $VERSION ]] && return
+  [[ -n $TUX_VERSION ]] && return
   if [[ -n $FROM ]]; then
-    VERSION=$(cd "$FROM" && ls tuxoffice-*-x86_64.tar.xz 2>/dev/null | sed -E 's/^tuxoffice-(.*)-x86_64\.tar\.xz$/\1/' | sort -V | tail -1)
-    [[ -n $VERSION ]] || die "no TuxOffice release files in $FROM"
+    TUX_VERSION=$(cd "$FROM" && ls tuxoffice-*-x86_64.tar.xz 2>/dev/null | sed -E 's/^tuxoffice-(.*)-x86_64\.tar\.xz$/\1/' | sort -V | tail -1)
+    [[ -n $TUX_VERSION ]] || die "no TuxOffice release files in $FROM"
     return
   fi
   msg "looking up the latest TuxOffice release"
-  VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" |
-            sed -nE 's/^[[:space:]]*"tag_name":[[:space:]]*"v?([^"]+)".*/\1/p' | head -1) || VERSION=""
-  [[ -n $VERSION ]] || die "could not find a TuxOffice release at github.com/$REPO"
+  TUX_VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" |
+            sed -nE 's/^[[:space:]]*"tag_name":[[:space:]]*"v?([^"]+)".*/\1/p' | head -1) || TUX_VERSION=""
+  [[ -n $TUX_VERSION ]] || die "could not find a TuxOffice release at github.com/$REPO"
 }
 
 fetch_release_file() { # name -> path, verified against SHA256SUMS
@@ -156,7 +156,7 @@ fetch_release_file() { # name -> path, verified against SHA256SUMS
     cp "$FROM/$name" "$WORK/$name"
     [[ -f $FROM/SHA256SUMS ]] && cp "$FROM/SHA256SUMS" "$WORK/SHA256SUMS"
   else
-    local base="https://github.com/$REPO/releases/download/v$VERSION"
+    local base="https://github.com/$REPO/releases/download/v$TUX_VERSION"
     msg "downloading $name"
     curl -fL --retry 3 --progress-bar -o "$WORK/$name" "$base/$name" || die "download failed: $base/$name"
     curl -fsSL --retry 3 -o "$WORK/SHA256SUMS" "$base/SHA256SUMS" || die "could not download the checksums"
@@ -232,7 +232,7 @@ EOF
 }
 
 main() {
-  METHOD="" NEXT="" VERSION="" FROM="" ASSUME_YES=0 DO_UNINSTALL=0 DISTRO_NAME="" FAMILY=""
+  METHOD="" NEXT="" TUX_VERSION="" FROM="" ASSUME_YES=0 DO_UNINSTALL=0 DISTRO_NAME="" FAMILY=""
   while (($#)); do
     case $1 in
       --system) METHOD=system ;;
@@ -240,7 +240,7 @@ main() {
       --office) NEXT=office ;;
       --setup-only) NEXT=setup ;;
       --no-setup) NEXT=none ;;
-      --version) VERSION=${2:?--version needs a version}; VERSION=${VERSION#v}; shift ;;
+      --version) TUX_VERSION=${2:?--version needs a version}; TUX_VERSION=${TUX_VERSION#v}; shift ;;
       --from) FROM=$(realpath "${2:?--from needs a directory}"); shift ;;
       --uninstall) DO_UNINSTALL=1 ;;
       -y|--yes) ASSUME_YES=1 ;;
@@ -274,7 +274,7 @@ main() {
     die "no TuxOffice package for ${DISTRO_NAME:-this distribution}; use --user"
 
   resolve_version
-  msg "TuxOffice $VERSION"
+  msg "TuxOffice $TUX_VERSION"
   if [[ $METHOD == system ]]; then install_system; else install_user; fi
   ok "TuxOffice $("$TUXOFFICE" --version | awk '{print $2}') is installed"
 

@@ -22,7 +22,7 @@ run_test() { # image
     fi
     useradd -m tester
     echo "tester ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/tester
-    as() { su - tester -c "$*"; }
+    as() { sudo -iu tester bash -c "$*"; }
     echo "== system install"
     as "bash /install.sh --from /dist --system --no-setup" 2>&1 | tail -4
     as "tuxoffice --version"

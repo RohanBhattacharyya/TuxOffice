@@ -38,6 +38,7 @@ overrides:
       - unzip
       - cabextract
       - 7zip | p7zip-full
+      - libunwind8
       - libvulkan1
       - libwayland-client0
       - libwayland-egl1
@@ -53,7 +54,9 @@ overrides:
     recommends:
       - xdg-desktop-portal
       - mesa-vulkan-drivers
+      - libpulse0
       - libx11-6
+      - libxext6
   rpm:
     # File and library dependencies resolve on Fedora and openSUSE alike.
     depends:
@@ -63,6 +66,7 @@ overrides:
       - /usr/bin/unzip
       - /usr/bin/cabextract
       - /usr/bin/7z
+      - libunwind.so.8()(64bit)
       - libvulkan.so.1()(64bit)
       - libwayland-client.so.0()(64bit)
       - libwayland-egl.so.1()(64bit)
@@ -77,6 +81,7 @@ overrides:
       - libsystemd.so.0()(64bit)
     recommends:
       - xdg-desktop-portal
+      - libpulse.so.0()(64bit)
   archlinux:
     depends:
       - bash
@@ -85,6 +90,7 @@ overrides:
       - unzip
       - cabextract
       - 7zip
+      - libunwind
       - vulkan-icd-loader
       - wayland
       - libxkbcommon
@@ -95,9 +101,8 @@ overrides:
       - libsecret
       - dbus
       - systemd-libs
-    recommends:
-      - xdg-desktop-portal
-      - vulkan-driver
+    # nfpm cannot write optional dependencies for pacman; the AUR PKGBUILD
+    # lists xdg-desktop-portal and vulkan-driver as optdepends.
 
 rpm:
   group: Applications/Productivity
