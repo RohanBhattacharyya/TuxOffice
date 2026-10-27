@@ -69,8 +69,8 @@ tar -C "$stage" --owner=0 --group=0 -cf - usr | xz -T0 -6 > "$DIST/tuxoffice-$VE
 
 for packager in deb rpm archlinux; do
   msg "writing the $packager package"
-  docker run --rm -v "$ROOT:/src:ro" -v "$DIST:/dist" -w /src \
-    -e TUXOFFICE_VERSION="$VERSION" -e TUXOFFICE_HOMEPAGE="$HOMEPAGE" -e TUXOFFICE_STAGE=/dist/stage \
+  docker run --rm -v "$ROOT:/src:ro" -v "$DIST:/dist" -v "$stage:/stage:ro" -w /src \
+    -e TUXOFFICE_VERSION="$VERSION" -e TUXOFFICE_HOMEPAGE="$HOMEPAGE" \
     --user "$(id -u):$(id -g)" "$NFPM_IMAGE" \
     package --config packaging/nfpm.yaml --packager "$packager" --target /dist >/dev/null
 done

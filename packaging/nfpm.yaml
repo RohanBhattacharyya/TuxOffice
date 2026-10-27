@@ -22,8 +22,9 @@ description: |-
   "tuxoffice install" and activated by signing in with your own account.
 
 contents:
-  # The staged tree includes the /usr/bin/tuxoffice symlink.
-  - src: ${TUXOFFICE_STAGE}/usr/
+  # build-release.sh mounts the staged tree at /stage; it includes the
+  # /usr/bin/tuxoffice symlink.
+  - src: /stage/usr/
     dst: /usr/
     type: tree
 
