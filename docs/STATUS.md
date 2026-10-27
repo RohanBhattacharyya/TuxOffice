@@ -94,6 +94,43 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   apply the repair; it is also installed in the regular prefix.
 - Removed tracked `wine/autom4te.cache` output and ignored that directory.
 
+## 26 October evening: distribution packages and the one-line installer
+
+- `packaging/build-release.sh` builds a portable runner in Ubuntu 24.04
+  (glibc 2.39; the Soda base itself needs 2.38) and packages it as `.deb`,
+  `.rpm` and Arch packages with nfpm, a tarball, an AUR `tuxoffice-bin`
+  PKGBUILD/.SRCINFO (identical to `makepkg --printsrcinfo`) and SHA256SUMS.
+  `.github/workflows/release.yml` publishes them for version tags.
+- The release build fails if a changed module was not built or lost a
+  feature: the first container build had no Wayland driver at all
+  (Ubuntu ships xkbregistry separately), which the old overlay would have
+  hidden by keeping Soda's copy.
+- The packaged runner drops Soda's legacy 32-bit Unix loader: a bare Arch
+  container could not create a Wine environment without 32-bit glibc. With
+  WoW64, 32-bit and 64-bit programs run and no 32-bit libraries are needed.
+  Wine's ntdll.so also needs libunwind, now a dependency.
+- The container-built runner passes the suite, Excel cells, PowerPoint
+  ribbon, embedded chart and multi-app tests on this desktop. One battery
+  hit the known intermittent Excel crash (EXCEL.EXE+0xe02c6a); two reruns
+  passed.
+- `install.sh` (curl | bash): checks the system, installs the package with
+  apt, dnf, zypper or pacman, or the tarball into ~/.local (offering to
+  install missing tools and libraries), verifies SHA256SUMS, then offers to
+  set up TuxOffice and install Microsoft 365. Menus work when the script
+  arrives on standard input (tested under a pseudo-terminal).
+- End to end: `install.sh --user --office` from the release tarball in an
+  empty home (inside the isolated session, Office payload seeded from the
+  cache) finished in 5 minutes: setup, Office's 32-bit Click-to-Run setup
+  under WoW64, desktop entries; `doctor` reports all seven apps and Word
+  opens to "Sign in to get started" with one sign-in prompt on top. It also
+  found that without a terminal the installer tried `sudo` for a missing
+  `cabextract` and stopped; it now only reports missing requirements then.
+- `packaging/test-packages.sh` installs, checks and uninstalls the packages
+  in clean Ubuntu 24.04, Debian 13, Fedora 42, openSUSE Tumbleweed and Arch
+  containers as a normal user with sudo. All five pass: install through
+  install.sh, launcher and runner found, a Wine environment created with
+  32-bit and 64-bit programs running, uninstall, and a per-user install.
+
 ## Installed 26 October 17:20: fresh install, owned windows, sign-in prompt, file chooser
 
 Backups: `recovery-backups/owners-signin-dialogs-20261026-172038/`. The

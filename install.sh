@@ -259,9 +259,11 @@ install_user() {
   if ((${#missing[@]})); then
     for entry in "${missing[@]}"; do names+=("$(cut -d'|' -f1 <<<"$entry" | cut -d: -f2)"); done
     warn "TuxOffice needs these from your system: ${names[*]}"
-    if [[ $FAMILY =~ ^(deb|rpm-dnf|rpm-zypper|arch)$ ]] &&
+    # Without a terminal sudo could not ask for a password: only report.
+    if [[ $FAMILY =~ ^(deb|rpm-dnf|rpm-zypper|arch)$ && ( -n $TTY || $ASSUME_YES == 1 ) ]] &&
        [[ $(ask "Install them with $(package_tool) now? [Y/n] " y) =~ ^[Yy] ]]; then
-      install_requirements "${missing[@]}"
+      install_requirements "${missing[@]}" ||
+        warn "could not install them; install them with your package manager before running tuxoffice setup"
     else
       warn "install them with your package manager before running tuxoffice setup"
     fi

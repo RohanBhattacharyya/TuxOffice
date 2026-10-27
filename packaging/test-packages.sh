@@ -22,20 +22,40 @@ run_test() { # image
     fi
     useradd -m tester
     echo "tester ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/tester
-    as() { sudo -iu tester bash -c "$*"; }
-    echo "== system install"
-    as "bash /install.sh --from /dist --system --no-setup" 2>&1 | tail -4
-    as "tuxoffice --version"
-    as "/usr/lib/tuxoffice/runner/bin/wine --version"
-    as "tuxoffice doctor" | head -2
-    echo "== Wine environment"
-    as "WINEPREFIX=\$HOME/p WINEDEBUG=-all /usr/lib/tuxoffice/runner/bin/wine wineboot -i >/dev/null 2>&1; ls \$HOME/p/system.reg"
-    echo "== uninstall"
-    as "bash /install.sh --uninstall" 2>&1 | grep -E "removed|error" || true
-    command -v tuxoffice >/dev/null && { echo "tuxoffice still installed"; exit 1; } || true
-    echo "== user install"
-    as "bash /install.sh --from /dist --user --no-setup" 2>&1 | tail -2
-    as "\$HOME/.local/bin/tuxoffice doctor" | head -2
+    # Each step runs as the test user from a script, so quoting stays simple
+    # and any failing command fails the test.
+    step() { # name, script on stdin
+      echo "== $1"
+      cat > /tmp/step.sh
+      chmod 755 /tmp/step.sh
+      sudo -iu tester bash -euo pipefail /tmp/step.sh
+    }
+    step "system install" <<"STEP"
+bash /install.sh --from /dist --system --no-setup | tail -3
+tuxoffice --version
+tuxoffice doctor > /tmp/doctor.txt; head -2 /tmp/doctor.txt
+STEP
+    step "Wine environment" <<"STEP"
+export WINEPREFIX=$HOME/p WINEDEBUG=-all
+R=/usr/lib/tuxoffice/runner/bin
+$R/wine --version
+$R/wine wineboot -i >/dev/null 2>&1
+# The registry reaches system.reg when the wineserver exits.
+$R/wineserver -w
+test -s "$HOME/p/system.reg"
+$R/wine C:/windows/syswow64/cmd.exe /c echo 32-bit programs run 2>/dev/null | tr -d "\r" | grep "32-bit programs run"
+$R/wine cmd /c echo 64-bit programs run 2>/dev/null | tr -d "\r" | grep "64-bit programs run"
+$R/wineserver -k || true
+STEP
+    step "uninstall" <<"STEP"
+bash /install.sh --uninstall | grep removed
+! command -v tuxoffice
+STEP
+    step "user install" <<"STEP"
+bash /install.sh --from /dist --user --no-setup | tail -2
+$HOME/.local/bin/tuxoffice doctor > /tmp/doctor.txt; grep -q "runner .*ok" /tmp/doctor.txt
+echo "per-user runner works"
+STEP
   '
 }
 
