@@ -38,6 +38,7 @@
 #include "windows.graphics.h"
 #define WIDL_using_Windows_Graphics_Effects
 #include "windows.graphics.effects.h"
+#define WIDL_using_Windows_System
 #define WIDL_using_Windows_UI
 #include "windows.ui.h"
 #define WIDL_using_Windows_UI_Core
@@ -54,6 +55,7 @@
 #include "windows.ui.composition.interop.h"
 #define WIDL_using_Windows_UI_ViewManagement
 #include "windows.ui.viewmanagement.h"
+#include "d2d1.h"
 
 extern IActivationFactory *accessibilitysettings_factory;
 extern IActivationFactory *uisettings_factory;
@@ -61,14 +63,25 @@ extern IActivationFactory *uiviewsettings_factory;
 extern IActivationFactory *inputpane_factory;
 extern IActivationFactory *compositor_factory;
 extern IActivationFactory *effect_source_parameter_factory;
+extern IActivationFactory *composition_path_factory;
 extern IActivationFactory *compositor_controller_factory;
 extern IActivationFactory *composition_conditional_value_factory;
 extern IActivationFactory *interaction_tracker_factory;
 extern IActivationFactory *visual_interaction_source_factory;
 
 HRESULT composition_property_set_create( ICompositor *compositor, ICompositionPropertySet **result );
+HRESULT composition_rounded_rectangle_geometry_create( ICompositor *compositor, IInspectable **result );
+HRESULT composition_path_geometry_create( ICompositor *compositor, IInspectable *path, IInspectable **result );
+HRESULT composition_geometric_clip_create( ICompositor *compositor, IInspectable *geometry, IInspectable **result );
+HRESULT composition_path_get_d2d_geometry( ICompositionPath *path, ID2D1Factory *factory, ID2D1Geometry **result );
+HRESULT composition_geometry_get_d2d_geometry( ICompositionGeometry *geometry, ID2D1Factory *factory, ID2D1Geometry **result );
 HRESULT expression_animation_clone( IExpressionAnimation *animation, IExpressionAnimation **result );
 HRESULT expression_animation_evaluate_scalar( IExpressionAnimation *animation, ICompositionObject *target, FLOAT *value );
+HRESULT scalar_key_frame_animation_get_final_value( ICompositionAnimation *animation, FLOAT *value );
+HRESULT vector3_key_frame_animation_get_final_value( ICompositionAnimation *animation, struct Vector3 *value );
+HRESULT composition_drop_shadow_create( ICompositor *compositor, IInspectable **result );
+void composition_notify_changed( ICompositor *compositor );
+IDispatcherQueue *compositor_get_dispatcher_queue( ICompositor *compositor );
 
 #define DEFINE_IINSPECTABLE_( pfx, iface_type, impl_type, impl_from, iface_mem, expr )             \
     static inline impl_type *impl_from( iface_type *iface )                                        \

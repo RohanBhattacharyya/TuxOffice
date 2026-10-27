@@ -737,6 +737,8 @@ struct interaction_tracker
     ICompositor *compositor;
     IAgileReference *owner;
     CO_MTA_USAGE_COOKIE owner_mta_cookie;
+    /* owner callbacks run on the compositor's thread, like on Windows */
+    IDispatcherQueue *dispatcher_queue;
     BOOL notifications_closed;
     BOOL clamp_position;
     struct tracker_inertia_operation *inertia;
@@ -1276,6 +1278,17 @@ struct tracker_notification
     INT32 request_id;
     IInteractionTracker *sender;
     IAgileReference *owner;
+    IDispatcherQueue *queue;
+};
+
+/* Delivers the pending notifications for one dispatcher queue, or for the
+ * thread pool when the compositor's thread had no queue. */
+struct tracker_delivery
+{
+    IDispatcherQueueHandler IDispatcherQueueHandler_iface;
+    LONG ref;
+    struct list entry;
+    IDispatcherQueue *queue;
 };
 
 static CRITICAL_SECTION tracker_notification_cs;
@@ -1287,7 +1300,7 @@ static CRITICAL_SECTION_DEBUG tracker_notification_cs_debug =
 };
 static CRITICAL_SECTION tracker_notification_cs = { &tracker_notification_cs_debug, -1, 0, 0, 0, 0 };
 static struct list tracker_notifications = LIST_INIT(tracker_notifications);
-static BOOL tracker_notification_worker_active;
+static struct list tracker_deliveries = LIST_INIT(tracker_deliveries);
 
 static inline struct tracker_values_changed_args *impl_from_IInteractionTrackerValuesChangedArgs(
         IInteractionTrackerValuesChangedArgs *iface )
@@ -1403,52 +1416,163 @@ static void tracker_notifications_free( struct list *notifications )
     }
 }
 
-static void CALLBACK tracker_notification_worker( PTP_CALLBACK_INSTANCE instance, void *context )
+static void tracker_notification_deliver( struct tracker_notification *notification, HRESULT apartment )
 {
-    struct tracker_notification *notification;
-    struct interaction_tracker *tracker;
+    struct interaction_tracker *tracker = impl_from_IInteractionTracker( notification->sender );
     IInteractionTrackerOwner *owner;
-    HRESULT initialized, hr;
+    HRESULT hr;
     BOOL closed;
 
-    initialized = CoInitializeEx( NULL, COINIT_MULTITHREADED );
-    for (;;)
+    EnterCriticalSection( &tracker->animation_cs );
+    closed = tracker->notifications_closed;
+    LeaveCriticalSection( &tracker->animation_cs );
+    hr = closed ? RO_E_CLOSED : apartment;
+    if (SUCCEEDED(hr))
+        hr = IAgileReference_Resolve( notification->owner, &IID_IInteractionTrackerOwner, (void **)&owner );
+    if (SUCCEEDED(hr))
     {
-        EnterCriticalSection( &tracker_notification_cs );
-        if (list_empty( &tracker_notifications ))
-        {
-            tracker_notification_worker_active = FALSE;
-            LeaveCriticalSection( &tracker_notification_cs );
-            break;
-        }
-        notification = LIST_ENTRY( list_head( &tracker_notifications ), struct tracker_notification, entry );
-        list_remove( &notification->entry );
-        LeaveCriticalSection( &tracker_notification_cs );
+        if (notification->kind == TRACKER_INERTIA)
+            hr = IInteractionTrackerOwner_InertiaStateEntered( owner, notification->sender,
+                    (IInteractionTrackerInertiaStateEnteredArgs *)notification->args );
+        else if (notification->kind == TRACKER_IDLE)
+            hr = IInteractionTrackerOwner_IdleStateEntered( owner, notification->sender,
+                    (IInteractionTrackerIdleStateEnteredArgs *)notification->args );
+        else
+            hr = IInteractionTrackerOwner_ValuesChanged( owner, notification->sender,
+                    (IInteractionTrackerValuesChangedArgs *)notification->args );
+        IInteractionTrackerOwner_Release( owner );
+    }
+    if (FAILED(hr) && hr != RO_E_CLOSED) WARN( "Tracker notification %u failed, hr %#lx.\n", notification->kind, hr );
+}
 
-        tracker = impl_from_IInteractionTracker( notification->sender );
-        EnterCriticalSection( &tracker->animation_cs );
-        closed = tracker->notifications_closed;
-        LeaveCriticalSection( &tracker->animation_cs );
-        hr = closed ? RO_E_CLOSED : initialized;
-        if (SUCCEEDED(hr))
-            hr = IAgileReference_Resolve( notification->owner, &IID_IInteractionTrackerOwner, (void **)&owner );
-        if (SUCCEEDED(hr))
-        {
-            if (notification->kind == TRACKER_INERTIA)
-                hr = IInteractionTrackerOwner_InertiaStateEntered( owner, notification->sender,
-                        (IInteractionTrackerInertiaStateEnteredArgs *)notification->args );
-            else if (notification->kind == TRACKER_IDLE)
-                hr = IInteractionTrackerOwner_IdleStateEntered( owner, notification->sender,
-                        (IInteractionTrackerIdleStateEnteredArgs *)notification->args );
-            else
-                hr = IInteractionTrackerOwner_ValuesChanged( owner, notification->sender,
-                        (IInteractionTrackerValuesChangedArgs *)notification->args );
-            IInteractionTrackerOwner_Release( owner );
-        }
-        if (FAILED(hr) && hr != RO_E_CLOSED) WARN( "Tracker notification %u failed, hr %#lx.\n", notification->kind, hr );
+/* Delivers the notifications pending when called. Returns FALSE, and
+ * unschedules the delivery, once nothing is pending for its queue. */
+static BOOL tracker_delivery_run( struct tracker_delivery *delivery, HRESULT apartment )
+{
+    struct tracker_notification *notification, *next;
+    struct list batch = LIST_INIT(batch);
+
+    EnterCriticalSection( &tracker_notification_cs );
+    LIST_FOR_EACH_ENTRY_SAFE( notification, next, &tracker_notifications, struct tracker_notification, entry )
+    {
+        if (notification->queue != delivery->queue) continue;
+        list_remove( &notification->entry );
+        list_add_tail( &batch, &notification->entry );
+    }
+    if (list_empty( &batch )) list_remove( &delivery->entry );
+    LeaveCriticalSection( &tracker_notification_cs );
+
+    if (list_empty( &batch ))
+    {
+        IDispatcherQueueHandler_Release( &delivery->IDispatcherQueueHandler_iface );
+        return FALSE;
+    }
+    while (!list_empty( &batch ))
+    {
+        notification = LIST_ENTRY( list_head( &batch ), struct tracker_notification, entry );
+        list_remove( &notification->entry );
+        tracker_notification_deliver( notification, apartment );
         tracker_notification_free( notification );
     }
+    return TRUE;
+}
+
+static void CALLBACK tracker_notification_worker( PTP_CALLBACK_INSTANCE instance, void *context )
+{
+    struct tracker_delivery *delivery = context;
+    HRESULT initialized;
+
+    initialized = CoInitializeEx( NULL, COINIT_MULTITHREADED );
+    while (tracker_delivery_run( delivery, initialized )) {}
     if (SUCCEEDED(initialized)) CoUninitialize();
+}
+
+static inline struct tracker_delivery *impl_from_IDispatcherQueueHandler( IDispatcherQueueHandler *iface )
+{
+    return CONTAINING_RECORD( iface, struct tracker_delivery, IDispatcherQueueHandler_iface );
+}
+
+static HRESULT WINAPI tracker_delivery_QueryInterface( IDispatcherQueueHandler *iface, REFIID iid, void **out )
+{
+    if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IAgileObject ) ||
+        IsEqualGUID( iid, &IID_IDispatcherQueueHandler ))
+    {
+        IDispatcherQueueHandler_AddRef( iface );
+        *out = iface;
+        return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI tracker_delivery_AddRef( IDispatcherQueueHandler *iface )
+{
+    return InterlockedIncrement( &impl_from_IDispatcherQueueHandler( iface )->ref );
+}
+
+static ULONG WINAPI tracker_delivery_Release( IDispatcherQueueHandler *iface )
+{
+    struct tracker_delivery *impl = impl_from_IDispatcherQueueHandler( iface );
+    ULONG ref = InterlockedDecrement( &impl->ref );
+
+    if (!ref)
+    {
+        if (impl->queue) IDispatcherQueue_Release( impl->queue );
+        free( impl );
+    }
+    return ref;
+}
+
+static BOOL tracker_delivery_schedule( struct tracker_delivery *delivery );
+
+static HRESULT WINAPI tracker_delivery_Invoke( IDispatcherQueueHandler *iface )
+{
+    struct tracker_delivery *delivery = impl_from_IDispatcherQueueHandler( iface );
+    struct list discarded = LIST_INIT(discarded);
+    struct tracker_notification *notification, *next;
+
+    /* Deliver one batch per dispatch, so that a steady stream of frame
+     * notifications cannot starve the rest of the thread's messages. */
+    IDispatcherQueueHandler_AddRef( iface );
+    if (tracker_delivery_run( delivery, S_OK ))
+    {
+        EnterCriticalSection( &tracker_notification_cs );
+        if (!tracker_delivery_schedule( delivery ))
+        {
+            LIST_FOR_EACH_ENTRY_SAFE( notification, next, &tracker_notifications, struct tracker_notification, entry )
+            {
+                if (notification->queue != delivery->queue) continue;
+                list_remove( &notification->entry );
+                list_add_tail( &discarded, &notification->entry );
+            }
+            list_remove( &delivery->entry );
+            IDispatcherQueueHandler_Release( iface );
+        }
+        LeaveCriticalSection( &tracker_notification_cs );
+    }
+    IDispatcherQueueHandler_Release( iface );
+    tracker_notifications_free( &discarded );
+    return S_OK;
+}
+
+static const IDispatcherQueueHandlerVtbl tracker_delivery_vtbl =
+{
+    tracker_delivery_QueryInterface,
+    tracker_delivery_AddRef,
+    tracker_delivery_Release,
+    tracker_delivery_Invoke,
+};
+
+/* Called with tracker_notification_cs held. */
+static BOOL tracker_delivery_schedule( struct tracker_delivery *delivery )
+{
+    boolean queued = FALSE;
+    HRESULT hr;
+
+    if (!delivery->queue)
+        return TrySubmitThreadpoolCallback( tracker_notification_worker, delivery, NULL );
+    hr = IDispatcherQueue_TryEnqueue( delivery->queue, &delivery->IDispatcherQueueHandler_iface, &queued );
+    return SUCCEEDED(hr) && queued;
 }
 
 static BOOL interaction_tracker_try_addref( struct interaction_tracker *impl )
@@ -1467,6 +1591,7 @@ static BOOL interaction_tracker_try_addref( struct interaction_tracker *impl )
 static void tracker_notification_submit( struct tracker_notification *notification, struct list *discarded )
 {
     struct tracker_notification *previous;
+    struct tracker_delivery *delivery;
 
     EnterCriticalSection( &tracker_notification_cs );
     if (notification->kind == TRACKER_FRAME)
@@ -1483,15 +1608,28 @@ static void tracker_notification_submit( struct tracker_notification *notificati
         }
     }
     list_add_tail( &tracker_notifications, &notification->entry );
-    if (!tracker_notification_worker_active)
+    LIST_FOR_EACH_ENTRY( delivery, &tracker_deliveries, struct tracker_delivery, entry )
+        if (delivery->queue == notification->queue) break;
+    if (&delivery->entry == &tracker_deliveries)
     {
-        tracker_notification_worker_active = TRUE;
-        if (!TrySubmitThreadpoolCallback( tracker_notification_worker, NULL, NULL ))
+        if ((delivery = calloc( 1, sizeof(*delivery) )))
         {
-            tracker_notification_worker_active = FALSE;
+            delivery->IDispatcherQueueHandler_iface.lpVtbl = &tracker_delivery_vtbl;
+            delivery->ref = 1;
+            if ((delivery->queue = notification->queue)) IDispatcherQueue_AddRef( delivery->queue );
+            list_add_tail( &tracker_deliveries, &delivery->entry );
+            if (!tracker_delivery_schedule( delivery ))
+            {
+                list_remove( &delivery->entry );
+                IDispatcherQueueHandler_Release( &delivery->IDispatcherQueueHandler_iface );
+                delivery = NULL;
+            }
+        }
+        if (!delivery)
+        {
             list_remove( &notification->entry );
             list_add_tail( discarded, &notification->entry );
-            WARN( "Could not queue ValuesChanged delivery, error %lu.\n", GetLastError() );
+            WARN( "Could not queue tracker notification delivery.\n" );
         }
     }
     LeaveCriticalSection( &tracker_notification_cs );
@@ -1532,6 +1670,7 @@ static void interaction_tracker_queue_notification( struct interaction_tracker *
     notification->args = (IInspectable *)&args->IInteractionTrackerValuesChangedArgs_iface;
     notification->sender = &impl->IInteractionTracker_iface;
     notification->owner = impl->owner;
+    notification->queue = impl->dispatcher_queue;
     IAgileReference_AddRef( notification->owner );
     LeaveCriticalSection( &impl->animation_cs );
 
@@ -1577,6 +1716,7 @@ static void interaction_tracker_queue_state( struct interaction_tracker *impl,
     notification->kind = kind;
     notification->sender = &impl->IInteractionTracker_iface;
     notification->owner = impl->owner;
+    notification->queue = impl->dispatcher_queue;
     IAgileReference_AddRef( notification->owner );
     LeaveCriticalSection( &impl->animation_cs );
     tracker_notification_submit( notification, discarded );
@@ -1773,6 +1913,7 @@ static ULONG WINAPI interaction_tracker_Release( IInteractionTracker *iface )
         if (impl->sources) ICompositionInteractionSourceCollection_Release( impl->sources );
         if (impl->properties) ICompositionPropertySet_Release( impl->properties );
         ICompositor_Release( impl->compositor );
+        if (impl->dispatcher_queue) IDispatcherQueue_Release( impl->dispatcher_queue );
         if (impl->owner) IAgileReference_Release( impl->owner );
         if (impl->owner_mta_cookie) CoDecrementMTAUsage( impl->owner_mta_cookie );
         tracker_decay_release( impl->position_decay_rate );
@@ -3015,6 +3156,7 @@ static HRESULT interaction_tracker_create( ICompositor *compositor, IInteraction
     impl->scale_decay = 0.985f;
     impl->ref = 1;
     ICompositor_AddRef( compositor );
+    impl->dispatcher_queue = compositor_get_dispatcher_queue( compositor );
     if (owner)
     {
         if (FAILED(hr = RoGetAgileReference( AGILEREFERENCE_DEFAULT, &IID_IInteractionTrackerOwner,

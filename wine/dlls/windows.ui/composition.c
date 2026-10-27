@@ -19,13 +19,16 @@
 
 #include <stdlib.h>
 #include <limits.h>
+#include <float.h>
 #include <math.h>
 #include <stdint.h>
 #include "private.h"
+#include "roapi.h"
 #include "initguid.h"
 #include "dcomp.h"
-#include "d2d1_1.h"
-#include "d3d11.h"
+#include "d2d1_3.h"
+#include "d2d1effects.h"
+#include "d3d11_4.h"
 #include "dxgi.h"
 #include "dxgi1_2.h"
 #include "effect_graph.h"
@@ -34,15 +37,20 @@
 #include "wine/list.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(ui);
+WINE_DECLARE_DEBUG_CHANNEL(uirender);
+WINE_DECLARE_DEBUG_CHANNEL(uisurface);
+WINE_DECLARE_DEBUG_CHANNEL(uiperf);
+WINE_DECLARE_DEBUG_CHANNEL(uievents);
+WINE_DECLARE_DEBUG_CHANNEL(uilifetime);
 
 static IDCompositionVisual *dcomp_visual_from_visual( IVisual *iface );
 static void surface_brush_bind( ICompositionSurfaceBrush *iface, IDCompositionVisual *visual );
 static BOOL composition_brush_contains( ICompositionBrush *brush, ICompositionBrush *target, UINT depth );
-static HRESULT scalar_key_frame_animation_get_final_value( ICompositionAnimation *animation,
+HRESULT scalar_key_frame_animation_get_final_value( ICompositionAnimation *animation,
         FLOAT *value );
 static HRESULT boolean_key_frame_animation_get_final_value( ICompositionAnimation *animation,
         boolean *value );
-static HRESULT vector3_key_frame_animation_get_final_value( ICompositionAnimation *animation,
+HRESULT vector3_key_frame_animation_get_final_value( ICompositionAnimation *animation,
         struct Vector3 *value );
 
 static HRESULT expression_animation_get_vector( IExpressionAnimation *animation, struct Vector3 *value );
@@ -58,6 +66,7 @@ struct compositor_controller;
 struct nine_grid_brush_iface;
 
 static void compositor_notify_commit_needed( struct compositor *compositor );
+static inline struct compositor *impl_from_ICompositor( ICompositor *iface );
 static HRESULT completed_action_create( IAsyncAction **operation );
 
 struct compositor2_vtbl
@@ -237,7 +246,6 @@ struct desktop_window_target
     ID2D1Device *render_device;
     ID2D1DeviceContext *render_context;
     ID2D1Bitmap1 *render_bitmap;
-    ID2D1Bitmap1 *render_snapshot;
     struct list entry;
     struct list layer_entry;
     CRITICAL_SECTION render_cs;
@@ -249,6 +257,9 @@ struct desktop_window_target
     BOOL linked;
     BOOL layer_linked;
     BOOL rendering;
+    /* rendering inputs of the last presented frame, see target_snapshot */
+    BYTE *drawn_state;
+    SIZE_T drawn_size;
     LONG ref;
 };
 
@@ -311,18 +322,18 @@ static ULONG desktop_window_target_add_ref( struct desktop_window_target *impl )
 
 static void desktop_window_target_reset_renderer( struct desktop_window_target *impl )
 {
-    if (impl->render_snapshot) ID2D1Bitmap1_Release( impl->render_snapshot );
     if (impl->render_bitmap) ID2D1Bitmap1_Release( impl->render_bitmap );
     if (impl->render_context) ID2D1DeviceContext_Release( impl->render_context );
     if (impl->render_device) ID2D1Device_Release( impl->render_device );
     if (impl->swapchain) IDXGISwapChain1_Release( impl->swapchain );
     impl->render_bitmap = NULL;
-    impl->render_snapshot = NULL;
     impl->render_context = NULL;
     impl->render_device = NULL;
     impl->swapchain = NULL;
     impl->width = 0;
     impl->height = 0;
+    free( impl->drawn_state );
+    impl->drawn_state = NULL;
 }
 
 static ULONG desktop_window_target_release( struct desktop_window_target *impl )
@@ -352,6 +363,7 @@ static ULONG desktop_window_target_release( struct desktop_window_target *impl )
         if (impl->root) IVisual_Release( impl->root );
         if (impl->dcomp_target) IDCompositionTarget_Release( impl->dcomp_target );
         DeleteCriticalSection( &impl->render_cs );
+        free( impl->drawn_state );
         free( impl );
     }
     return ref;
@@ -739,6 +751,8 @@ struct compositor
     struct list targets;
     HSTRING comment;
     FLOAT global_playback_rate;
+    /* the queue of the creating thread, which receives composition callbacks */
+    IDispatcherQueue *dispatcher_queue;
     LONG ref;
 };
 
@@ -790,6 +804,8 @@ struct composition_drawing_surface
     BOOL virtual;
     POINT bitmap_offset;
     struct list tiles;
+    /* bumped whenever the pixels a brush would draw can change */
+    LONG content_version;
     LONG ref;
 };
 
@@ -1649,6 +1665,8 @@ static HRESULT visual_apply_implicit_animation(struct sprite_visual *impl,const 
 struct sprite_visual
 {
     ISpriteVisual ISpriteVisual_iface;
+    ISpriteVisual2 ISpriteVisual2_iface;
+    ICompositionShadow *shadow;
     struct redirect_visual_iface redirect_iface;
     IVisual *source;
     BOOL is_redirect;
@@ -1733,6 +1751,8 @@ static HRESULT WINAPI sprite_visual_QueryInterface( ISpriteVisual *iface, REFIID
         *out = &impl_from_ISpriteVisual(iface)->redirect_iface;
     else if (IsEqualGUID(iid, &IID_ISpriteVisual) && !impl_from_ISpriteVisual(iface)->is_redirect)
         *out = iface;
+    else if (IsEqualGUID(iid, &IID_ISpriteVisual2) && !impl_from_ISpriteVisual(iface)->is_redirect)
+        *out = &impl_from_ISpriteVisual(iface)->ISpriteVisual2_iface;
     else if (IsEqualGUID(iid,&composition_object2_iid))
         *out = &impl_from_ISpriteVisual(iface)->object2_iface;
     else if (IsEqualGUID( iid, &IID_IVisual ))
@@ -1791,6 +1811,7 @@ static ULONG WINAPI sprite_visual_Release( ISpriteVisual *iface )
         if (impl->offset_expression) IExpressionAnimation_Release( impl->offset_expression );
         if (impl->center_expression) IExpressionAnimation_Release( impl->center_expression );
         if (impl->clip) ICompositionClip_Release( impl->clip );
+        if (impl->shadow) ICompositionShadow_Release( impl->shadow );
         if (impl->parent_for_transform) IVisual_Release( impl->parent_for_transform );
         EnterCriticalSection(&visual_graph_cs);
         if (impl->children) impl_from_IVisualCollection(impl->children)->owner = NULL;
@@ -1812,14 +1833,15 @@ static HRESULT WINAPI sprite_visual_GetIids( ISpriteVisual *iface, ULONG *count,
     IID *values;
 
     if (!count || !iids) return E_POINTER;
-    if (!(values = CoTaskMemAlloc( 6 * sizeof(*values) ))) return E_OUTOFMEMORY;
+    if (!(values = CoTaskMemAlloc( 7 * sizeof(*values) ))) return E_OUTOFMEMORY;
     values[0] = impl_from_ISpriteVisual(iface)->is_redirect ? redirect_visual_iid : IID_ISpriteVisual;
     values[1] = IID_IVisual;
     values[2] = IID_IContainerVisual;
     values[3] = IID_IVisual2;
     values[4] = IID_ICompositionObject;
     values[5] = composition_object2_iid;
-    *count = 6;
+    values[6] = IID_ISpriteVisual2;
+    *count = impl_from_ISpriteVisual(iface)->is_redirect ? 6 : 7;
     *iids = values;
     return S_OK;
 }
@@ -2112,6 +2134,37 @@ static const ISpriteVisualVtbl sprite_visual_vtbl =
     sprite_visual_put_Brush,
 };
 
+DEFINE_IINSPECTABLE( sprite2, ISpriteVisual2, struct sprite_visual, ISpriteVisual_iface )
+
+static HRESULT WINAPI sprite2_get_Shadow( ISpriteVisual2 *iface, ICompositionShadow **value )
+{
+    struct sprite_visual *impl=impl_from_ISpriteVisual2(iface);
+    if (!value) return E_POINTER;
+    EnterCriticalSection(&visual_graph_cs);
+    if ((*value=impl->shadow)) ICompositionShadow_AddRef(*value);
+    LeaveCriticalSection(&visual_graph_cs);
+    return S_OK;
+}
+
+static HRESULT WINAPI sprite2_put_Shadow( ISpriteVisual2 *iface, ICompositionShadow *value )
+{
+    struct sprite_visual *impl=impl_from_ISpriteVisual2(iface);
+    ICompositionShadow *old;
+    if (value) ICompositionShadow_AddRef(value);
+    EnterCriticalSection(&visual_graph_cs);
+    old=impl->shadow; impl->shadow=value;
+    LeaveCriticalSection(&visual_graph_cs);
+    if (old) ICompositionShadow_Release(old);
+    composition_notify_changed(impl->compositor);
+    return S_OK;
+}
+
+static const ISpriteVisual2Vtbl sprite2_vtbl =
+{
+    sprite2_QueryInterface,sprite2_AddRef,sprite2_Release,sprite2_GetIids,
+    sprite2_GetRuntimeClassName,sprite2_GetTrustLevel,sprite2_get_Shadow,sprite2_put_Shadow,
+};
+
 static HRESULT WINAPI visual_QueryInterface( IVisual *iface, REFIID iid, void **out )
 {
     struct sprite_visual *impl = sprite_visual_from_IVisual( iface );
@@ -2173,9 +2226,13 @@ static BOOL visual_property_equal(const WCHAR *name,const void *a,const void *b,
     static HRESULT WINAPI visual_put_##name( IVisual *iface, type value ) \
     { \
         struct sprite_visual *impl = sprite_visual_from_IVisual(iface); \
+        HRESULT hr; \
         if (visual_property_equal(L## #name,&impl->field,&value,sizeof(value))) return S_OK; \
         impl->field = value; \
-        return visual_apply_implicit_animation(impl,L## #name); \
+        TRACE_(uiperf)( "visual %p property %s tick %llu.\n", iface, #name, GetTickCount64() ); \
+        hr = visual_apply_implicit_animation(impl,L## #name); \
+        compositor_notify_commit_needed(impl_from_ICompositor(impl->compositor)); \
+        return hr; \
     }
 
 VISUAL_PROPERTY( AnchorPoint, struct Vector2, anchor_point )
@@ -2503,6 +2560,7 @@ static ULONG WINAPI compositor_Release( ICompositor *iface )
             desktop_window_target_release( target );
         }
         if (impl->dcomp_device) IDCompositionDevice_Release( impl->dcomp_device );
+        if (impl->dispatcher_queue) IDispatcherQueue_Release( impl->dispatcher_queue );
         WindowsDeleteString( impl->comment );
         free( impl );
     }
@@ -5033,7 +5091,7 @@ static inline struct scalar_key_frame_animation *scalar_animation_from_IBooleanK
                               IBooleanKeyFrameAnimation_iface );
 }
 
-static HRESULT scalar_key_frame_animation_get_final_value( ICompositionAnimation *animation,
+HRESULT scalar_key_frame_animation_get_final_value( ICompositionAnimation *animation,
         FLOAT *value )
 {
     struct scalar_key_frame_animation *impl;
@@ -5081,7 +5139,7 @@ static HRESULT boolean_key_frame_animation_get_final_value( ICompositionAnimatio
     return hr;
 }
 
-static HRESULT vector3_key_frame_animation_get_final_value( ICompositionAnimation *animation,
+HRESULT vector3_key_frame_animation_get_final_value( ICompositionAnimation *animation,
         struct Vector3 *value )
 {
     struct scalar_key_frame_animation *impl;
@@ -7162,6 +7220,7 @@ static HRESULT WINAPI composition_scoped_batch_End( ICompositionScopedBatch *ifa
     LeaveCriticalSection( &impl->cs );
 
     ICompositionScopedBatch_AddRef( iface );
+    TRACE_(uilifetime)("batch %p End handlers %u caller %p\n", iface, count, __builtin_return_address(0));
     for (i = 0; i < count; ++i)
     {
         TRACE( "batch %p Completed handler %u/%u begin.\n", iface, i, count );
@@ -7624,6 +7683,7 @@ static HRESULT WINAPI compositor_CreateSpriteVisual( ICompositor *iface, ISprite
     *result = NULL;
     if (!(impl = calloc( 1, sizeof(*impl) ))) return E_OUTOFMEMORY;
     impl->ISpriteVisual_iface.lpVtbl = &sprite_visual_vtbl;
+    impl->ISpriteVisual2_iface.lpVtbl = &sprite2_vtbl;
     impl->IVisual_iface.lpVtbl = &visual_vtbl;
     impl->redirect_iface.lpVtbl = &redirect_visual_vtbl;
     impl->object2_iface.lpVtbl = &visual_object2_vtbl;
@@ -8662,7 +8722,10 @@ static HRESULT WINAPI compositor2_CreateAnimationGroup( struct compositor2_iface
 
 DEFINE_COMPOSITOR2_CREATE_METHOD(CreateBackdropBrush)
 DEFINE_COMPOSITOR2_CREATE_METHOD(CreateDistantLight)
-DEFINE_COMPOSITOR2_CREATE_METHOD(CreateDropShadow)
+static HRESULT WINAPI compositor2_CreateDropShadow( struct compositor2_iface *iface, IInspectable **value )
+{
+    return composition_drop_shadow_create(&impl_from_compositor2(iface)->ICompositor_iface,value);
+}
 static const GUID implicit_pair_iid = {0x3b9a274f,0x891d,0x5208,{0x96,0xbb,0xe3,0xf4,0x0c,0x80,0x9e,0x9b}};
 static const GUID implicit_iterator_iid = {0x85924e77,0xfc46,0x5a0d,{0xbd,0xaf,0x46,0x3c,0x4f,0x86,0xc1,0x72}};
 static const GUID implicit_iterable_iid = {0xc739c420,0x64b2,0x53f2,{0x89,0xb9,0x05,0x90,0x6a,0xba,0x7c,0xb0}};
@@ -10522,23 +10585,29 @@ DEFINE_COMPOSITOR5_CREATE_METHOD(CreateBounceVector3Animation)
 DEFINE_COMPOSITOR5_CREATE_METHOD(CreateContainerShape)
 DEFINE_COMPOSITOR5_CREATE_METHOD(CreateEllipseGeometry)
 DEFINE_COMPOSITOR5_CREATE_METHOD(CreateLineGeometry)
-DEFINE_COMPOSITOR5_CREATE_METHOD(CreatePathGeometry)
 DEFINE_COMPOSITOR5_CREATE_METHOD(CreatePathKeyFrameAnimation)
 DEFINE_COMPOSITOR5_CREATE_METHOD(CreateRectangleGeometry)
-DEFINE_COMPOSITOR5_CREATE_METHOD(CreateRoundedRectangleGeometry)
 DEFINE_COMPOSITOR5_CREATE_METHOD(CreateShapeVisual)
 DEFINE_COMPOSITOR5_CREATE_METHOD(CreateSpriteShape)
 DEFINE_COMPOSITOR5_CREATE_METHOD(CreateViewBox)
 
 #undef DEFINE_COMPOSITOR5_CREATE_METHOD
 
+static HRESULT WINAPI compositor5_CreateRoundedRectangleGeometry( struct compositor5_iface *iface,
+        IInspectable **result )
+{
+    return composition_rounded_rectangle_geometry_create( &impl_from_compositor5( iface )->ICompositor_iface, result );
+}
+
 static HRESULT WINAPI compositor5_CreatePathGeometryWithPath( struct compositor5_iface *iface,
         IInspectable *path, IInspectable **result )
 {
-    FIXME( "iface %p, path %p, result %p stub!\n", iface, path, result );
-    if (!result) return E_POINTER;
-    *result = NULL;
-    return E_NOTIMPL;
+    return composition_path_geometry_create( &impl_from_compositor5( iface )->ICompositor_iface, path, result );
+}
+
+static HRESULT WINAPI compositor5_CreatePathGeometry( struct compositor5_iface *iface, IInspectable **result )
+{
+    return compositor5_CreatePathGeometryWithPath( iface, NULL, result );
 }
 
 static HRESULT WINAPI compositor5_CreateSpriteShapeWithGeometry( struct compositor5_iface *iface,
@@ -10626,20 +10695,11 @@ static HRESULT WINAPI compositor6_GetTrustLevel( struct compositor6_iface *iface
     return ICompositor_GetTrustLevel( &impl->ICompositor_iface, level );
 }
 
-#define DEFINE_COMPOSITOR6_CREATE_METHOD(name) \
-    static HRESULT WINAPI compositor6_##name( struct compositor6_iface *iface, \
-            IInspectable **result ) \
-    { \
-        FIXME( "iface %p, result %p stub!\n", iface, result ); \
-        if (!result) return E_POINTER; \
-        *result = NULL; \
-        return E_NOTIMPL; \
-    }
-
-DEFINE_COMPOSITOR6_CREATE_METHOD(CreateGeometricClip)
-
-
-#undef DEFINE_COMPOSITOR6_CREATE_METHOD
+static HRESULT WINAPI compositor6_CreateGeometricClip( struct compositor6_iface *iface,
+        IInspectable **result )
+{
+    return composition_geometric_clip_create( &impl_from_compositor6( iface )->ICompositor_iface, NULL, result );
+}
 
 static HRESULT WINAPI compositor6_CreateBooleanKeyFrameAnimation( struct compositor6_iface *iface,
         IInspectable **result )
@@ -10652,10 +10712,7 @@ static HRESULT WINAPI compositor6_CreateBooleanKeyFrameAnimation( struct composi
 static HRESULT WINAPI compositor6_CreateGeometricClipWithGeometry( struct compositor6_iface *iface,
         IInspectable *geometry, IInspectable **result )
 {
-    FIXME( "iface %p, geometry %p, result %p stub!\n", iface, geometry, result );
-    if (!result) return E_POINTER;
-    *result = NULL;
-    return E_NOTIMPL;
+    return composition_geometric_clip_create( &impl_from_compositor6( iface )->ICompositor_iface, geometry, result );
 }
 
 static HRESULT WINAPI compositor6_CreateRedirectVisualWithSourceVisual( struct compositor6_iface *iface,
@@ -11053,6 +11110,7 @@ static HRESULT WINAPI composition_virtual_drawing_surface_Trim( ICompositionVirt
     UINT32 i;
     int type;
 
+    InterlockedIncrement( &surface->content_version );
     TRACE( "iface %p, count %u, rects %p.\n", iface, count, rects );
     if (count && !rects) return E_POINTER;
     if (surface->drawing) return D2DERR_WRONG_STATE;
@@ -11159,6 +11217,7 @@ static HRESULT WINAPI composition_drawing_surface_interop_BeginDraw( ICompositio
     IDXGISurface *surface;
     HRESULT hr;
 
+    InterlockedIncrement( &impl->content_version );
     FIXME( "iface %p, update_rect %s, iid %s, update_object %p, update_offset %p.\n",
             iface, wine_dbgstr_rect( update_rect ), debugstr_guid( iid ), update_object, update_offset );
     if (!update_object || !update_offset) return E_POINTER;
@@ -11225,6 +11284,9 @@ static HRESULT WINAPI composition_drawing_surface_interop_BeginDraw( ICompositio
         impl->bitmap_offset = (POINT){update_rect->left, update_rect->top};
     else
         *update_offset = (POINT){impl->update_rect.left, impl->update_rect.top};
+    TRACE_(uisurface)("surface %p context %p bitmap %p iid %s rect %s offset %s\n", impl,
+            impl->context, impl->bitmap, debugstr_guid(iid), wine_dbgstr_rect(&impl->update_rect),
+            wine_dbgstr_point(update_offset));
     return S_OK;
 }
 
@@ -11354,14 +11416,37 @@ static void draw_nine_grid_brush_content( ID2D1DeviceContext *context, struct ni
     FLOAT left, top, right, bottom, dest_left, dest_top, dest_right, dest_bottom;
     UINT x, y;
 
+    if (brush->source && brush->source->lpVtbl != &surface_composition_brush_vtbl)
+        TRACE_(uirender)( "nine-grid source %p %s insets %.2f,%.2f,%.2f,%.2f scales %.2f,%.2f,%.2f,%.2f hollow %d bounds %.1f,%.1f-%.1f,%.1f.\n",
+                brush->source, brush->source->lpVtbl == &composition_brush_vtbl ? "color" : "other",
+                brush->left_inset, brush->top_inset, brush->right_inset, brush->bottom_inset,
+                brush->left_inset_scale, brush->top_inset_scale, brush->right_inset_scale,
+                brush->bottom_inset_scale, brush->center_hollow, bounds->left, bounds->top, bounds->right, bounds->bottom );
     if (!brush->source || brush->source->lpVtbl != &surface_composition_brush_vtbl) return;
     if (!surface_brush_snapshot( surface_brush_from_ICompositionBrush( brush->source ), &snapshot )) return;
     source_brush = &snapshot;
-    if (!(surface = drawing_surface_from_surface_brush( source_brush ))) goto done;
+    if (!(surface = drawing_surface_from_surface_brush( source_brush )))
+    {
+        HSTRING name = NULL;
+        if (TRACE_ON(uirender)) IInspectable_GetRuntimeClassName( (IInspectable *)snapshot.surface, &name );
+        TRACE_(uirender)( "nine-grid surface %p is not a drawing surface (%s).\n", snapshot.surface,
+                debugstr_hstring( name ) );
+        WindowsDeleteString( name );
+        goto done;
+    }
     bitmap = surface->virtual ? surface->bitmap : surface->committed_bitmap;
-    if (!bitmap) goto done;
+    if (!bitmap)
+    {
+        TRACE_(uirender)( "nine-grid surface %p has no bitmap, virtual %d size %.0fx%.0f.\n", surface,
+                surface->virtual, surface->size.Width, surface->size.Height );
+        goto done;
+    }
     size = ID2D1Bitmap1_GetSize( bitmap );
     if (size.width <= 0.0f || size.height <= 0.0f) goto done;
+    TRACE_(uirender)( "nine-grid surface %p bitmap %.0fx%.0f insets %.2f,%.2f,%.2f,%.2f scales %.2f,%.2f hollow %d bounds %.1f,%.1f-%.1f,%.1f.\n",
+            surface, size.width, size.height, brush->left_inset, brush->top_inset, brush->right_inset,
+            brush->bottom_inset, brush->left_inset_scale, brush->top_inset_scale, brush->center_hollow,
+            bounds->left, bounds->top, bounds->right, bounds->bottom );
 
     left = min( max( brush->left_inset, 0.0f ), size.width );
     right = min( max( brush->right_inset, 0.0f ), size.width - left );
@@ -11671,6 +11756,189 @@ static HRESULT draw_composition_brush( ID2D1DeviceContext *context, IComposition
  * shows black on paper and white on dark backgrounds. The layer's backbuffer
  * cannot be read back here, so an inverting solid colour is approximated by
  * its complement, which is exact over white and black. */
+/* The inputs that decide what a target draws, flattened so that an unchanged
+ * target can keep its last presented frame. Anything this walk does not model
+ * (animations, expressions, effects, geometric clips, shadows) marks the state
+ * dynamic, which always redraws. */
+struct target_snapshot
+{
+    BYTE *data;
+    SIZE_T size;
+    SIZE_T capacity;
+    BOOL dynamic;
+    const char *reason;
+};
+
+static void snapshot_add( struct target_snapshot *snap, const void *data, SIZE_T size )
+{
+    BYTE *grown;
+
+    if (snap->dynamic) return;
+    if (snap->size + size > snap->capacity)
+    {
+        SIZE_T capacity = max( snap->capacity * 2, snap->size + size + 1024 );
+        if (!(grown = realloc( snap->data, capacity )))
+        {
+            snap->dynamic = TRUE;
+            snap->reason = "memory";
+            return;
+        }
+        snap->data = grown;
+        snap->capacity = capacity;
+    }
+    memcpy( snap->data + snap->size, data, size );
+    snap->size += size;
+}
+
+static void snapshot_dynamic( struct target_snapshot *snap, const char *reason )
+{
+    if (!snap->dynamic) snap->reason = reason;
+    snap->dynamic = TRUE;
+}
+
+static void snapshot_brush( struct target_snapshot *snap, ICompositionBrush *brush, UINT depth );
+
+/* Inverted small brushes, keyed by the brush's rendering inputs: a caret
+ * blinks twice a second and is redrawn on every keystroke, and reading a
+ * bitmap back from the GPU each time costs milliseconds. */
+struct inverted_brush_entry
+{
+    ID2D1Device *device;
+    BYTE *state;
+    SIZE_T state_size;
+    D2D1_SIZE_U pixels;
+    ID2D1Bitmap1 *bitmap;
+};
+static struct inverted_brush_entry inverted_brushes[8];
+static UINT inverted_brush_next;
+static CRITICAL_SECTION inverted_brush_cs;
+static CRITICAL_SECTION_DEBUG inverted_brush_cs_debug =
+{
+    0, 0, &inverted_brush_cs,
+    { &inverted_brush_cs_debug.ProcessLocksList, &inverted_brush_cs_debug.ProcessLocksList },
+    0, 0, { (DWORD_PTR)(__FILE__ ": inverted_brush_cs") }
+};
+static CRITICAL_SECTION inverted_brush_cs = { &inverted_brush_cs_debug, -1, 0, 0, 0, 0 };
+
+/* DestinationInvert for brushes other than solid colours, e.g. OneNote's
+ * caret, a white nine-grid image. Like the colour case, invert the brush's own
+ * colours (keeping its alpha), which is exact over white and black. The
+ * readback is only done for small areas such as carets. */
+static HRESULT draw_inverted_brush( ID2D1DeviceContext *context, ICompositionBrush *brush,
+        const D2D1_RECT_F *bounds, FLOAT opacity )
+{
+    D2D1_PIXEL_FORMAT format = {DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED};
+    D2D1_BITMAP_PROPERTIES1 readable = {format, 96.0f, 96.0f,
+            D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW, NULL};
+    D2D1_BITMAP_PROPERTIES1 drawable = {format, 96.0f, 96.0f, D2D1_BITMAP_OPTIONS_NONE, NULL};
+    D2D1_COLOR_F clear = {0.0f, 0.0f, 0.0f, 0.0f};
+    D2D1_SIZE_F size = {ceilf( bounds->right - bounds->left ), ceilf( bounds->bottom - bounds->top )};
+    D2D1_SIZE_U pixels = {(UINT32)size.width, (UINT32)size.height};
+    D2D1_RECT_F local = {0.0f, 0.0f, bounds->right - bounds->left, bounds->bottom - bounds->top};
+    D2D1_RECT_F dest = {bounds->left, bounds->top, bounds->left + size.width, bounds->top + size.height};
+    ID2D1BitmapRenderTarget *target = NULL;
+    ID2D1DeviceContext *offscreen = NULL;
+    ID2D1Bitmap1 *cpu = NULL, *result = NULL;
+    ID2D1Bitmap *bitmap = NULL;
+    D2D1_MAPPED_RECT map;
+    BYTE *pixels_out = NULL;
+    struct target_snapshot key = {0};
+    ID2D1Device *device = NULL;
+    HRESULT hr;
+    UINT x, y, i;
+
+    if (!pixels.width || !pixels.height || pixels.width * pixels.height > 64 * 1024)
+        return draw_composition_brush( context, brush, bounds, opacity, 0 );
+    ID2D1DeviceContext_GetDevice( context, &device );
+    snapshot_brush( &key, brush, 0 );
+    EnterCriticalSection( &inverted_brush_cs );
+    for (i = 0; i < ARRAY_SIZE(inverted_brushes) && !key.dynamic; ++i)
+    {
+        struct inverted_brush_entry *entry = &inverted_brushes[i];
+        if (entry->bitmap && entry->device == device && entry->pixels.width == pixels.width &&
+                entry->pixels.height == pixels.height && entry->state_size == key.size &&
+                !memcmp( entry->state, key.data, key.size ))
+        {
+            result = entry->bitmap;
+            ID2D1Bitmap1_AddRef( result );
+            break;
+        }
+    }
+    LeaveCriticalSection( &inverted_brush_cs );
+    if (result)
+    {
+        ID2D1DeviceContext_DrawBitmap( context, (ID2D1Bitmap *)result, &dest, opacity,
+                D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, NULL, NULL );
+        hr = S_OK;
+        goto done;
+    }
+    if (FAILED(hr = ID2D1DeviceContext_CreateCompatibleRenderTarget( context, &size, &pixels, &format,
+            D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE, &target ))) goto done;
+    if (FAILED(hr = ID2D1BitmapRenderTarget_QueryInterface( target, &IID_ID2D1DeviceContext,
+            (void **)&offscreen ))) goto done;
+    ID2D1DeviceContext_BeginDraw( offscreen );
+    ID2D1DeviceContext_Clear( offscreen, &clear );
+    hr = draw_composition_brush( offscreen, brush, &local, 1.0f, 0 );
+    if (FAILED(ID2D1DeviceContext_EndDraw( offscreen, NULL, NULL )) || FAILED(hr)) goto done;
+    if (FAILED(hr = ID2D1BitmapRenderTarget_GetBitmap( target, &bitmap ))) goto done;
+    if (FAILED(hr = ID2D1DeviceContext_CreateBitmap( context, pixels, NULL, 0, &readable, &cpu ))) goto done;
+    if (FAILED(hr = ID2D1Bitmap1_CopyFromBitmap( cpu, NULL, bitmap, NULL ))) goto done;
+    if (FAILED(hr = ID2D1Bitmap1_Map( cpu, D2D1_MAP_OPTIONS_READ, &map ))) goto done;
+    if ((pixels_out = malloc( pixels.width * pixels.height * 4 )))
+    {
+        for (y = 0; y < pixels.height; ++y)
+        {
+            const BYTE *in = map.bits + y * map.pitch;
+            BYTE *out = pixels_out + y * pixels.width * 4;
+            for (x = 0; x < pixels.width; ++x, in += 4, out += 4)
+            {
+                out[0] = in[3] - min( in[0], in[3] );
+                out[1] = in[3] - min( in[1], in[3] );
+                out[2] = in[3] - min( in[2], in[3] );
+                out[3] = in[3];
+            }
+        }
+    }
+    ID2D1Bitmap1_Unmap( cpu );
+    if (!pixels_out) { hr = E_OUTOFMEMORY; goto done; }
+    if (SUCCEEDED(hr = ID2D1DeviceContext_CreateBitmap( context, pixels, pixels_out, pixels.width * 4,
+            &drawable, &result )))
+    {
+        ID2D1DeviceContext_DrawBitmap( context, (ID2D1Bitmap *)result, &dest, opacity,
+                D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, NULL, NULL );
+        if (!key.dynamic)
+        {
+            struct inverted_brush_entry *entry;
+
+            EnterCriticalSection( &inverted_brush_cs );
+            entry = &inverted_brushes[inverted_brush_next++ % ARRAY_SIZE(inverted_brushes)];
+            if (entry->bitmap) ID2D1Bitmap1_Release( entry->bitmap );
+            if (entry->device) ID2D1Device_Release( entry->device );
+            free( entry->state );
+            entry->bitmap = result;
+            ID2D1Bitmap1_AddRef( result );
+            entry->device = device;
+            if (device) ID2D1Device_AddRef( device );
+            entry->state = key.data;
+            entry->state_size = key.size;
+            entry->pixels = pixels;
+            key.data = NULL;
+            LeaveCriticalSection( &inverted_brush_cs );
+        }
+    }
+done:
+    free( key.data );
+    if (device) ID2D1Device_Release( device );
+    free( pixels_out );
+    if (result) ID2D1Bitmap1_Release( result );
+    if (cpu) ID2D1Bitmap1_Release( cpu );
+    if (bitmap) ID2D1Bitmap_Release( bitmap );
+    if (offscreen) ID2D1DeviceContext_Release( offscreen );
+    if (target) ID2D1BitmapRenderTarget_Release( target );
+    if (FAILED(hr)) WARN( "Could not invert brush %p, hr %#lx.\n", brush, hr );
+    return hr;
+}
+
 static HRESULT draw_visual_brush( ID2D1DeviceContext *context, ICompositionBrush *brush,
         const D2D1_RECT_F *bounds, FLOAT opacity, enum CompositionCompositeMode mode )
 {
@@ -11691,6 +11959,8 @@ static HRESULT draw_visual_brush( ID2D1DeviceContext *context, ICompositionBrush
         ID2D1SolidColorBrush_Release( solid );
         return S_OK;
     }
+    if (mode == CompositionCompositeMode_DestinationInvert)
+        return draw_inverted_brush( context, brush, bounds, opacity );
     if (mode == CompositionCompositeMode_MinBlend)
     {
         ID2D1DeviceContext_SetPrimitiveBlend( context, D2D1_PRIMITIVE_BLEND_MIN );
@@ -11704,6 +11974,124 @@ static HRESULT draw_visual_brush( ID2D1DeviceContext *context, ICompositionBrush
 static HRESULT draw_composition_visual_mode( ID2D1DeviceContext *context, IVisual *visual,
         FLOAT x, FLOAT y, FLOAT parent_width, FLOAT parent_height, FLOAT opacity, UINT depth,
         enum CompositionCompositeMode parent_mode );
+
+static HRESULT draw_composition_shadow( ID2D1DeviceContext *context, ICompositionShadow *shadow,
+        ICompositionBrush *visual_brush, const D2D1_RECT_F *bounds, FLOAT opacity, UINT depth )
+{
+    D2D1_PIXEL_FORMAT format={DXGI_FORMAT_B8G8R8A8_UNORM,D2D1_ALPHA_MODE_PREMULTIPLIED};
+    D2D1_COLOR_F clear={0},white={1.0f,1.0f,1.0f,1.0f};
+    D2D1_SIZE_F size={bounds->right-bounds->left,bounds->bottom-bounds->top};
+    enum CompositionDropShadowSourcePolicy policy=CompositionDropShadowSourcePolicy_Default;
+    ID2D1BitmapRenderTarget *target=NULL;
+    ID2D1DeviceContext *mask_context=NULL;
+    ID2D1SolidColorBrush *fill=NULL;
+    ID2D1Bitmap *bitmap=NULL;
+    ID2D1Effect *effect=NULL;
+    IDropShadow *drop=NULL;
+    IDropShadow2 *drop2=NULL;
+    ICompositionBrush *mask=NULL;
+    struct Color color;
+    struct Vector3 offset;
+    D2D1_POINT_2F point;
+    D2D1_VECTOR_4F rgba;
+    FLOAT radius,alpha;
+    HRESULT hr,end;
+
+    if (size.width<=0 || size.height<=0 || opacity<=0) return S_OK;
+    if (FAILED(hr=ICompositionShadow_QueryInterface(shadow,&IID_IDropShadow,(void **)&drop))) return hr;
+    if (FAILED(hr=IDropShadow_get_BlurRadius(drop,&radius))) goto done;
+    if (FAILED(hr=IDropShadow_get_Color(drop,&color))) goto done;
+    if (FAILED(hr=IDropShadow_get_Offset(drop,&offset))) goto done;
+    if (FAILED(hr=IDropShadow_get_Opacity(drop,&alpha))) goto done;
+    if (SUCCEEDED(IDropShadow_QueryInterface(drop,&IID_IDropShadow2,(void **)&drop2)))
+        IDropShadow2_get_SourcePolicy(drop2,&policy);
+    if (policy==CompositionDropShadowSourcePolicy_InheritFromVisualContent)
+    {
+        if (!(mask=visual_brush)) { hr=S_OK; goto done; }
+        ICompositionBrush_AddRef(mask);
+    }
+    else if (FAILED(hr=IDropShadow_get_Mask(drop,&mask))) goto done;
+    alpha*=opacity*color.A/255.0f;
+    if (alpha<=0) { hr=S_OK; goto done; }
+    if (FAILED(hr=ID2D1DeviceContext_CreateCompatibleRenderTarget(context,&size,NULL,&format,
+            D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE,&target))) goto done;
+    if (FAILED(hr=ID2D1BitmapRenderTarget_QueryInterface(target,&IID_ID2D1DeviceContext,(void **)&mask_context))) goto done;
+    ID2D1DeviceContext_BeginDraw(mask_context);
+    ID2D1DeviceContext_Clear(mask_context,&clear);
+    if (mask) hr=draw_composition_brush(mask_context,mask,bounds,1.0f,depth+1);
+    else if (SUCCEEDED(hr=ID2D1DeviceContext_CreateSolidColorBrush(mask_context,&white,NULL,&fill)))
+        ID2D1DeviceContext_FillRectangle(mask_context,bounds,(ID2D1Brush *)fill);
+    end=ID2D1DeviceContext_EndDraw(mask_context,NULL,NULL);
+    if (SUCCEEDED(hr)) hr=end;
+    if (FAILED(hr)) goto done;
+    if (FAILED(hr=ID2D1BitmapRenderTarget_GetBitmap(target,&bitmap))) goto done;
+    if (FAILED(hr=ID2D1DeviceContext_CreateEffect(context,&CLSID_D2D1Shadow,&effect))) goto done;
+    rgba=(D2D1_VECTOR_4F){color.R/255.0f,color.G/255.0f,color.B/255.0f,min(alpha,1.0f)};
+    if (FAILED(hr=ID2D1Effect_SetValue(effect,D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION,
+            D2D1_PROPERTY_TYPE_FLOAT,(BYTE *)&radius,sizeof(radius)))) goto done;
+    if (FAILED(hr=ID2D1Effect_SetValue(effect,D2D1_SHADOW_PROP_COLOR,
+            D2D1_PROPERTY_TYPE_VECTOR4,(BYTE *)&rgba,sizeof(rgba)))) goto done;
+    ID2D1Effect_SetInput(effect,0,(ID2D1Image *)bitmap,TRUE);
+    point=(D2D1_POINT_2F){offset.X,offset.Y};
+    ID2D1DeviceContext_DrawImage(context,(ID2D1Image *)effect,&point,NULL,
+            D2D1_INTERPOLATION_MODE_LINEAR,D2D1_COMPOSITE_MODE_SOURCE_OVER);
+done:
+    if (effect) ID2D1Effect_Release(effect);
+    if (bitmap) ID2D1Bitmap_Release(bitmap);
+    if (fill) ID2D1SolidColorBrush_Release(fill);
+    if (mask_context) ID2D1DeviceContext_Release(mask_context);
+    if (target) ID2D1BitmapRenderTarget_Release(target);
+    if (mask) ICompositionBrush_Release(mask);
+    if (drop2) IDropShadow2_Release(drop2);
+    IDropShadow_Release(drop);
+    return hr==RO_E_CLOSED ? S_OK : hr;
+}
+
+static HRESULT create_geometric_clip_mask( ICompositionClip *clip, ID2D1DeviceContext *context,
+        ID2D1Geometry **result )
+{
+    ICompositionGeometricClip *geometric;
+    ICompositionGeometry *geometry;
+    ID2D1Factory *factory;
+    HRESULT hr;
+
+    *result = NULL;
+    if (FAILED(ICompositionClip_QueryInterface( clip, &IID_ICompositionGeometricClip, (void **)&geometric )))
+        return S_FALSE;
+    hr = ICompositionGeometricClip_get_Geometry( geometric, &geometry );
+    ICompositionGeometricClip_Release( geometric );
+    if (FAILED(hr)) return hr;
+    ID2D1DeviceContext_GetFactory( context, &factory );
+    hr = composition_geometry_get_d2d_geometry( geometry, factory, result );
+    ID2D1Factory_Release( factory );
+    if (geometry) ICompositionGeometry_Release( geometry );
+    return hr;
+}
+
+/* Whether a clip rectangle, as Direct2D applies it (the bounding box of the
+ * transformed rectangle), leaves nothing of the render target visible. */
+static BOOL clip_outside_target( ID2D1DeviceContext *context, const D2D1_MATRIX_3X2_F *m,
+        const D2D1_RECT_F *rect )
+{
+    D2D1_POINT_2F corners[4] = {{rect->left, rect->top}, {rect->right, rect->top},
+            {rect->left, rect->bottom}, {rect->right, rect->bottom}};
+    FLOAT left = FLT_MAX, top = FLT_MAX, right = -FLT_MAX, bottom = -FLT_MAX;
+    D2D1_SIZE_F size;
+    UINT i;
+
+    if (rect->right <= rect->left || rect->bottom <= rect->top) return TRUE;
+    for (i = 0; i < ARRAY_SIZE(corners); ++i)
+    {
+        FLOAT x = corners[i].x * m->_11 + corners[i].y * m->_21 + m->_31;
+        FLOAT y = corners[i].x * m->_12 + corners[i].y * m->_22 + m->_32;
+        left = min( left, x );
+        top = min( top, y );
+        right = max( right, x );
+        bottom = max( bottom, y );
+    }
+    size = ID2D1DeviceContext_GetSize( context );
+    return right <= 0.0f || bottom <= 0.0f || left >= size.width || top >= size.height;
+}
 
 static HRESULT draw_composition_visual( ID2D1DeviceContext *context, IVisual *visual,
         FLOAT x, FLOAT y, FLOAT parent_width, FLOAT parent_height, FLOAT opacity, UINT depth )
@@ -11721,6 +12109,8 @@ static HRESULT draw_composition_visual_mode( ID2D1DeviceContext *context, IVisua
     struct visual_collection *children;
     IInsetClip *clip = NULL;
     D2D1_RECT_F bounds, clip_bounds;
+    ID2D1Geometry *geometric_mask = NULL;
+    ICompositionShadow *shadow;
     D2D1_MATRIX_3X2_F parent, local, transform;
     FLOAT center_x, center_y;
     FLOAT width, height;
@@ -11801,6 +12191,23 @@ static HRESULT draw_composition_visual_mode( ID2D1DeviceContext *context, IVisua
             local._31 * parent._12 + local._32 * parent._22 + parent._32};
     ID2D1DeviceContext_SetTransform( context, &transform );
     bounds = (D2D1_RECT_F){0.0f, 0.0f, width, height};
+    if (TRACE_ON(uirender))
+    {
+        const char *kind = "none";
+        struct Color color = {0};
+        if (impl->brush && impl->brush->lpVtbl == &composition_brush_vtbl)
+        {
+            kind = "color";
+            color_brush_get_Color( &color_brush_from_ICompositionBrush( impl->brush )->ICompositionColorBrush_iface, &color );
+        }
+        else if (impl->brush && impl->brush->lpVtbl == &surface_composition_brush_vtbl) kind = "surface";
+        else if (impl->brush && impl->brush->lpVtbl == &nine_grid_composition_brush_vtbl) kind = "ninegrid";
+        else if (impl->brush && impl->brush->lpVtbl == &effect_composition_brush_vtbl) kind = "effect";
+        else if (impl->brush) kind = "other";
+        TRACE_(uirender)("visual %p depth %u size %.2fx%.2f translate %.2f,%.2f opacity %.2f brush %p %s #%02x%02x%02x%02x clip %p children %u mode %d\n",
+                impl, depth, width, height, transform._31, transform._32, opacity, impl->brush, kind,
+                color.A, color.R, color.G, color.B, impl->clip, children->count, mode);
+    }
 
     if (impl->clip && SUCCEEDED(ICompositionClip_QueryInterface( impl->clip,
             &IID_IInsetClip, (void **)&clip )))
@@ -11808,9 +12215,34 @@ static HRESULT draw_composition_visual_mode( ID2D1DeviceContext *context, IVisua
         struct inset_clip *inset = impl_from_IInsetClip( clip );
         clip_bounds = (D2D1_RECT_F){bounds.left + inset->left, bounds.top + inset->top,
                 bounds.right - inset->right, bounds.bottom - inset->bottom};
+        /* Everything this visual and its children draw is inside the clip.
+         * Office keeps a visual per word, including a prefetch band beyond
+         * the viewport: skip subtrees whose clip misses the target. */
+        if (clip_outside_target( context, &transform, &clip_bounds ))
+        {
+            IInsetClip_Release( clip );
+            ID2D1DeviceContext_SetTransform( context, &parent );
+            return S_OK;
+        }
         ID2D1DeviceContext_PushAxisAlignedClip( context, &clip_bounds, D2D1_ANTIALIAS_MODE_ALIASED );
     }
-    if (impl->is_redirect)
+    else if (impl->clip)
+    {
+        hr = create_geometric_clip_mask( impl->clip, context, &geometric_mask );
+        if (SUCCEEDED(hr) && geometric_mask)
+        {
+            D2D1_LAYER_PARAMETERS1 layer = {{-FLT_MAX, -FLT_MAX, FLT_MAX, FLT_MAX},
+                    (ID2D1Geometry *)geometric_mask, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                    {1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f}, 1.0f, NULL, D2D1_LAYER_OPTIONS1_NONE};
+            ID2D1DeviceContext_PushLayer( context, &layer, NULL );
+        }
+    }
+    if (SUCCEEDED(sprite2_get_Shadow(&impl->ISpriteVisual2_iface,&shadow)) && shadow)
+    {
+        hr=draw_composition_shadow(context,shadow,impl->brush,&bounds,opacity,depth);
+        ICompositionShadow_Release(shadow);
+    }
+    if (SUCCEEDED(hr) && impl->is_redirect)
     {
         IVisual *source = visual_get_source(impl);
         if (source)
@@ -11828,6 +12260,11 @@ static HRESULT draw_composition_visual_mode( ID2D1DeviceContext *context, IVisua
     {
         ID2D1DeviceContext_PopAxisAlignedClip( context );
         IInsetClip_Release( clip );
+    }
+    if (geometric_mask)
+    {
+        ID2D1DeviceContext_PopLayer( context );
+        ID2D1Geometry_Release( geometric_mask );
     }
     ID2D1DeviceContext_SetTransform( context, &parent );
     return hr;
@@ -11883,6 +12320,11 @@ static struct composition_drawing_surface *find_visual_drawing_surface( IVisual 
     struct sprite_visual *impl;
     struct visual_collection *children;
     struct composition_drawing_surface *surface;
+    ICompositionShadow *shadow;
+    ICompositionBrush *mask;
+    IDropShadow *drop;
+    IDropShadow2 *drop2;
+    enum CompositionDropShadowSourcePolicy policy;
     UINT i;
 
     if (!visual || depth > 64) return NULL;
@@ -11895,6 +12337,28 @@ static struct composition_drawing_surface *find_visual_drawing_surface( IVisual 
         if (surface) return surface;
     }
     if ((surface = find_brush_drawing_surface( impl->brush, 0 ))) return surface;
+    if (SUCCEEDED(sprite2_get_Shadow(&impl->ISpriteVisual2_iface,&shadow)) && shadow)
+    {
+        surface=NULL;
+        if (SUCCEEDED(ICompositionShadow_QueryInterface(shadow,&IID_IDropShadow,(void **)&drop)))
+        {
+            policy=CompositionDropShadowSourcePolicy_Default;
+            if (SUCCEEDED(IDropShadow_QueryInterface(drop,&IID_IDropShadow2,(void **)&drop2)))
+            {
+                IDropShadow2_get_SourcePolicy(drop2,&policy);
+                IDropShadow2_Release(drop2);
+            }
+            if (policy==CompositionDropShadowSourcePolicy_Default &&
+                    SUCCEEDED(IDropShadow_get_Mask(drop,&mask)) && mask)
+            {
+                surface=find_brush_drawing_surface(mask,0);
+                ICompositionBrush_Release(mask);
+            }
+            IDropShadow_Release(drop);
+        }
+        ICompositionShadow_Release(shadow);
+        if (surface) return surface;
+    }
     children = impl_from_IVisualCollection( impl->children );
     for (i = 0; i < children->count; ++i)
         if ((surface = find_visual_drawing_surface( children->items[i], depth + 1 ))) return surface;
@@ -11904,17 +12368,230 @@ static struct composition_drawing_surface *find_visual_drawing_surface( IVisual 
 /* Whether the layer window already covers the target's client area at the
  * z-order edge DirectComposition uses (above the target's children for a
  * topmost target, below them otherwise). */
+static ULONGLONG perf_us(void)
+{
+    LARGE_INTEGER counter, frequency;
+    QueryPerformanceCounter( &counter );
+    QueryPerformanceFrequency( &frequency );
+    return counter.QuadPart * 1000000 / frequency.QuadPart;
+}
+
 static BOOL render_window_placed( struct desktop_window_target *target, UINT width, UINT height )
 {
     RECT rect;
+    HWND sibling;
 
-    if (!(GetWindowLongW( target->render_hwnd, GWL_STYLE ) & WS_VISIBLE)) return FALSE;
-    if (GetWindow( target->render_hwnd, target->topmost ? GW_HWNDFIRST : GW_HWNDLAST ) != target->render_hwnd)
+    if (!(GetWindowLongW( target->render_hwnd, GWL_STYLE ) & WS_VISIBLE))
+    {
+        TRACE_(uirender)( "layer %p hidden.\n", target->render_hwnd );
         return FALSE;
+    }
+    sibling = GetWindow( target->render_hwnd, target->topmost ? GW_HWNDFIRST : GW_HWNDLAST );
+    if (sibling != target->render_hwnd)
+    {
+        TRACE_(uirender)( "layer %p topmost %d sibling edge %p.\n", target->render_hwnd,
+                target->topmost, sibling );
+        return FALSE;
+    }
     if (!GetWindowRect( target->render_hwnd, &rect )) return FALSE;
     MapWindowPoints( HWND_DESKTOP, target->hwnd, (POINT *)&rect, 2 );
-    return !rect.left && !rect.top && rect.right == width && rect.bottom == height;
+    if (!rect.left && !rect.top && rect.right == width && rect.bottom == height) return TRUE;
+    TRACE_(uirender)( "layer %p rect %s expected %ux%u.\n", target->render_hwnd,
+            wine_dbgstr_rect( &rect ), width, height );
+    return FALSE;
 }
+
+#define SNAPSHOT_FIELD( snap, value ) snapshot_add( (snap), &(value), sizeof(value) )
+
+static void snapshot_brush( struct target_snapshot *snap, ICompositionBrush *brush, UINT depth )
+{
+    SNAPSHOT_FIELD( snap, brush );
+    if (!brush || snap->dynamic) return;
+    if (depth > 64) snapshot_dynamic( snap, "brush depth" );
+    else if (brush->lpVtbl == &composition_brush_vtbl)
+    {
+        struct color_brush *impl = color_brush_from_ICompositionBrush( brush );
+        struct Color color;
+
+        if (FAILED(color_brush_get_Color( &impl->ICompositionColorBrush_iface, &color )))
+            snapshot_dynamic( snap, "color" );
+        else SNAPSHOT_FIELD( snap, color );
+    }
+    else if (brush->lpVtbl == &surface_composition_brush_vtbl)
+    {
+        struct surface_brush *impl = surface_brush_from_ICompositionBrush( brush ), copy = {0};
+        struct composition_drawing_surface *surface;
+
+        /* A brush without a surface, or a closed one, draws nothing. */
+        if (!surface_brush_snapshot( impl, &copy ))
+        {
+            SNAPSHOT_FIELD( snap, copy.surface );
+            return;
+        }
+        SNAPSHOT_FIELD( snap, copy.surface );
+        SNAPSHOT_FIELD( snap, copy.interpolation_mode );
+        SNAPSHOT_FIELD( snap, copy.stretch );
+        SNAPSHOT_FIELD( snap, copy.horizontal_alignment_ratio );
+        SNAPSHOT_FIELD( snap, copy.vertical_alignment_ratio );
+        SNAPSHOT_FIELD( snap, copy.snap_to_pixels );
+        if ((surface = drawing_surface_from_surface_brush( &copy )))
+        {
+            LONG version = InterlockedCompareExchange( &surface->content_version, 0, 0 );
+
+            SNAPSHOT_FIELD( snap, version );
+            SNAPSHOT_FIELD( snap, surface->size );
+            SNAPSHOT_FIELD( snap, surface->bitmap );
+            SNAPSHOT_FIELD( snap, surface->committed_bitmap );
+            SNAPSHOT_FIELD( snap, surface->bitmap_offset );
+            if (surface->drawing) snapshot_dynamic( snap, "surface drawing" );
+        }
+        if (copy.surface) ICompositionSurface_Release( copy.surface );
+    }
+    else if (brush->lpVtbl == &nine_grid_composition_brush_vtbl)
+    {
+        struct nine_grid_brush *impl = nine_grid_brush_from_ICompositionBrush( brush );
+        ICompositionBrush *source = NULL;
+
+        EnterCriticalSection( &impl->lock );
+        SNAPSHOT_FIELD( snap, impl->bottom_inset );
+        SNAPSHOT_FIELD( snap, impl->bottom_inset_scale );
+        SNAPSHOT_FIELD( snap, impl->left_inset );
+        SNAPSHOT_FIELD( snap, impl->left_inset_scale );
+        SNAPSHOT_FIELD( snap, impl->right_inset );
+        SNAPSHOT_FIELD( snap, impl->right_inset_scale );
+        SNAPSHOT_FIELD( snap, impl->top_inset );
+        SNAPSHOT_FIELD( snap, impl->top_inset_scale );
+        SNAPSHOT_FIELD( snap, impl->center_hollow );
+        if ((source = impl->source)) ICompositionBrush_AddRef( source );
+        LeaveCriticalSection( &impl->lock );
+        snapshot_brush( snap, source, depth + 1 );
+        if (source) ICompositionBrush_Release( source );
+    }
+    else snapshot_dynamic( snap, "brush type" );
+}
+
+/* Drop shadow animations apply their final values, so properties suffice. */
+static void snapshot_shadow( struct target_snapshot *snap, ICompositionShadow *shadow )
+{
+    enum CompositionDropShadowSourcePolicy policy = CompositionDropShadowSourcePolicy_Default;
+    ICompositionBrush *mask = NULL;
+    IDropShadow2 *drop2;
+    IDropShadow *drop;
+    struct Vector3 offset;
+    struct Color color;
+    FLOAT blur, opacity;
+
+    if (FAILED(ICompositionShadow_QueryInterface( shadow, &IID_IDropShadow, (void **)&drop )))
+    {
+        snapshot_dynamic( snap, "shadow type" );
+        return;
+    }
+    if (FAILED(IDropShadow_get_Color( drop, &color )) || FAILED(IDropShadow_get_Offset( drop, &offset )) ||
+            FAILED(IDropShadow_get_BlurRadius( drop, &blur )) || FAILED(IDropShadow_get_Opacity( drop, &opacity )) ||
+            FAILED(IDropShadow_get_Mask( drop, &mask )))
+        snapshot_dynamic( snap, "shadow" );
+    else
+    {
+        if (SUCCEEDED(IDropShadow_QueryInterface( drop, &IID_IDropShadow2, (void **)&drop2 )))
+        {
+            IDropShadow2_get_SourcePolicy( drop2, &policy );
+            IDropShadow2_Release( drop2 );
+        }
+        snapshot_add( snap, &shadow, sizeof(shadow) );
+        snapshot_add( snap, &color, sizeof(color) );
+        snapshot_add( snap, &offset, sizeof(offset) );
+        snapshot_add( snap, &blur, sizeof(blur) );
+        snapshot_add( snap, &opacity, sizeof(opacity) );
+        snapshot_add( snap, &policy, sizeof(policy) );
+        snapshot_brush( snap, mask, 0 );
+    }
+    if (mask) ICompositionBrush_Release( mask );
+    IDropShadow_Release( drop );
+}
+
+static void snapshot_visual( struct target_snapshot *snap, IVisual *visual, UINT depth )
+{
+    struct visual_collection *children;
+    struct sprite_visual *impl;
+    ICompositionShadow *shadow = NULL;
+    UINT i;
+
+    SNAPSHOT_FIELD( snap, visual );
+    if (!visual || snap->dynamic) return;
+    if (depth > 64)
+    {
+        snapshot_dynamic( snap, "visual depth" );
+        return;
+    }
+    impl = sprite_visual_from_IVisual( visual );
+    if (impl->scale_expression || impl->offset_expression || impl->center_expression)
+    {
+        snapshot_dynamic( snap, "expression" );
+        return;
+    }
+    for (i = 0; i < ARRAY_SIZE(impl->component_expressions); ++i)
+        if (impl->component_expressions[i])
+        {
+            snapshot_dynamic( snap, "expression" );
+            return;
+        }
+    SNAPSHOT_FIELD( snap, impl->visible );
+    if (!impl->visible) return;
+    SNAPSHOT_FIELD( snap, impl->anchor_point );
+    SNAPSHOT_FIELD( snap, impl->relative_size_adjustment );
+    SNAPSHOT_FIELD( snap, impl->center_point );
+    SNAPSHOT_FIELD( snap, impl->offset );
+    SNAPSHOT_FIELD( snap, impl->relative_offset_adjustment );
+    SNAPSHOT_FIELD( snap, impl->orientation );
+    SNAPSHOT_FIELD( snap, impl->rotation_axis );
+    SNAPSHOT_FIELD( snap, impl->scale );
+    SNAPSHOT_FIELD( snap, impl->size );
+    SNAPSHOT_FIELD( snap, impl->transform_matrix );
+    SNAPSHOT_FIELD( snap, impl->backface_visibility );
+    SNAPSHOT_FIELD( snap, impl->border_mode );
+    SNAPSHOT_FIELD( snap, impl->composite_mode );
+    SNAPSHOT_FIELD( snap, impl->opacity );
+    SNAPSHOT_FIELD( snap, impl->rotation_angle );
+    SNAPSHOT_FIELD( snap, impl->rotation_angle_degrees );
+    SNAPSHOT_FIELD( snap, impl->is_redirect );
+    if (SUCCEEDED(sprite2_get_Shadow( &impl->ISpriteVisual2_iface, &shadow )) && shadow)
+    {
+        snapshot_shadow( snap, shadow );
+        ICompositionShadow_Release( shadow );
+    }
+    SNAPSHOT_FIELD( snap, impl->clip );
+    if (impl->clip)
+    {
+        IInsetClip *inset;
+
+        if (SUCCEEDED(ICompositionClip_QueryInterface( impl->clip, &IID_IInsetClip, (void **)&inset )))
+        {
+            struct inset_clip *clip = impl_from_IInsetClip( inset );
+
+            SNAPSHOT_FIELD( snap, clip->left );
+            SNAPSHOT_FIELD( snap, clip->top );
+            SNAPSHOT_FIELD( snap, clip->right );
+            SNAPSHOT_FIELD( snap, clip->bottom );
+            IInsetClip_Release( inset );
+        }
+        else snapshot_dynamic( snap, "clip" );
+    }
+    if (impl->is_redirect)
+    {
+        IVisual *source = visual_get_source( impl );
+
+        snapshot_visual( snap, source, depth + 1 );
+        if (source) IVisual_Release( source );
+    }
+    snapshot_brush( snap, impl->brush, 0 );
+    /* Walk children the way drawing does, on the rendering thread. */
+    children = impl_from_IVisualCollection( impl->children );
+    SNAPSHOT_FIELD( snap, children->count );
+    for (i = 0; i < children->count && !snap->dynamic; ++i)
+        snapshot_visual( snap, children->items[i], depth + 1 );
+}
+
+#undef SNAPSHOT_FIELD
 
 static HRESULT desktop_window_target_render_locked( struct desktop_window_target *target )
 {
@@ -11933,17 +12610,21 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
     UINT width, height;
     const char *stage = "initialization";
     HRESULT hr, draw;
+    ULONGLONG started = perf_us(), located, positioned, setup, drawn;
+    struct target_snapshot snap = {0};
+    BOOL redraw = FALSE;
 
     if (!IsWindow( target->hwnd ) || !IsWindow( target->render_hwnd ) ||
             GetParent( target->render_hwnd ) != target->hwnd) return S_FALSE;
+    if (!IsWindowVisible( target->hwnd )) return S_FALSE;
     if (!target->root)
     {
-        if (target->render_snapshot) ID2D1Bitmap1_Release( target->render_snapshot );
-        target->render_snapshot = NULL;
-        ShowWindowAsync( target->render_hwnd, SW_HIDE );
+        if (GetWindowLongW( target->render_hwnd, GWL_STYLE ) & WS_VISIBLE)
+            ShowWindowAsync( target->render_hwnd, SW_HIDE );
         return S_FALSE;
     }
     source = find_visual_drawing_surface( target->root, 0 );
+    located = perf_us();
     TRACE( "render target hwnd %p layer %p topmost %d\n", target->hwnd, target->render_hwnd, target->topmost );
     GetClientRect( target->hwnd, &client );
     width = max( 1, client.right - client.left );
@@ -11952,23 +12633,28 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
     /* Only move the layer when it is out of place: a SetWindowPos per frame
      * makes the window manager restack (and the Wayland driver rebuild its
      * overlays) on every frame, which shows up as flicker and stalls. */
-    if (!render_window_placed( target, width, height ) &&
-            !SetWindowPos( target->render_hwnd, target->topmost ? HWND_TOP : HWND_BOTTOM,
-            0, 0, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS ))
+    if (!render_window_placed( target, width, height ))
     {
-        hr = HRESULT_FROM_WIN32( GetLastError() );
-        goto done;
+        /* A moved, shown or restacked layer may have lost its contents. */
+        redraw = TRUE;
+        if (!SetWindowPos( target->render_hwnd, target->topmost ? HWND_TOP : HWND_BOTTOM,
+                0, 0, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS ))
+        {
+            hr = HRESULT_FROM_WIN32( GetLastError() );
+            goto done;
+        }
     }
+    positioned = perf_us();
     if (source && target->render_device && target->render_device != source->device)
         desktop_window_target_reset_renderer( target );
+    if (!target->swapchain || !target->render_context || !target->render_bitmap) redraw = TRUE;
     if (target->swapchain && (target->width != width || target->height != height))
     {
+        redraw = TRUE;
         stage = "resize composition buffers";
         if (target->render_context) ID2D1DeviceContext_SetTarget( target->render_context, NULL );
         if (target->render_bitmap) ID2D1Bitmap1_Release( target->render_bitmap );
-        if (target->render_snapshot) ID2D1Bitmap1_Release( target->render_snapshot );
         target->render_bitmap = NULL;
-        target->render_snapshot = NULL;
         hr = IDXGISwapChain1_ResizeBuffers( target->swapchain, 1, width, height,
                 DXGI_FORMAT_B8G8R8A8_UNORM, 0 );
         if (FAILED(hr)) goto done;
@@ -12049,6 +12735,23 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
                 backbuffer, &properties, &target->render_bitmap ))) goto done;
     }
 
+    setup = perf_us();
+    snapshot_add( &snap, &target->root, sizeof(target->root) );
+    snapshot_add( &snap, &width, sizeof(width) );
+    snapshot_add( &snap, &height, sizeof(height) );
+    snapshot_visual( &snap, target->root, 0 );
+    if (!redraw && !snap.dynamic && target->drawn_state && snap.size == target->drawn_size &&
+            !memcmp( snap.data, target->drawn_state, snap.size ))
+    {
+        TRACE_(uiperf)( "frame hwnd %p size %ux%u unchanged, snapshot %Iu bytes %I64u us.\n",
+                target->hwnd, width, height, snap.size, perf_us() - setup );
+        hr = S_OK;
+        goto done;
+    }
+    if (snap.dynamic) TRACE_(uiperf)( "frame hwnd %p redraw: %s.\n", target->hwnd, snap.reason );
+    free( target->drawn_state );
+    target->drawn_state = NULL;
+    setup = perf_us();
     ID2D1DeviceContext_SetTarget( target->render_context, (ID2D1Image *)target->render_bitmap );
     ID2D1DeviceContext_SetTransform( target->render_context, &identity );
     ID2D1DeviceContext_BeginDraw( target->render_context );
@@ -12059,23 +12762,21 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
     hr = ID2D1DeviceContext_EndDraw( target->render_context, NULL, NULL );
     if (SUCCEEDED(hr)) hr = draw;
     if (FAILED(hr)) goto done;
-    stage = "retain committed frame";
-    if (!target->render_snapshot)
-    {
-        properties.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
-        properties.pixelFormat.alphaMode = D2D1_ALPHA_MODE_IGNORE;
-        properties.dpiX = properties.dpiY = 96.0f;
-        properties.bitmapOptions = D2D1_BITMAP_OPTIONS_NONE;
-        hr = ID2D1DeviceContext_CreateBitmap( target->render_context, (D2D1_SIZE_U){width, height},
-                NULL, 0, &properties, &target->render_snapshot );
-        if (FAILED(hr)) goto done;
-    }
-    if (FAILED(hr = ID2D1Bitmap1_CopyFromBitmap( target->render_snapshot, NULL,
-            (ID2D1Bitmap *)target->render_bitmap, NULL ))) goto done;
+    drawn = perf_us();
     stage = "present";
     hr = IDXGISwapChain1_Present( target->swapchain, 0, 0 );
+    if (SUCCEEDED(hr) && !snap.dynamic)
+    {
+        target->drawn_state = snap.data;
+        target->drawn_size = snap.size;
+        snap.data = NULL;
+    }
+    TRACE_(uiperf)( "frame hwnd %p size %ux%u tick %I64u setup %I64u draw %I64u present %I64u hr %#lx search %I64u placement %I64u resources %I64u.\n",
+            target->hwnd, width, height, started, setup - started, drawn - setup,
+            perf_us() - drawn, hr, located - started, positioned - located, setup - positioned );
 
 done:
+    free( snap.data );
     if (source) ICompositionDrawingSurface_Release( &source->ICompositionDrawingSurface_iface );
     if (factory) IDXGIFactory2_Release( factory );
     if (adapter) IDXGIAdapter_Release( adapter );
@@ -12233,7 +12934,9 @@ static HRESULT WINAPI composition_drawing_surface_interop_EndDraw( ICompositionD
     struct composition_drawing_surface *impl = impl_from_ICompositionDrawingSurfaceInterop( iface );
     HRESULT hr;
 
+    InterlockedIncrement( &impl->content_version );
     FIXME( "iface %p.\n", iface );
+    TRACE_(uisurface)("surface %p context %p drawing %d\n", impl, impl->context, impl->drawing);
     if (impl->drawing)
     {
         impl->drawing = FALSE;
@@ -12255,6 +12958,7 @@ static HRESULT WINAPI composition_drawing_surface_interop_Resize( ICompositionDr
     HRGN bounds;
     int type;
 
+    InterlockedIncrement( &impl->content_version );
     TRACE( "iface %p, size {%ld, %ld}.\n", iface, size.cx, size.cy );
     if (impl->virtual)
     {
@@ -12304,6 +13008,7 @@ static HRESULT WINAPI composition_drawing_surface_interop_ResumeDraw( ICompositi
 {
     struct composition_drawing_surface *impl = impl_from_ICompositionDrawingSurfaceInterop( iface );
 
+    InterlockedIncrement( &impl->content_version );
     FIXME( "iface %p.\n", iface );
     if (!impl->drawing || !impl->suspended) return D2DERR_WRONG_STATE;
     ID2D1DeviceContext_SetTarget( impl->context, (ID2D1Image *)impl->bitmap );
@@ -12908,6 +13613,36 @@ static const IClosableVtbl replaced_args_closable_vtbl =
     replaced_args_closable_Close,
 };
 
+static void protect_composition_rendering_device( IUnknown *device )
+{
+    ID2D1Device2 *d2d_device;
+    IDXGIDevice *dxgi_device;
+    ID3D11Device *d3d_device;
+    ID3D11DeviceContext *context;
+    ID3D11Multithread *multithread;
+
+    /* Composition renders on another thread while the application continues
+     * drawing surfaces. Both use this device's immediate D3D context. */
+    if (FAILED(IUnknown_QueryInterface(device, &IID_ID2D1Device2, (void **)&d2d_device))) return;
+    if (SUCCEEDED(ID2D1Device2_GetDxgiDevice(d2d_device, &dxgi_device)))
+    {
+        if (SUCCEEDED(IDXGIDevice_QueryInterface(dxgi_device, &IID_ID3D11Device, (void **)&d3d_device)))
+        {
+            ID3D11Device_GetImmediateContext(d3d_device, &context);
+            if (SUCCEEDED(ID3D11DeviceContext_QueryInterface(context, &IID_ID3D11Multithread,
+                    (void **)&multithread)))
+            {
+                ID3D11Multithread_SetMultithreadProtected(multithread, TRUE);
+                ID3D11Multithread_Release(multithread);
+            }
+            ID3D11DeviceContext_Release(context);
+            ID3D11Device_Release(d3d_device);
+        }
+        IDXGIDevice_Release(dxgi_device);
+    }
+    ID2D1Device2_Release(d2d_device);
+}
+
 static HRESULT WINAPI graphics_device_interop_SetRenderingDevice( ICompositionGraphicsDeviceInterop *iface,
         IUnknown *value )
 {
@@ -12919,6 +13654,7 @@ static HRESULT WINAPI graphics_device_interop_SetRenderingDevice( ICompositionGr
     unsigned int count = 0, i = 0;
 
     if (!value) return E_INVALIDARG;
+    protect_composition_rendering_device(value);
     IUnknown_AddRef( value );
     EnterCriticalSection( &impl->device_cs );
     previous = impl->device;
@@ -12986,6 +13722,7 @@ static HRESULT WINAPI compositor_interop_CreateGraphicsDevice( ICompositorIntero
     if (!result) return E_POINTER;
     *result = NULL;
     if (!device) return E_INVALIDARG;
+    protect_composition_rendering_device(device);
     if (!(impl = calloc( 1, sizeof(*impl) ))) return E_OUTOFMEMORY;
     impl->ICompositionGraphicsDevice_iface.lpVtbl = &composition_graphics_device_vtbl;
     impl->ICompositionGraphicsDevice2_iface.lpVtbl = &composition_graphics_device2_vtbl;
@@ -13010,6 +13747,32 @@ static const ICompositorInteropVtbl compositor_interop_vtbl =
     compositor_interop_CreateCompositionSurfaceForSwapChain,
     compositor_interop_CreateGraphicsDevice,
 };
+
+static IDispatcherQueue *get_current_dispatcher_queue(void)
+{
+    IDispatcherQueueStatics *statics;
+    IDispatcherQueue *queue = NULL;
+    HSTRING name;
+
+    if (FAILED(WindowsCreateString( RuntimeClass_Windows_System_DispatcherQueue,
+                                    ARRAY_SIZE(RuntimeClass_Windows_System_DispatcherQueue) - 1, &name )))
+        return NULL;
+    if (SUCCEEDED(RoGetActivationFactory( name, &IID_IDispatcherQueueStatics, (void **)&statics )))
+    {
+        if (FAILED(IDispatcherQueueStatics_GetForCurrentThread( statics, &queue ))) queue = NULL;
+        IDispatcherQueueStatics_Release( statics );
+    }
+    WindowsDeleteString( name );
+    return queue;
+}
+
+IDispatcherQueue *compositor_get_dispatcher_queue( ICompositor *iface )
+{
+    struct compositor *impl = impl_from_ICompositor( iface );
+
+    if (impl->dispatcher_queue) IDispatcherQueue_AddRef( impl->dispatcher_queue );
+    return impl->dispatcher_queue;
+}
 
 static HRESULT compositor_create( IInspectable **result )
 {
@@ -13036,6 +13799,8 @@ static HRESULT compositor_create( IInspectable **result )
         free( impl );
         return hr;
     }
+    /* Windows raises a compositor's events on the thread that created it. */
+    impl->dispatcher_queue = get_current_dispatcher_queue();
     *result = (IInspectable *)&impl->ICompositor_iface;
     return S_OK;
 }
@@ -13055,6 +13820,7 @@ struct compositor_commit_handler
     ITypedEventHandler_CompositorController_IInspectable *handler;
     EventRegistrationToken token;
     LONG ref;
+    DWORD registering_thread;
 };
 
 static CRITICAL_SECTION controller_cs;
@@ -13180,19 +13946,24 @@ static HRESULT WINAPI compositor_controller_get_Compositor( ICompositorControlle
 
 static HRESULT WINAPI compositor_controller_Commit( ICompositorController *iface )
 {
+    struct compositor_controller *controller = impl_from_ICompositorController( iface );
     struct compositor *compositor = impl_from_ICompositor(
-            impl_from_ICompositorController( iface )->compositor );
+            controller->compositor );
     struct desktop_window_target *target;
     BOOL rendered = FALSE;
     HRESULT hr;
+    ULONGLONG started = perf_us();
+    unsigned int count = 0;
 
     FIXME( "iface %p.\n", iface );
     LIST_FOR_EACH_ENTRY( target, &compositor->targets, struct desktop_window_target, entry )
     {
+        ++count;
         hr = desktop_window_target_render( target );
         if (hr == S_OK) rendered = TRUE;
         else if (hr != S_FALSE) return hr;
     }
+    TRACE_(uiperf)( "commit tick %I64u targets %u elapsed %I64u.\n", started, count, perf_us() - started );
     if (rendered) return S_OK;
     if (compositor->dcomp_device) return IDCompositionDevice_Commit( compositor->dcomp_device );
     return S_OK;
@@ -13325,6 +14096,8 @@ static HRESULT WINAPI completed_action_put_Completed( IAsyncAction *iface,
     if (FAILED(hr)) return hr;
 
     IAsyncAction_AddRef( iface );
+    TRACE_(uilifetime)("action %p invoke Completed handler %p caller %p\n",
+                       iface, handler, __builtin_return_address(0));
     hr = IAsyncActionCompletedHandler_Invoke( handler, iface, Completed );
     IAsyncAction_Release( iface );
     return hr;
@@ -13511,6 +14284,20 @@ static HRESULT WINAPI compositor_controller_add_CommitNeeded( ICompositorControl
     if (!handler || !token) return E_INVALIDARG;
     if (!(entry = calloc( 1, sizeof(*entry) ))) return E_OUTOFMEMORY;
     entry->handler = handler;
+    entry->registering_thread = GetCurrentThreadId();
+    if (TRACE_ON(uievents))
+    {
+        IAgileObject *agile = NULL;
+        APTTYPE apartment;
+        APTTYPEQUALIFIER qualifier;
+        HRESULT agile_hr = ITypedEventHandler_CompositorController_IInspectable_QueryInterface(
+                handler, &IID_IAgileObject, (void **)&agile);
+        HRESULT apartment_hr = CoGetApartmentType(&apartment, &qualifier);
+        TRACE_(uievents)("register handler %p thread %#lx agile %#lx apartment %#lx/%u\n",
+                         handler, entry->registering_thread, agile_hr, apartment_hr,
+                         SUCCEEDED(apartment_hr) ? apartment : ~0u);
+        if (agile) IAgileObject_Release(agile);
+    }
     entry->token.value = InterlockedIncrement( &next_token );
     entry->ref = 1;
     ITypedEventHandler_CompositorController_IInspectable_AddRef( handler );
@@ -13539,6 +14326,11 @@ static HRESULT WINAPI compositor_controller_remove_CommitNeeded( ICompositorCont
     LeaveCriticalSection( &controller_cs );
     if (found) compositor_commit_handler_release( found );
     return S_OK;
+}
+
+void composition_notify_changed( ICompositor *compositor )
+{
+    compositor_notify_commit_needed(impl_from_ICompositor(compositor));
 }
 
 static void compositor_notify_commit_needed( struct compositor *compositor )
@@ -13573,6 +14365,8 @@ static void compositor_notify_commit_needed( struct compositor *compositor )
     for (i = 0; i < count; ++i)
     {
         TRACE( "controller %p CommitNeeded handler %u/%u begin.\n", controller, i, count );
+        TRACE_(uievents)("invoke handler %p registering thread %#lx current thread %#lx\n",
+                         handlers[i]->handler, handlers[i]->registering_thread, GetCurrentThreadId());
         hr = ITypedEventHandler_CompositorController_IInspectable_Invoke(
                 handlers[i]->handler, &controller->ICompositorController_iface, NULL );
         TRACE( "controller %p CommitNeeded handler %u/%u end hr %#lx.\n", controller, i, count, hr );

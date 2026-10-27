@@ -40,6 +40,7 @@ namespace Windows.UI.Composition {
     typedef enum CompositionBorderMode CompositionBorderMode;
     typedef enum CompositionColorSpace CompositionColorSpace;
     typedef enum CompositionCompositeMode CompositionCompositeMode;
+    typedef enum CompositionDropShadowSourcePolicy CompositionDropShadowSourcePolicy;
     typedef enum CompositionEffectFactoryLoadStatus CompositionEffectFactoryLoadStatus;
     typedef enum CompositionGetValueStatus CompositionGetValueStatus;
     typedef enum CompositionStretch CompositionStretch;
@@ -74,6 +75,18 @@ namespace Windows.UI.Composition {
     interface ICompositionGraphicsDevice2;
     interface ICompositionGraphicsDevice3;
     interface ICompositionGraphicsDevice4;
+    interface ICompositionGeometry;
+    interface ICompositionPath;
+    interface ICompositionPathFactory;
+    interface ICompositionPathGeometry;
+    interface ICompositionGeometricClip;
+    interface ICompositionRoundedRectangleGeometry;
+    interface ICompositionViewBox;
+    runtimeclass CompositionGeometry;
+    runtimeclass CompositionPath;
+    runtimeclass CompositionPathGeometry;
+    runtimeclass CompositionGeometricClip;
+    runtimeclass CompositionRoundedRectangleGeometry;
     interface ICompositionObject;
     interface ICompositionObject2;
     interface ICompositionObject3;
@@ -83,6 +96,9 @@ namespace Windows.UI.Composition {
     interface ICompositionPropertySet;
     interface ICompositionPropertySet2;
     interface ICompositionScopedBatch;
+    interface ICompositionShadow;
+    interface IDropShadow;
+    interface IDropShadow2;
     interface ICompositionSurface;
     interface ICompositionSurfaceBrush;
     interface ICompositionSurfaceBrush2;
@@ -128,6 +144,8 @@ namespace Windows.UI.Composition {
     runtimeclass CompositionBatchCompletedEventArgs;
     runtimeclass CompositionBrush;
     runtimeclass CompositionClip;
+    runtimeclass CompositionShadow;
+    runtimeclass DropShadow;
     runtimeclass CompositionColorBrush;
     runtimeclass CompositionCommitBatch;
     runtimeclass CompositionDrawingSurface;
@@ -254,6 +272,13 @@ namespace Windows.UI.Composition {
         DestinationInvert = 2,
         [contract(Windows.Foundation.UniversalApiContract, 3.0)]
         MinBlend          = 3,
+    };
+
+    [contract(Windows.Foundation.UniversalApiContract, 5.0)]
+    enum CompositionDropShadowSourcePolicy
+    {
+        Default = 0,
+        InheritFromVisualContent = 1,
     };
 
     [
@@ -407,6 +432,66 @@ namespace Windows.UI.Composition {
     ]
     interface ICompositionClipFactory : IInspectable
     {
+    }
+
+    [contract(Windows.Foundation.UniversalApiContract, 6.0),
+     exclusiveto(Windows.UI.Composition.CompositionGeometry),
+     uuid(e985217c-6a17-4207-abd8-5fd3dd612a9d)]
+    interface ICompositionGeometry : IInspectable
+    {
+        [propget] HRESULT TrimEnd([out, retval] FLOAT *value);
+        [propput] HRESULT TrimEnd([in] FLOAT value);
+        [propget] HRESULT TrimOffset([out, retval] FLOAT *value);
+        [propput] HRESULT TrimOffset([in] FLOAT value);
+        [propget] HRESULT TrimStart([out, retval] FLOAT *value);
+        [propput] HRESULT TrimStart([in] FLOAT value);
+    }
+
+    [contract(Windows.Foundation.UniversalApiContract, 6.0),
+     exclusiveto(Windows.UI.Composition.CompositionPath),
+     uuid(66da1d5f-2e10-4f22-8a06-0a8151919e60)]
+    interface ICompositionPath : IInspectable {}
+
+    [contract(Windows.Foundation.UniversalApiContract, 6.0),
+     exclusiveto(Windows.UI.Composition.CompositionPath),
+     uuid(9c1e8c6a-0f33-4751-9437-eb3fb9d3ab07)]
+    interface ICompositionPathFactory : IInspectable
+    {
+        HRESULT Create([in] Windows.Graphics.IGeometrySource2D *source,
+                [out, retval] Windows.UI.Composition.ICompositionPath **value);
+    }
+
+    [contract(Windows.Foundation.UniversalApiContract, 6.0),
+     exclusiveto(Windows.UI.Composition.CompositionPathGeometry),
+     uuid(0b6a417e-2c77-4c23-af5e-6304c147bb61)]
+    interface ICompositionPathGeometry : IInspectable
+    {
+        [propget] HRESULT Path([out, retval] Windows.UI.Composition.ICompositionPath **value);
+        [propput] HRESULT Path([in] Windows.UI.Composition.ICompositionPath *value);
+    }
+
+    [contract(Windows.Foundation.UniversalApiContract, 6.0),
+     exclusiveto(Windows.UI.Composition.CompositionRoundedRectangleGeometry),
+     uuid(8770c822-1d50-4b8b-b013-7c9a0e46935f)]
+    interface ICompositionRoundedRectangleGeometry : IInspectable
+    {
+        [propget] HRESULT CornerRadius([out, retval] Windows.Foundation.Numerics.Vector2 *value);
+        [propput] HRESULT CornerRadius([in] Windows.Foundation.Numerics.Vector2 value);
+        [propget] HRESULT Offset([out, retval] Windows.Foundation.Numerics.Vector2 *value);
+        [propput] HRESULT Offset([in] Windows.Foundation.Numerics.Vector2 value);
+        [propget] HRESULT Size([out, retval] Windows.Foundation.Numerics.Vector2 *value);
+        [propput] HRESULT Size([in] Windows.Foundation.Numerics.Vector2 value);
+    }
+
+    [contract(Windows.Foundation.UniversalApiContract, 7.0),
+     exclusiveto(Windows.UI.Composition.CompositionGeometricClip),
+     uuid(c840b581-81c9-4444-a2c1-ccaece3a50e5)]
+    interface ICompositionGeometricClip : IInspectable
+    {
+        [propget] HRESULT Geometry([out, retval] Windows.UI.Composition.ICompositionGeometry **value);
+        [propput] HRESULT Geometry([in] Windows.UI.Composition.ICompositionGeometry *value);
+        [propget] HRESULT ViewBox([out, retval] Windows.UI.Composition.ICompositionViewBox **value);
+        [propput] HRESULT ViewBox([in] Windows.UI.Composition.ICompositionViewBox *value);
     }
 
     [
@@ -855,6 +940,48 @@ namespace Windows.UI.Composition {
         [propput] HRESULT Brush([in] Windows.UI.Composition.CompositionBrush *value);
     }
 
+    [contract(Windows.Foundation.UniversalApiContract, 3.0),
+     exclusiveto(Windows.UI.Composition.CompositionShadow),
+     uuid(329e52e2-4335-49cc-b14a-37782d10f0c4)]
+    interface ICompositionShadow : IInspectable
+    {
+    }
+
+    [contract(Windows.Foundation.UniversalApiContract, 3.0),
+     exclusiveto(Windows.UI.Composition.DropShadow),
+     uuid(cb977c07-a154-4851-85e7-a8924c84fad8)]
+    interface IDropShadow : IInspectable
+    {
+        [propget] HRESULT BlurRadius([out, retval] FLOAT *value);
+        [propput] HRESULT BlurRadius([in] FLOAT value);
+        [propget] HRESULT Color([out, retval] Windows.UI.Color *value);
+        [propput] HRESULT Color([in] Windows.UI.Color value);
+        [propget] HRESULT Mask([out, retval] Windows.UI.Composition.CompositionBrush **value);
+        [propput] HRESULT Mask([in] Windows.UI.Composition.CompositionBrush *value);
+        [propget] HRESULT Offset([out, retval] Windows.Foundation.Numerics.Vector3 *value);
+        [propput] HRESULT Offset([in] Windows.Foundation.Numerics.Vector3 value);
+        [propget] HRESULT Opacity([out, retval] FLOAT *value);
+        [propput] HRESULT Opacity([in] FLOAT value);
+    }
+
+    [contract(Windows.Foundation.UniversalApiContract, 5.0),
+     exclusiveto(Windows.UI.Composition.DropShadow),
+     uuid(6c4218bc-15b9-4c2d-8d4a-0767df11977a)]
+    interface IDropShadow2 : IInspectable
+    {
+        [propget] HRESULT SourcePolicy([out, retval] Windows.UI.Composition.CompositionDropShadowSourcePolicy *value);
+        [propput] HRESULT SourcePolicy([in] Windows.UI.Composition.CompositionDropShadowSourcePolicy value);
+    }
+
+    [contract(Windows.Foundation.UniversalApiContract, 3.0),
+     exclusiveto(Windows.UI.Composition.SpriteVisual),
+     uuid(588c9664-997a-4850-91fe-53cb58f81ce9)]
+    interface ISpriteVisual2 : IInspectable
+    {
+        [propget] HRESULT Shadow([out, retval] Windows.UI.Composition.CompositionShadow **value);
+        [propput] HRESULT Shadow([in] Windows.UI.Composition.CompositionShadow *value);
+    }
+
     [
         contract(Windows.Foundation.UniversalApiContract, 2.0),
         exclusiveto(Windows.UI.Composition.Vector2KeyFrameAnimation),
@@ -1045,6 +1172,37 @@ namespace Windows.UI.Composition {
     runtimeclass CompositionColorBrush : Windows.UI.Composition.CompositionBrush
     {
         [default] interface Windows.UI.Composition.ICompositionColorBrush;
+    }
+
+    [contract(Windows.Foundation.UniversalApiContract, 6.0), marshaling_behavior(agile), threading(both)]
+    runtimeclass CompositionGeometry : Windows.UI.Composition.CompositionObject
+    {
+        [default] interface Windows.UI.Composition.ICompositionGeometry;
+    }
+
+    [activatable(Windows.UI.Composition.ICompositionPathFactory, Windows.Foundation.UniversalApiContract, 6.0),
+     contract(Windows.Foundation.UniversalApiContract, 6.0), marshaling_behavior(agile), threading(both)]
+    runtimeclass CompositionPath
+    {
+        [default] interface Windows.UI.Composition.ICompositionPath;
+    }
+
+    [contract(Windows.Foundation.UniversalApiContract, 6.0), marshaling_behavior(agile), threading(both)]
+    runtimeclass CompositionPathGeometry : Windows.UI.Composition.CompositionGeometry
+    {
+        [default] interface Windows.UI.Composition.ICompositionPathGeometry;
+    }
+
+    [contract(Windows.Foundation.UniversalApiContract, 6.0), marshaling_behavior(agile), threading(both)]
+    runtimeclass CompositionRoundedRectangleGeometry : Windows.UI.Composition.CompositionGeometry
+    {
+        [default] interface Windows.UI.Composition.ICompositionRoundedRectangleGeometry;
+    }
+
+    [contract(Windows.Foundation.UniversalApiContract, 7.0), marshaling_behavior(agile), threading(both)]
+    runtimeclass CompositionGeometricClip : Windows.UI.Composition.CompositionClip
+    {
+        [default] interface Windows.UI.Composition.ICompositionGeometricClip;
     }
 
     [
@@ -1310,7 +1468,22 @@ namespace Windows.UI.Composition {
     runtimeclass SpriteVisual : Windows.UI.Composition.ContainerVisual
     {
         [default] interface Windows.UI.Composition.ISpriteVisual;
-        /* [contract(Windows.Foundation.UniversalApiContract, 3.0)] interface Windows.UI.Composition.ISpriteVisual2; */
+        [contract(Windows.Foundation.UniversalApiContract, 3.0)] interface Windows.UI.Composition.ISpriteVisual2;
+    }
+
+    [contract(Windows.Foundation.UniversalApiContract, 3.0),
+     marshaling_behavior(agile), threading(both)]
+    runtimeclass CompositionShadow : Windows.UI.Composition.CompositionObject
+    {
+        [default] interface Windows.UI.Composition.ICompositionShadow;
+    }
+
+    [contract(Windows.Foundation.UniversalApiContract, 3.0),
+     marshaling_behavior(agile), threading(both)]
+    runtimeclass DropShadow : Windows.UI.Composition.CompositionShadow
+    {
+        [default] interface Windows.UI.Composition.IDropShadow;
+        [contract(Windows.Foundation.UniversalApiContract, 5.0)] interface Windows.UI.Composition.IDropShadow2;
     }
 
     [

@@ -44,11 +44,23 @@
 #include "windows.ui.composition.core.h"
 #define WIDL_using_Windows_UI_Composition_Interactions
 #include "windows.ui.composition.interactions.h"
+#include "dispatcherqueue.h"
 
 #include "wine/test.h"
 
 static const GUID compositor4_iid =
     {0xae47e78a, 0x7910, 0x4425, {0xa4, 0x82, 0xa0, 0x5b, 0x75, 0x8a, 0xdc, 0xe9}};
+static const GUID compositor2_iid =
+    {0x735081dc,0x5e24,0x45da,{0xa3,0x8f,0xe3,0x2c,0xc3,0x49,0xa9,0xa0}};
+
+struct shadow_compositor;
+struct shadow_compositor_vtbl
+{
+    IInspectableVtbl inspectable;
+    void *other_creators[4];
+    HRESULT (WINAPI *create_shadow)(struct shadow_compositor *,IInspectable **);
+};
+struct shadow_compositor { const struct shadow_compositor_vtbl *lpVtbl; };
 static const GUID compositor5_iid =
     {0x48ea31ad, 0x7fcd, 0x4076, {0xa7, 0x9c, 0x90, 0xcc, 0x4b, 0x85, 0x2c, 0x9b}};
 static const GUID compositor_controller_iid =
@@ -99,6 +111,23 @@ struct compositor5_iface
     const struct compositor5_vtbl *lpVtbl;
 };
 
+struct compositor6_iface;
+struct compositor6_vtbl
+{
+    HRESULT (WINAPI *QueryInterface)( struct compositor6_iface *, REFIID, void ** );
+    ULONG (WINAPI *AddRef)( struct compositor6_iface * );
+    ULONG (WINAPI *Release)( struct compositor6_iface * );
+    HRESULT (WINAPI *GetIids)( struct compositor6_iface *, ULONG *, IID ** );
+    HRESULT (WINAPI *GetRuntimeClassName)( struct compositor6_iface *, HSTRING * );
+    HRESULT (WINAPI *GetTrustLevel)( struct compositor6_iface *, TrustLevel * );
+    HRESULT (WINAPI *CreateGeometricClip)( struct compositor6_iface *, IInspectable ** );
+    HRESULT (WINAPI *CreateGeometricClipWithGeometry)( struct compositor6_iface *, IInspectable *, IInspectable ** );
+};
+struct compositor6_iface { const struct compositor6_vtbl *lpVtbl; };
+
+static const GUID compositor6_iid =
+    {0x7a38b2bd,0xcec8,0x4eeb,{0x83,0x0f,0xd8,0xd0,0x7a,0xed,0xeb,0xc3}};
+
 static ICompositor *create_compositor(void)
 {
     IInspectable *inspectable;
@@ -119,6 +148,188 @@ static ICompositor *create_compositor(void)
     ok( hr == S_OK, "Got hr %#lx.\n", hr );
     IInspectable_Release( inspectable );
     return SUCCEEDED(hr) ? compositor : NULL;
+}
+
+static void test_drop_shadow(void)
+{
+    struct shadow_compositor *compositor2;
+    ICompositor *compositor;
+    IInspectable *inspectable;
+    IDropShadow *drop;
+    IDropShadow2 *drop2;
+    ICompositionShadow *shadow,*retained;
+    ISpriteVisual *sprite;
+    ISpriteVisual2 *sprite2;
+    ICompositionObject *object;
+    IClosable *closable;
+    struct Vector3 offset={3.0f,5.0f,0.0f},actual;
+    FLOAT value;
+    HRESULT hr;
+
+    if (!(compositor=create_compositor())) return;
+    hr=ICompositor_QueryInterface(compositor,&compositor2_iid,(void **)&compositor2);
+    ok(hr==S_OK,"Compositor2 hr %#lx.\n",hr);
+    if (FAILED(hr)) { ICompositor_Release(compositor); return; }
+    hr=compositor2->lpVtbl->create_shadow(compositor2,NULL);
+    ok(hr==E_POINTER,"NULL output hr %#lx.\n",hr);
+    hr=compositor2->lpVtbl->create_shadow(compositor2,&inspectable);
+    ok(hr==S_OK,"CreateDropShadow hr %#lx.\n",hr);
+    if (FAILED(hr)) goto done;
+    hr=IInspectable_QueryInterface(inspectable,&IID_IDropShadow,(void **)&drop);
+    ok(hr==S_OK,"DropShadow interface hr %#lx.\n",hr);
+    if (FAILED(hr)) { IInspectable_Release(inspectable); goto done; }
+    hr=IDropShadow_get_BlurRadius(drop,&value);
+    ok(hr==S_OK && value==9.0f,"Default blur %f hr %#lx.\n",value,hr);
+    hr=IDropShadow_put_Opacity(drop,0.42f);
+    ok(hr==S_OK,"Opacity setter hr %#lx.\n",hr);
+    hr=IDropShadow_get_Opacity(drop,&value);
+    ok(hr==S_OK && value==0.42f,"Opacity %f hr %#lx.\n",value,hr);
+    hr=IDropShadow_put_Offset(drop,offset);
+    ok(hr==S_OK,"Offset setter hr %#lx.\n",hr);
+    hr=IDropShadow_get_Offset(drop,&actual);
+    ok(hr==S_OK && actual.X==3.0f && actual.Y==5.0f,"Offset %f,%f hr %#lx.\n",actual.X,actual.Y,hr);
+    hr=IDropShadow_QueryInterface(drop,&IID_IDropShadow2,(void **)&drop2);
+    ok(hr==S_OK,"DropShadow2 hr %#lx.\n",hr);
+    if (SUCCEEDED(hr))
+    {
+        hr=IDropShadow2_put_SourcePolicy(drop2,CompositionDropShadowSourcePolicy_InheritFromVisualContent);
+        ok(hr==S_OK,"Source policy hr %#lx.\n",hr);
+        IDropShadow2_Release(drop2);
+    }
+    hr=IDropShadow_QueryInterface(drop,&IID_ICompositionShadow,(void **)&shadow);
+    ok(hr==S_OK,"CompositionShadow hr %#lx.\n",hr);
+    if (SUCCEEDED(hr))
+    {
+        hr=ICompositor_CreateSpriteVisual(compositor,&sprite);
+        ok(hr==S_OK,"Create sprite hr %#lx.\n",hr);
+        if (SUCCEEDED(hr))
+        {
+            hr=ISpriteVisual_QueryInterface(sprite,&IID_ISpriteVisual2,(void **)&sprite2);
+            ok(hr==S_OK,"SpriteVisual2 hr %#lx.\n",hr);
+            if (SUCCEEDED(hr))
+            {
+                hr=ISpriteVisual2_get_Shadow(sprite2,&retained);
+                ok(hr==S_OK && !retained,"Initial shadow %p hr %#lx.\n",retained,hr);
+                hr=ISpriteVisual2_put_Shadow(sprite2,shadow);
+                ok(hr==S_OK,"Attach shadow hr %#lx.\n",hr);
+                hr=ISpriteVisual2_get_Shadow(sprite2,&retained);
+                ok(hr==S_OK && retained==shadow,"Retained shadow %p hr %#lx.\n",retained,hr);
+                hr=ISpriteVisual2_put_Shadow(sprite2,NULL);
+                ok(hr==S_OK,"Detach shadow hr %#lx.\n",hr);
+                if (retained) ICompositionShadow_Release(retained);
+                ISpriteVisual2_Release(sprite2);
+            }
+            ISpriteVisual_Release(sprite);
+        }
+        ICompositionShadow_Release(shadow);
+    }
+    hr=IDropShadow_QueryInterface(drop,&IID_ICompositionObject,(void **)&object);
+    ok(hr==S_OK,"CompositionObject hr %#lx.\n",hr);
+    if (SUCCEEDED(hr)) ICompositionObject_Release(object);
+    hr=IDropShadow_QueryInterface(drop,&IID_IClosable,(void **)&closable);
+    ok(hr==S_OK,"Closable hr %#lx.\n",hr);
+    if (SUCCEEDED(hr))
+    {
+        hr=IClosable_Close(closable);
+        ok(hr==S_OK,"Close hr %#lx.\n",hr);
+        hr=IDropShadow_put_Opacity(drop,0.5f);
+        ok(hr==RO_E_CLOSED,"Closed setter hr %#lx.\n",hr);
+        IClosable_Release(closable);
+    }
+    IDropShadow_Release(drop);
+    IInspectable_Release(inspectable);
+done:
+    IInspectable_Release((IInspectable *)compositor2);
+    ICompositor_Release(compositor);
+}
+
+static void test_compositor_geometry(void)
+{
+    struct compositor5_iface *compositor5;
+    struct compositor6_iface *compositor6;
+    ICompositionRoundedRectangleGeometry *rounded;
+    ICompositionGeometry *geometry, *retained;
+    ICompositionGeometricClip *clip;
+    ICompositionClip *base_clip;
+    ICompositionObject *object;
+    ICompositor *compositor, *owner;
+    IInspectable *inspectable;
+    struct Vector2 value;
+    FLOAT trim;
+    HRESULT hr;
+
+    if (!(compositor = create_compositor())) return;
+    hr = ICompositor_QueryInterface( compositor, &compositor5_iid, (void **)&compositor5 );
+    ok( hr == S_OK, "Got hr %#lx.\n", hr );
+    if (FAILED(hr)) goto done;
+    hr = ICompositor_QueryInterface( compositor, &compositor6_iid, (void **)&compositor6 );
+    ok( hr == S_OK, "Got hr %#lx.\n", hr );
+    if (FAILED(hr)) { compositor5->lpVtbl->Release( compositor5 ); goto done; }
+
+    hr = compositor5->lpVtbl->CreateRoundedRectangleGeometry( compositor5, NULL );
+    ok( hr == E_POINTER, "Got hr %#lx.\n", hr );
+    hr = compositor5->lpVtbl->CreateRoundedRectangleGeometry( compositor5, &inspectable );
+    ok( hr == S_OK, "Got hr %#lx.\n", hr );
+    if (FAILED(hr)) goto release_compositors;
+    hr = IInspectable_QueryInterface( inspectable, &IID_ICompositionRoundedRectangleGeometry, (void **)&rounded );
+    ok( hr == S_OK, "Got hr %#lx.\n", hr );
+    IInspectable_Release( inspectable );
+    if (FAILED(hr)) goto release_compositors;
+
+    hr = ICompositionRoundedRectangleGeometry_get_Size( rounded, &value );
+    ok( hr == S_OK && !value.X && !value.Y, "Unexpected default size, hr %#lx.\n", hr );
+    value = (struct Vector2){120.0f, 80.0f};
+    hr = ICompositionRoundedRectangleGeometry_put_Size( rounded, value );
+    ok( hr == S_OK, "Got hr %#lx.\n", hr );
+    value = (struct Vector2){8.0f, 6.0f};
+    hr = ICompositionRoundedRectangleGeometry_put_CornerRadius( rounded, value );
+    ok( hr == S_OK, "Got hr %#lx.\n", hr );
+    hr = ICompositionRoundedRectangleGeometry_get_CornerRadius( rounded, &value );
+    ok( hr == S_OK && value.X == 8.0f && value.Y == 6.0f, "Unexpected radius, hr %#lx.\n", hr );
+    hr = ICompositionRoundedRectangleGeometry_QueryInterface( rounded, &IID_ICompositionObject, (void **)&object );
+    ok( hr == S_OK, "Got hr %#lx.\n", hr );
+    if (SUCCEEDED(hr))
+    {
+        hr = ICompositionObject_get_Compositor( object, &owner );
+        ok( hr == S_OK && owner == compositor, "Unexpected compositor, hr %#lx.\n", hr );
+        if (SUCCEEDED(hr)) ICompositor_Release( owner );
+        ICompositionObject_Release( object );
+    }
+    hr = ICompositionRoundedRectangleGeometry_QueryInterface( rounded, &IID_ICompositionGeometry, (void **)&geometry );
+    ok( hr == S_OK, "Got hr %#lx.\n", hr );
+    ICompositionRoundedRectangleGeometry_Release( rounded );
+    if (FAILED(hr)) goto release_compositors;
+    hr = ICompositionGeometry_get_TrimEnd( geometry, &trim );
+    ok( hr == S_OK && trim == 1.0f, "Unexpected trim end %f, hr %#lx.\n", trim, hr );
+    hr = compositor6->lpVtbl->CreateGeometricClipWithGeometry( compositor6, (IInspectable *)geometry, &inspectable );
+    ok( hr == S_OK, "Got hr %#lx.\n", hr );
+    if (SUCCEEDED(hr))
+    {
+        hr = IInspectable_QueryInterface( inspectable, &IID_ICompositionGeometricClip, (void **)&clip );
+        ok( hr == S_OK, "Got hr %#lx.\n", hr );
+        IInspectable_Release( inspectable );
+        if (SUCCEEDED(hr))
+        {
+            hr = ICompositionGeometricClip_QueryInterface( clip, &IID_ICompositionClip, (void **)&base_clip );
+            ok( hr == S_OK, "Got hr %#lx.\n", hr );
+            if (SUCCEEDED(hr)) ICompositionClip_Release( base_clip );
+            hr = ICompositionGeometricClip_get_Geometry( clip, &retained );
+            ok( hr == S_OK && retained == geometry, "Clip lost its geometry, hr %#lx.\n", hr );
+            if (SUCCEEDED(hr) && retained) ICompositionGeometry_Release( retained );
+            hr = ICompositionGeometricClip_put_Geometry( clip, NULL );
+            ok( hr == S_OK, "Got hr %#lx.\n", hr );
+            retained = (void *)0xdeadbeef;
+            hr = ICompositionGeometricClip_get_Geometry( clip, &retained );
+            ok( hr == S_OK && !retained, "Expected cleared geometry, hr %#lx.\n", hr );
+            ICompositionGeometricClip_Release( clip );
+        }
+    }
+    ICompositionGeometry_Release( geometry );
+release_compositors:
+    compositor6->lpVtbl->Release( compositor6 );
+    compositor5->lpVtbl->Release( compositor5 );
+done:
+    ICompositor_Release( compositor );
 }
 
 static void test_compositor_interfaces(void)
@@ -285,6 +496,91 @@ static const IAsyncActionCompletedHandlerVtbl async_action_handler_vtbl =
     async_action_handler_Invoke,
 };
 
+struct commit_handler
+{
+    ITypedEventHandler_CompositorController_IInspectable iface;
+    LONG ref;
+    HANDLE event;
+    ICompositorController *sender;
+};
+
+static HRESULT WINAPI commit_handler_QueryInterface( ITypedEventHandler_CompositorController_IInspectable *iface,
+        REFIID iid, void **out )
+{
+    *out = NULL;
+    if (!IsEqualGUID(iid, &IID_IUnknown) && !IsEqualGUID(iid, &IID_IAgileObject) &&
+            !IsEqualGUID(iid, &IID_ITypedEventHandler_CompositorController_IInspectable)) return E_NOINTERFACE;
+    *out = iface;
+    IUnknown_AddRef((IUnknown *)iface);
+    return S_OK;
+}
+
+static ULONG WINAPI commit_handler_AddRef( ITypedEventHandler_CompositorController_IInspectable *iface )
+{
+    return InterlockedIncrement(&CONTAINING_RECORD(iface, struct commit_handler, iface)->ref);
+}
+
+static ULONG WINAPI commit_handler_Release( ITypedEventHandler_CompositorController_IInspectable *iface )
+{
+    return InterlockedDecrement(&CONTAINING_RECORD(iface, struct commit_handler, iface)->ref);
+}
+
+static HRESULT WINAPI commit_handler_Invoke( ITypedEventHandler_CompositorController_IInspectable *iface,
+        ICompositorController *sender, IInspectable *args )
+{
+    struct commit_handler *handler = CONTAINING_RECORD(iface, struct commit_handler, iface);
+    handler->sender = sender;
+    SetEvent(handler->event);
+    return S_OK;
+}
+
+static const ITypedEventHandler_CompositorController_IInspectableVtbl commit_handler_vtbl =
+{
+    commit_handler_QueryInterface, commit_handler_AddRef, commit_handler_Release, commit_handler_Invoke,
+};
+
+static void test_compositor_commit_needed( ICompositorController *controller )
+{
+    struct commit_handler handler = {{&commit_handler_vtbl}, 1};
+    ICompositor *compositor;
+    ISpriteVisual *sprite;
+    IVisual *visual;
+    EventRegistrationToken token;
+    HRESULT hr;
+
+    handler.event = CreateEventW(NULL, TRUE, FALSE, NULL);
+    hr = ICompositorController_get_Compositor(controller, &compositor);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    hr = ICompositor_CreateSpriteVisual(compositor, &sprite);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    hr = ISpriteVisual_QueryInterface(sprite, &IID_IVisual, (void **)&visual);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ICompositorController_Commit(controller);
+    hr = ICompositorController_add_CommitNeeded(controller, &handler.iface, &token);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    hr = IVisual_put_Offset(visual, ((struct Vector3){17.0f, 23.0f, 0.0f}));
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ok(WaitForSingleObject(handler.event, 1000) == WAIT_OBJECT_0,
+            "Changing a visual offset did not request a commit.\n");
+    ok(handler.sender == controller, "Got sender %p, expected %p.\n", handler.sender, controller);
+    hr = IVisual_put_Offset(visual, ((struct Vector3){18.0f, 24.0f, 0.0f}));
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    hr = ICompositorController_Commit(controller);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ResetEvent(handler.event);
+    hr = IVisual_put_Offset(visual, ((struct Vector3){19.0f, 25.0f, 0.0f}));
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ok(WaitForSingleObject(handler.event, 1000) == WAIT_OBJECT_0,
+            "Changing a visual after a commit did not request another commit.\n");
+    hr = ICompositorController_remove_CommitNeeded(controller, token);
+    ok(hr == S_OK, "Got hr %#lx.\n", hr);
+    ok(handler.ref == 1, "Got handler ref %ld.\n", handler.ref);
+    IVisual_Release(visual);
+    ISpriteVisual_Release(sprite);
+    ICompositor_Release(compositor);
+    CloseHandle(handler.event);
+}
+
 static void test_compositor_controller_async(void)
 {
     struct async_action_handler handler = {{&async_action_handler_vtbl}, 1};
@@ -337,6 +633,7 @@ static void test_compositor_controller_async(void)
     hr = IAsyncInfo_Close( info );
     ok( hr == S_OK, "Got hr %#lx.\n", hr );
     ok( handler.ref == 1, "Got ref %ld.\n", handler.ref );
+    test_compositor_commit_needed(controller);
 
 done:
     if (info) IAsyncInfo_Release( info );
@@ -605,7 +902,7 @@ static void test_interaction_tracker_bindings(void)
     IClosable *closable = NULL;
     IUnknown *identity = NULL, *other = NULL;
     IID *iids = NULL;
-    ULONG count = 0;
+    ULONG count = 0, i;
     IInteractionTrackerStatics2 *statics2 = NULL;
     IInteractionTrackerStatics *statics = NULL;
     IActivationFactory *factory = NULL;
@@ -681,8 +978,9 @@ static void test_interaction_tracker_bindings(void)
         IUnknown_Release( identity );
         hr = IClosable_GetIids( closable, &count, &iids );
         ok( hr == S_OK, "Got hr %#lx.\n", hr );
-        ok( count == 4, "Got count %lu.\n", count );
-        if (count == 4) ok( IsEqualGUID( &iids[3], &IID_IClosable ), "Wrong interface.\n" );
+        ok( count >= 4, "Got count %lu.\n", count );
+        for (i = 0; i < count; ++i) if (IsEqualGUID( &iids[i], &IID_IClosable )) break;
+        ok( i < count, "IClosable missing from interface list.\n" );
         CoTaskMemFree( iids );
         hr = IClosable_Close( closable );
         ok( hr == S_OK, "Got hr %#lx.\n", hr );
@@ -702,6 +1000,190 @@ done:
     if (statics) IInteractionTrackerStatics_Release( statics );
     if (factory) IActivationFactory_Release( factory );
     ICompositor_Release( compositor );
+}
+
+struct tracker_owner
+{
+    IInteractionTrackerOwner IInteractionTrackerOwner_iface;
+    LONG ref;
+    LONG values_changed;
+    DWORD thread;
+};
+
+static struct tracker_owner *impl_from_IInteractionTrackerOwner( IInteractionTrackerOwner *iface )
+{
+    return CONTAINING_RECORD( iface, struct tracker_owner, IInteractionTrackerOwner_iface );
+}
+
+static HRESULT WINAPI tracker_owner_QueryInterface( IInteractionTrackerOwner *iface, REFIID iid, void **out )
+{
+    if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
+        IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_IInteractionTrackerOwner ))
+    {
+        IInteractionTrackerOwner_AddRef( iface );
+        *out = iface;
+        return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI tracker_owner_AddRef( IInteractionTrackerOwner *iface )
+{
+    return InterlockedIncrement( &impl_from_IInteractionTrackerOwner( iface )->ref );
+}
+
+static ULONG WINAPI tracker_owner_Release( IInteractionTrackerOwner *iface )
+{
+    return InterlockedDecrement( &impl_from_IInteractionTrackerOwner( iface )->ref );
+}
+
+static HRESULT WINAPI tracker_owner_GetIids( IInteractionTrackerOwner *iface, ULONG *count, IID **iids )
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI tracker_owner_GetRuntimeClassName( IInteractionTrackerOwner *iface, HSTRING *name )
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI tracker_owner_GetTrustLevel( IInteractionTrackerOwner *iface, TrustLevel *level )
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI tracker_owner_CustomAnimationStateEntered( IInteractionTrackerOwner *iface,
+        IInteractionTracker *sender, IInteractionTrackerCustomAnimationStateEnteredArgs *args )
+{
+    return S_OK;
+}
+
+static HRESULT WINAPI tracker_owner_IdleStateEntered( IInteractionTrackerOwner *iface,
+        IInteractionTracker *sender, IInteractionTrackerIdleStateEnteredArgs *args )
+{
+    return S_OK;
+}
+
+static HRESULT WINAPI tracker_owner_InertiaStateEntered( IInteractionTrackerOwner *iface,
+        IInteractionTracker *sender, IInteractionTrackerInertiaStateEnteredArgs *args )
+{
+    return S_OK;
+}
+
+static HRESULT WINAPI tracker_owner_InteractingStateEntered( IInteractionTrackerOwner *iface,
+        IInteractionTracker *sender, IInteractionTrackerInteractingStateEnteredArgs *args )
+{
+    return S_OK;
+}
+
+static HRESULT WINAPI tracker_owner_RequestIgnored( IInteractionTrackerOwner *iface,
+        IInteractionTracker *sender, IInteractionTrackerRequestIgnoredArgs *args )
+{
+    return S_OK;
+}
+
+static HRESULT WINAPI tracker_owner_ValuesChanged( IInteractionTrackerOwner *iface,
+        IInteractionTracker *sender, IInteractionTrackerValuesChangedArgs *args )
+{
+    struct tracker_owner *impl = impl_from_IInteractionTrackerOwner( iface );
+
+    impl->thread = GetCurrentThreadId();
+    InterlockedIncrement( &impl->values_changed );
+    return S_OK;
+}
+
+static const IInteractionTrackerOwnerVtbl tracker_owner_vtbl =
+{
+    tracker_owner_QueryInterface,
+    tracker_owner_AddRef,
+    tracker_owner_Release,
+    tracker_owner_GetIids,
+    tracker_owner_GetRuntimeClassName,
+    tracker_owner_GetTrustLevel,
+    tracker_owner_CustomAnimationStateEntered,
+    tracker_owner_IdleStateEntered,
+    tracker_owner_InertiaStateEntered,
+    tracker_owner_InteractingStateEntered,
+    tracker_owner_RequestIgnored,
+    tracker_owner_ValuesChanged,
+};
+
+/* Owner callbacks must arrive on the compositor's thread: applications such
+ * as Office update thread-affine layout state from them without locking. */
+static void test_interaction_tracker_owner_thread(void)
+{
+    struct tracker_owner owner = {{(IInteractionTrackerOwnerVtbl *)&tracker_owner_vtbl}, 1};
+    DispatcherQueueOptions options = {sizeof(options), DQTYPE_THREAD_CURRENT, DQTAT_COM_NONE};
+    PDISPATCHERQUEUECONTROLLER controller = NULL;
+    IInteractionTrackerStatics *statics = NULL;
+    IActivationFactory *factory = NULL;
+    IInteractionTracker *tracker = NULL;
+    struct Vector3 position = {10.0f, 20.0f, 0.0f}, max_position = {100.0f, 100.0f, 0.0f};
+    ICompositor *compositor = NULL;
+    IClosable *closable;
+    HSTRING class_name;
+    INT32 request_id;
+    DWORD start;
+    MSG msg;
+    HRESULT hr;
+
+    hr = CreateDispatcherQueueController( options, &controller );
+    ok( hr == S_OK, "Got hr %#lx.\n", hr );
+    if (FAILED(hr)) return;
+    if (!(compositor = create_compositor())) goto done;
+
+    hr = WindowsCreateString( RuntimeClass_Windows_UI_Composition_Interactions_InteractionTracker,
+                              ARRAY_SIZE(RuntimeClass_Windows_UI_Composition_Interactions_InteractionTracker) - 1,
+                              &class_name );
+    ok( hr == S_OK, "Got hr %#lx.\n", hr );
+    hr = RoGetActivationFactory( class_name, &IID_IActivationFactory, (void **)&factory );
+    ok( hr == S_OK, "Got hr %#lx.\n", hr );
+    WindowsDeleteString( class_name );
+    if (FAILED(hr)) goto done;
+    hr = IActivationFactory_QueryInterface( factory, &interaction_tracker_statics_iid, (void **)&statics );
+    ok( hr == S_OK, "Got hr %#lx.\n", hr );
+    if (FAILED(hr)) goto done;
+    hr = IInteractionTrackerStatics_CreateWithOwner( statics, compositor, &owner.IInteractionTrackerOwner_iface,
+                                                      &tracker );
+    ok( hr == S_OK, "Got hr %#lx.\n", hr );
+    if (FAILED(hr)) goto done;
+
+    hr = IInteractionTracker_put_MaxPosition( tracker, max_position );
+    ok( hr == S_OK, "Got hr %#lx.\n", hr );
+    hr = IInteractionTracker_TryUpdatePosition( tracker, position, &request_id );
+    ok( hr == S_OK, "Got hr %#lx.\n", hr );
+
+    /* Nothing may be delivered while the compositor's thread is busy. */
+    Sleep( 200 );
+    ok( !owner.values_changed, "Got %ld ValuesChanged calls before pumping messages.\n", owner.values_changed );
+
+    start = GetTickCount();
+    while (!owner.values_changed && GetTickCount() - start < 2000)
+    {
+        MsgWaitForMultipleObjects( 0, NULL, FALSE, 100, QS_ALLINPUT );
+        while (PeekMessageW( &msg, NULL, 0, 0, PM_REMOVE )) DispatchMessageW( &msg );
+    }
+    ok( owner.values_changed, "ValuesChanged was not delivered.\n" );
+    ok( owner.thread == GetCurrentThreadId(), "ValuesChanged ran on thread %#lx, expected %#lx.\n",
+        owner.thread, GetCurrentThreadId() );
+
+    hr = IInteractionTracker_QueryInterface( tracker, &IID_IClosable, (void **)&closable );
+    ok( hr == S_OK, "Got hr %#lx.\n", hr );
+    if (SUCCEEDED(hr))
+    {
+        IClosable_Close( closable );
+        IClosable_Release( closable );
+    }
+
+done:
+    if (tracker) IInteractionTracker_Release( tracker );
+    if (statics) IInteractionTrackerStatics_Release( statics );
+    if (factory) IActivationFactory_Release( factory );
+    if (compositor) ICompositor_Release( compositor );
+    /* Let queued deliveries release their references. */
+    while (PeekMessageW( &msg, NULL, 0, 0, PM_REMOVE )) DispatchMessageW( &msg );
+    IUnknown_Release( (IUnknown *)controller );
 }
 
 static void test_effect_source_parameter(void)
@@ -796,12 +1278,15 @@ START_TEST(composition)
     ok( hr == S_OK, "RoInitialize failed, hr %#lx.\n", hr );
 
     test_compositor_interfaces();
+    test_compositor_geometry();
+    test_drop_shadow();
     test_composition_graphics_device2();
     test_compositor_controller_async();
     test_compositor_animation();
     test_vector3_animation();
     test_visual_collection_iterable();
     test_interaction_tracker_bindings();
+    test_interaction_tracker_owner_thread();
     test_effect_source_parameter();
 
     RoUninitialize();

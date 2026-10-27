@@ -7,9 +7,12 @@ SOURCES = \
 	composition.c \
 	effect.c \
 	effect_graph.c \
+	geometry.c \
 	inputpane.c \
 	interactions.c \
 	main.c \
+	path.c \
+	shadow.c \
 	uisettings.c \
 	uiviewsettings.c \
 	weakref.c
