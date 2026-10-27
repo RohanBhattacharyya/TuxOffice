@@ -70,6 +70,7 @@ notes. `install.sh` installs GitHub's latest release, so users get it at
 once. Two options: **pre-release** publishes a test release that the installer
 ignores, and **skip package tests** saves about 20 minutes when you are sure.
 
-To update the AUR package afterwards, copy `dist/aur/PKGBUILD` (also attached
-to the release) and `dist/aur/.SRCINFO` into the `tuxoffice-bin` AUR
-repository and push.
+To update the AUR package afterwards, download `PKGBUILD` from the release
+into your clone of the `tuxoffice-bin` AUR repository, run
+`makepkg --printsrcinfo > .SRCINFO`, commit both and push. (A local
+`packaging/build-release.sh` run writes both files to `dist/aur/`.)
