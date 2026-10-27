@@ -17,6 +17,7 @@
  */
 
 #include "d2d1_private.h"
+#include "d3d11_4.h"
 #include "eagle_trace.h"
 #include <d3dcompiler.h>
 #include <d2d1effects.h>
@@ -805,6 +806,7 @@ static void d2d_device_context_draw(struct d2d_device_context *render_target, en
     ID3DDeviceContextState *prev_state;
     ID3D11Device1 *device = render_target->d3d_device;
     ID3D11DeviceContext1 *context;
+    ID3D11Multithread *multithread = NULL;
     ID3D11Buffer *vs_cb = render_target->vs_cb, *ps_cb = render_target->ps_cb;
     D3D11_RECT scissor_rect;
     unsigned int offset;
@@ -821,6 +823,9 @@ static void d2d_device_context_draw(struct d2d_device_context *render_target, en
         EnterCriticalSection(render_target->cs);
 
     ID3D11Device1_GetImmediateContext1(device, &context);
+    if (SUCCEEDED(ID3D11DeviceContext1_QueryInterface(context, &IID_ID3D11Multithread,
+            (void **)&multithread)))
+        ID3D11Multithread_Enter(multithread);
     ID3D11DeviceContext1_SwapDeviceContextState(context, render_target->d3d_state, &prev_state);
 
     ID3D11DeviceContext1_IASetInputLayout(context, shape_resources->il);
@@ -871,7 +876,15 @@ static void d2d_device_context_draw(struct d2d_device_context *render_target, en
     else
         ID3D11DeviceContext1_Draw(context, index_count, 0);
 
+    /* The saved D2D context state must not retain a swapchain backbuffer
+     * after SetTarget(NULL). Each draw binds its target again above. */
+    ID3D11DeviceContext1_OMSetRenderTargets(context, 0, NULL, NULL);
     ID3D11DeviceContext1_SwapDeviceContextState(context, prev_state, NULL);
+    if (multithread)
+    {
+        ID3D11Multithread_Leave(multithread);
+        ID3D11Multithread_Release(multithread);
+    }
     ID3D11DeviceContext1_Release(context);
     ID3DDeviceContextState_Release(prev_state);
 

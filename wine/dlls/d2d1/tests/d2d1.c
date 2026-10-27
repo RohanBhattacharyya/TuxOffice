@@ -16163,12 +16163,15 @@ static HRESULT STDMETHODCALLTYPE ps_effect_impl_Initialize(ID2D1EffectImpl *ifac
         ID2D1EffectContext *context, ID2D1TransformGraph *graph)
 {
     struct effect_impl *effect_impl = impl_from_ID2D1EffectImpl(iface);
+    HRESULT hr;
 
     effect_impl->effect_context = context;
     ID2D1EffectContext_AddRef(effect_impl->effect_context);
 
-    return ID2D1TransformGraph_SetSingleTransformNode(graph,
+    hr = ID2D1TransformGraph_SetSingleTransformNode(graph,
             (ID2D1TransformNode *)&effect_impl->ID2D1DrawTransform_iface);
+    ok(FAILED(hr) || effect_impl->draw_info != NULL, "Draw info must be supplied while adding the transform.\n");
+    return hr;
 }
 
 static const ID2D1EffectImplVtbl custom_effect_impl_vtbl =
@@ -16250,6 +16253,10 @@ static HRESULT STDMETHODCALLTYPE effect_impl_draw_transform_SetDrawInfo(ID2D1Dra
 
     refcount = get_refcount(info);
     ok(refcount == 1, "Unexpected refcount %lu.\n", refcount);
+
+    if (effect_impl->draw_info) ID2D1DrawInfo_Release(effect_impl->draw_info);
+    effect_impl->draw_info = info;
+    ID2D1DrawInfo_AddRef(info);
 
     if (effect_impl->pixel_shader)
         hr = ID2D1DrawInfo_SetPixelShader(info, effect_impl->pixel_shader, 0);
