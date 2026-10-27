@@ -179,6 +179,10 @@ static void MSGBOX_OnInit(HWND hwnd, LPMSGBOXPARAMSW lpmb)
 
     if (hItem) SetWindowLongW(hItem, GWL_STYLE, GetWindowLongW(hItem, GWL_STYLE) | WS_GROUP);
 
+    /* Without a Cancel or OK button there is nothing for Close to choose. */
+    if (!GetDlgItem(hwnd, IDCANCEL) && !GetDlgItem(hwnd, IDOK))
+        NtUserEnableMenuItem(NtUserGetSystemMenu(hwnd, FALSE), SC_CLOSE, MF_BYCOMMAND | MF_GRAYED);
+
     /* Set the icon */
     switch(lpmb->dwStyle & MB_ICONMASK) {
     case MB_ICONEXCLAMATION:
@@ -342,8 +346,16 @@ static INT_PTR CALLBACK MSGBOX_DlgProc( HWND hwnd, UINT message,
    case WM_COMMAND:
     switch (LOWORD(wParam))
     {
-     case IDOK:
      case IDCANCEL:
+      /* Escape and Close mean OK in a box without Cancel, and nothing
+       * when there is no OK button either. */
+      if (!GetDlgItem(hwnd, IDCANCEL))
+      {
+          if (GetDlgItem(hwnd, IDOK)) EndDialog(hwnd, IDOK);
+          break;
+      }
+      /* fall through */
+     case IDOK:
      case IDABORT:
      case IDRETRY:
      case IDIGNORE:
