@@ -165,6 +165,7 @@ GnuTLS, libsecret, …) and the `libsystemd` headers.
 | `ui` | Re-apply Windows UI fonts, colours and window effects |
 | `repair` | Re-register Office's chart proxies and Windows Installer components |
 | `doctor` | Check the runner, environment, kernel, Vulkan and installed apps |
+| `cmd [SCRIPT [ARGS…]]` | Open a Windows command prompt in the Office environment, or run a `.bat`/`.cmd` script in it |
 | `wine ARGS…` | Run a command in the Office environment (`winecfg`, `regedit`, …) |
 | `kill` | Stop every process in the Office environment |
 

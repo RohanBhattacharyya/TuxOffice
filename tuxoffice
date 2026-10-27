@@ -817,6 +817,26 @@ cmd_doctor() {
 
 cmd_wine() { runner_env; exec wine "$@"; }
 
+# A Windows command prompt in the Office environment, or a batch script run
+# in it: tuxoffice cmd [SCRIPT [ARGS...]]
+cmd_cmd() {
+  runner_env
+  if (($#)); then
+    local script=$1
+    shift
+    [[ -f $script ]] || die "no such script: $script"
+    # "call" first: cmd /c strips the outer quotes of a command that starts
+    # with one, which breaks quoted paths and arguments.
+    exec wine cmd /c call "$(windows_path "$(readlink -f "$script")")" "$@"
+  fi
+  if [[ -t 0 && -t 1 ]]; then
+    msg "Windows command prompt for $TUX_PREFIX; type exit to leave"
+    exec wine cmd
+  fi
+  # Started without a terminal (from a launcher): open a console window.
+  exec wine wineconsole cmd
+}
+
 cmd_kill() { runner_env; wineserver -k 2>/dev/null || true; }
 
 usage() {
@@ -843,6 +863,8 @@ usage: tuxoffice <command> [args]   (TuxOffice $TUX_VERSION)
   graphics [auto|builtin|dxvk] configure Office graphics (auto requires the updated runner)
   ui                        re-apply Windows UI fonts, colours and window effects to the prefix
   repair                    re-register Office's chart proxies and Windows Installer components
+  cmd [SCRIPT [ARGS...]]    open a Windows command prompt in the Office prefix,
+                            or run a batch script (.bat/.cmd) in it
   wine ARGS...              run a command inside the Office prefix (winecfg, regedit, ...)
   kill                      stop every process in the Office prefix
 EOF
@@ -861,6 +883,7 @@ main() {
     unintegrate) cmd_unintegrate ;;
     doctor) cmd_doctor ;;
     wine) cmd_wine "$@" ;;
+    cmd) cmd_cmd "$@" ;;
     kill) cmd_kill ;;
     graphics) cmd_graphics "$@" ;;
     ui) runner_env; configure_office_ui; msg "UI fonts, colours and window effects applied" ;;
