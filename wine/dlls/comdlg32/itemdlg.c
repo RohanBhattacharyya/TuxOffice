@@ -21,12 +21,15 @@
 #include <stdarg.h>
 
 #define COBJMACROS
+#include "ntstatus.h"
+#define WIN32_NO_STATUS
 #include "windef.h"
 #include "winbase.h"
 #include "winuser.h"
 #include "wingdi.h"
 #include "winreg.h"
 #include "shlwapi.h"
+#include "winternl.h"
 
 #include "commdlg.h"
 #include "cdlg.h"
@@ -2441,6 +2444,402 @@ static HRESULT create_dialog(FileDialogImpl *This, HWND parent)
 }
 
 /**************************************************************************
+ * Desktop file chooser
+ *
+ * When TUXOFFICE_FILE_DIALOG names its helper, the desktop's own file chooser
+ * (through xdg-desktop-portal: Plasma's or GNOME's dialog) picks the files,
+ * and they may be anywhere on the Linux file system. The helper writes its
+ * answer to a file; this thread keeps pumping messages meanwhile, as a modal
+ * dialog would. S_FALSE means the chooser is unavailable: use Wine's dialog.
+ */
+static char *utf8_from_wstr(const WCHAR *str)
+{
+    char *ret;
+    int len;
+
+    if (!str) return NULL;
+    len = WideCharToMultiByte(CP_UTF8, 0, str, -1, NULL, 0, NULL, NULL);
+    if ((ret = malloc(len))) WideCharToMultiByte(CP_UTF8, 0, str, -1, ret, len, NULL, NULL);
+    return ret;
+}
+
+NTSTATUS WINAPI wine_nt_to_unix_file_name(const OBJECT_ATTRIBUTES *attr, char *nameA, ULONG *size, UINT disposition);
+
+/* Not wine_get_unix_file_name: Click-to-Run's App-V layer hooks the file calls
+ * it makes inside Office, and the conversion then fails. */
+static char *unix_path(const WCHAR *path)
+{
+    UNICODE_STRING nt_name;
+    OBJECT_ATTRIBUTES attr;
+    ULONG size = 1024;
+    NTSTATUS status;
+    char *ret = NULL;
+
+    if (!RtlDosPathNameToNtPathName_U(path, &nt_name, NULL, NULL)) return NULL;
+    InitializeObjectAttributes(&attr, &nt_name, 0, 0, NULL);
+    for (;;)
+    {
+        if (!(ret = malloc(size))) break;
+        status = wine_nt_to_unix_file_name(&attr, ret, &size, FILE_OPEN_IF);
+        if (status == STATUS_BUFFER_TOO_SMALL)
+        {
+            free(ret);
+            continue;
+        }
+        /* A file that is about to be created does not exist yet. */
+        if (status && status != STATUS_NO_SUCH_FILE)
+        {
+            free(ret);
+            ret = NULL;
+        }
+        break;
+    }
+    RtlFreeUnicodeString(&nt_name);
+    return ret;
+}
+
+/* The Windows path for a Linux one: C: for the prefix, otherwise Wine's Z: drive. */
+static BOOL dos_path(const char *path, WCHAR *buf, UINT size)
+{
+    WCHAR *converted = wine_get_dos_file_name(path), *p;
+    const char *rest = NULL;
+    char *drive_c, *drive_z;
+    WCHAR letter = 0;
+    UINT len;
+
+    if (converted)
+    {
+        lstrcpynW(buf, converted, size);
+        HeapFree(GetProcessHeap(), 0, converted);
+        return TRUE;
+    }
+    if ((drive_c = unix_path(L"C:\\")))
+    {
+        len = strlen(drive_c);
+        while (len && drive_c[len - 1] == '/') len--;
+        if (!strncmp(path, drive_c, len) && (!path[len] || path[len] == '/'))
+        {
+            letter = 'C';
+            rest = path + len;
+        }
+        free(drive_c);
+    }
+    if (!letter && (drive_z = unix_path(L"Z:\\")))
+    {
+        if (!strcmp(drive_z, "/") || !strcmp(drive_z, "/."))
+        {
+            letter = 'Z';
+            rest = path;
+        }
+        free(drive_z);
+    }
+    if (!letter || size < 4) return FALSE;
+    buf[0] = letter;
+    buf[1] = ':';
+    if (!MultiByteToWideChar(CP_UTF8, 0, *rest ? rest : "/", -1, buf + 2, size - 2)) return FALSE;
+    for (p = buf; *p; p++) if (*p == '/') *p = '\\';
+    return TRUE;
+}
+
+static char *unix_path_from_item(IShellItem *item)
+{
+    WCHAR *path;
+    char *ret;
+
+    if (!item || FAILED(IShellItem_GetDisplayName(item, SIGDN_FILESYSPATH, &path))) return NULL;
+    ret = unix_path(path);
+    CoTaskMemFree(path);
+    return ret;
+}
+
+/* Windows marks mnemonics with '&', the portal with '_'. */
+static char *portal_label(const WCHAR *label)
+{
+    char *utf8 = utf8_from_wstr(label), *ret, *src, *dst;
+
+    if (!utf8) return NULL;
+    if ((ret = malloc(2 * strlen(utf8) + 1)))
+    {
+        for (src = utf8, dst = ret; *src; src++)
+        {
+            if (*src == '_') { *dst++ = '_'; *dst++ = '_'; }
+            else if (*src != '&') *dst++ = *src;
+            else if (src[1] == '&') *dst++ = *++src;
+            else *dst++ = '_';
+        }
+        *dst = 0;
+    }
+    free(utf8);
+    return ret;
+}
+
+/* The extension a saved file gets when its name has none, as Wine's dialog does:
+ * the filter's first one, else the default extension. */
+static BOOL get_save_extension(FileDialogImpl *This, const WCHAR *spec, WCHAR *ext, UINT size)
+{
+    WCHAR buf[MAX_PATH], *found;
+
+    if (spec && (found = get_first_ext_from_spec(buf, spec)) && lstrlenW(found) < size)
+    {
+        lstrcpyW(ext, found);
+        return TRUE;
+    }
+    if (!This->default_ext || lstrlenW(This->default_ext) + 2 > size) return FALSE;
+    lstrcpyW(ext, L".");
+    lstrcatW(ext, This->default_ext);
+    return TRUE;
+}
+
+static char *read_native_result(const WCHAR *path)
+{
+    LARGE_INTEGER size;
+    char *data = NULL;
+    HANDLE file;
+    DWORD read;
+
+    file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (file == INVALID_HANDLE_VALUE) return NULL;
+    if (GetFileSizeEx(file, &size) && size.QuadPart < 1 << 20 && (data = malloc(size.LowPart + 1)))
+    {
+        if (ReadFile(file, data, size.LowPart, &read, NULL)) data[read] = 0;
+        else { free(data); data = NULL; }
+    }
+    CloseHandle(file);
+    return data;
+}
+
+static HRESULT run_native_dialog(FileDialogImpl *This, const WCHAR *helper)
+{
+    WCHAR temp_dir[MAX_PATH], result_path[MAX_PATH], name[MAX_PATH], ext[MAX_PATH];
+    UINT argc = 0, i, path_count = 0, new_filter = This->filetypeindex;
+    char **argv, *result = NULL, *line, *next;
+    LPITEMIDLIST pidls[64];
+    IShellFolder *desktop;
+    HRESULT hr = S_FALSE;
+    char index[16];
+    ULONG unix_pid;
+    MSG msg;
+
+    if (!GetTempPathW(ARRAY_SIZE(temp_dir), temp_dir) || !GetTempFileNameW(temp_dir, L"tfd", 0, result_path))
+    {
+        WARN("no temporary file in %s, error %lu\n", debugstr_w(temp_dir), GetLastError());
+        return S_FALSE;
+    }
+    DeleteFileW(result_path);
+
+    if (!(argv = calloc(24 + 2 * This->filterspec_count, sizeof(*argv)))) return S_FALSE;
+    argv[argc++] = utf8_from_wstr(helper);
+    argv[argc++] = strdup("--out");
+    argv[argc++] = unix_path(result_path);
+    if (This->dlg_type == ITEMDLG_TYPE_SAVE) argv[argc++] = strdup("--save");
+    else argv[argc++] = strdup(This->options & FOS_PICKFOLDERS ? "--folder" : "--open");
+    if ((This->options & FOS_ALLOWMULTISELECT) && This->dlg_type == ITEMDLG_TYPE_OPEN)
+        argv[argc++] = strdup("--multiple");
+    argv[argc++] = strdup("--title");
+    argv[argc++] = utf8_from_wstr(This->custom_title ? This->custom_title :
+                                  This->dlg_type == ITEMDLG_TYPE_SAVE ? L"Save As" : L"Open");
+    if (This->custom_okbutton)
+    {
+        argv[argc++] = strdup("--accept");
+        argv[argc++] = portal_label(This->custom_okbutton);
+    }
+    if (This->set_filename && This->dlg_type == ITEMDLG_TYPE_SAVE)
+    {
+        /* Show the full name the file will get. */
+        lstrcpynW(name, This->set_filename, ARRAY_SIZE(name) - 16);
+        if (!*PathFindExtensionW(name) && get_save_extension(This, This->current_filter, ext, 16))
+            lstrcatW(name, ext);
+        argv[argc++] = strdup("--name");
+        argv[argc++] = utf8_from_wstr(name);
+    }
+    if ((argv[argc] = unix_path_from_item(This->psi_setfolder ? This->psi_setfolder :
+                                          This->psi_folder ? This->psi_folder : This->psi_defaultfolder)))
+    {
+        argv[argc + 1] = argv[argc];
+        argv[argc] = strdup("--current-folder");
+        argc += 2;
+    }
+    for (i = 0; i < This->filterspec_count; i++)
+    {
+        char *filter_name = utf8_from_wstr(This->filterspecs[i].pszName);
+        char *spec = utf8_from_wstr(This->filterspecs[i].pszSpec);
+
+        if (filter_name && spec && (argv[argc + 1] = malloc(strlen(filter_name) + strlen(spec) + 2)))
+        {
+            sprintf(argv[argc + 1], "%s\t%s", filter_name, spec);
+            argv[argc] = strdup("--filter");
+            argc += 2;
+        }
+        free(filter_name);
+        free(spec);
+    }
+    if (This->filterspec_count)
+    {
+        sprintf(index, "%u", This->filetypeindex);
+        argv[argc++] = strdup("--filter-index");
+        argv[argc++] = strdup(index);
+    }
+    /* The helper closes the dialog if this process dies; it is not our
+     * child (the spawn detaches it), so tell it which process to watch. */
+    if (!NtQueryInformationProcess(GetCurrentProcess(), ProcessWineUnixPid, &unix_pid, sizeof(unix_pid), NULL))
+    {
+        sprintf(index, "%lu", unix_pid);
+        argv[argc++] = strdup("--parent");
+        argv[argc++] = strdup(index);
+    }
+    argv[argc] = NULL;
+
+    for (i = 0; i < argc; i++)
+    {
+        if (argv[i]) continue;
+        WARN("argument %u is missing (result file %s)\n", i, debugstr_w(result_path));
+        goto done;
+    }
+
+    TRACE("running %s\n", debugstr_a(argv[0]));
+    if (__wine_unix_spawnvp(argv, FALSE))
+    {
+        WARN("could not start %s\n", debugstr_a(argv[0]));
+        goto done;
+    }
+
+    while (GetFileAttributesW(result_path) == INVALID_FILE_ATTRIBUTES)
+    {
+        MsgWaitForMultipleObjects(0, NULL, FALSE, 100, QS_ALLINPUT);
+        while (PeekMessageW(&msg, 0, 0, 0, PM_REMOVE))
+        {
+            if (msg.message == WM_QUIT)
+            {
+                /* Leave it for the application's own loop once the chooser closes. */
+                PostQuitMessage(msg.wParam);
+                break;
+            }
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+
+    result = read_native_result(result_path);
+    DeleteFileW(result_path);
+    if (!result) goto done;
+    TRACE("result %s\n", debugstr_a(result));
+
+    for (line = result; line && *line; line = next)
+    {
+        if ((next = strchr(line, '\n'))) *next++ = 0;
+        if (!strncmp(line, "status ", 7))
+        {
+            if (!strcmp(line + 7, "cancel")) hr = HRESULT_FROM_WIN32(ERROR_CANCELLED);
+            else if (!strcmp(line + 7, "ok")) hr = S_OK;
+            else WARN("file chooser failed: %s\n", debugstr_a(line + 7));
+        }
+        else if (!strncmp(line, "filter ", 7))
+        {
+            UINT filter = atoi(line + 7);
+            if (filter < This->filterspec_count) new_filter = filter;
+        }
+        else if (!strncmp(line, "path ", 5) && path_count < ARRAY_SIZE(pidls))
+        {
+            if (!dos_path(line + 5, name, ARRAY_SIZE(name) - 16))
+            {
+                WARN("no Windows path for %s\n", debugstr_a(line + 5));
+                continue;
+            }
+            if (This->dlg_type == ITEMDLG_TYPE_SAVE && !(This->options & FOS_PICKFOLDERS) &&
+                !*PathFindExtensionW(name))
+            {
+                if (get_save_extension(This, new_filter < This->filterspec_count ?
+                                       This->filterspecs[new_filter].pszSpec : NULL, ext, 16))
+                    lstrcatW(name, ext);
+            }
+            if ((pidls[path_count] = SHSimpleIDListFromPath(name))) path_count++;
+        }
+    }
+
+    if (hr == S_OK && !path_count) hr = S_FALSE;
+    if (hr != S_OK) goto done;
+
+    if (new_filter != This->filetypeindex)
+    {
+        This->filetypeindex = new_filter;
+        set_current_filter(This, This->filterspecs[new_filter].pszSpec);
+        events_OnTypeChange(This);
+    }
+
+    if (This->psia_results)
+    {
+        IShellItemArray_Release(This->psia_results);
+        This->psia_results = NULL;
+    }
+    hr = SHGetDesktopFolder(&desktop);
+    if (SUCCEEDED(hr))
+    {
+        hr = SHCreateShellItemArray(NULL, desktop, path_count, (PCUITEMID_CHILD_ARRAY)pidls, &This->psia_results);
+        IShellFolder_Release(desktop);
+    }
+    if (SUCCEEDED(hr))
+    {
+        IShellItem *item;
+        WCHAR *path;
+
+        /* GetFileName reports the chosen name, as after Wine's dialog. */
+        if (SUCCEEDED(IShellItemArray_GetItemAt(This->psia_results, 0, &item)))
+        {
+            if (SUCCEEDED(IShellItem_GetDisplayName(item, SIGDN_FILESYSPATH, &path)))
+            {
+                free(This->set_filename);
+                This->set_filename = wcsdup(PathFindFileNameW(path));
+                CoTaskMemFree(path);
+            }
+            IShellItem_Release(item);
+        }
+        hr = S_OK;
+    }
+
+done:
+    for (i = 0; i < path_count; i++) ILFree(pidls[i]);
+    for (i = 0; i < argc; i++) free(argv[i]);
+    free(argv);
+    free(result);
+    return hr;
+}
+
+static HRESULT show_native_dialog(FileDialogImpl *This, HWND parent)
+{
+    WCHAR helper[MAX_PATH];
+    HWND owner = parent ? GetAncestor(parent, GA_ROOT) : NULL;
+    BOOL disabled = FALSE;
+    DWORD len;
+    HRESULT hr;
+    int attempt;
+
+    len = GetEnvironmentVariableW(L"TUXOFFICE_FILE_DIALOG", helper, ARRAY_SIZE(helper));
+    if (!len || len >= ARRAY_SIZE(helper) || !lstrcmpW(helper, L"0")) return S_FALSE;
+    /* The portal cannot save a folder. */
+    if (This->dlg_type == ITEMDLG_TYPE_SAVE && (This->options & FOS_PICKFOLDERS)) return S_FALSE;
+
+    if (owner && IsWindowEnabled(owner))
+    {
+        EnableWindow(owner, FALSE);
+        disabled = TRUE;
+    }
+
+    /* An application refusing the choice in OnFileOk keeps the dialog open on Windows. */
+    for (attempt = 0; attempt < 10; attempt++)
+    {
+        hr = run_native_dialog(This, helper);
+        if (hr != S_OK || events_OnFileOk(This) == S_OK) break;
+        hr = HRESULT_FROM_WIN32(ERROR_CANCELLED);
+    }
+
+    if (disabled) EnableWindow(owner, TRUE);
+    if (owner) SetForegroundWindow(owner);
+    if (hr == S_OK || hr == HRESULT_FROM_WIN32(ERROR_CANCELLED))
+        TRACE("desktop file chooser returned %#lx\n", hr);
+    return hr;
+}
+
+/**************************************************************************
  * IFileDialog implementation
  */
 static inline FileDialogImpl *impl_from_IFileDialog2(IFileDialog2 *iface)
@@ -2559,10 +2958,13 @@ static ULONG WINAPI IFileDialog2_fnRelease(IFileDialog2 *iface)
 static HRESULT WINAPI IFileDialog2_fnShow(IFileDialog2 *iface, HWND hwndOwner)
 {
     FileDialogImpl *This = impl_from_IFileDialog2(iface);
+    HRESULT hr;
     TRACE("%p (%p)\n", iface, hwndOwner);
 
     This->opendropdown_has_selection = FALSE;
 
+    hr = show_native_dialog(This, hwndOwner);
+    if (hr != S_FALSE) return hr;
     return create_dialog(This, hwndOwner);
 }
 
