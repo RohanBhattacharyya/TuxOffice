@@ -166,9 +166,81 @@ static void test_SLGetWindowsInformationDWORD(void)
     ok(value != 0xdeadbeef, "expected value != 0xdeadbeef\n");
 }
 
+static void test_product_policy_guid(void)
+{
+    static const SLID app = {0xaabbccdd,0x1234,0x5678,{0x90,0xab,0xcd,0xef,0x01,0x23,0x45,0x67}};
+    static const SLID product = {0x10203040,0x5060,0x7080,{0x90,0xa0,0xb0,0xc0,0xd0,0xe0,0xf0,0x00}};
+    static const char user_license[] =
+        "<r:license licenseId=\"{abcdef01-1234-5678-90ab-cdef01234567}\">"
+        "<tm:infoStr name=\"licenseType\">msft:sl/grace-period</tm:infoStr>"
+        "<tm:infoStr name=\"applicationId\">{aabbccdd-1234-5678-90ab-cdef01234567}</tm:infoStr>"
+        "<tm:infoStr name=\"productSkuId\">{10203040-5060-7080-90a0-b0c0d0e0f000}</tm:infoStr>"
+        "<sl:duration>P30D</sl:duration></r:license>";
+    static const char policy_format[] =
+        "<r:license licenseId=\"{abcdef02-1234-5678-90ab-cdef01234567}\">"
+        "<r:title>%s PPD License</r:title>"
+        "<tm:infoStr name=\"licenseType\">msft:sl/PPD</tm:infoStr>"
+        "<tm:infoStr name=\"applicationId\">{aabbccdd-1234-5678-90ab-cdef01234567}</tm:infoStr>"
+        "<sl:policyInt name=\"Test-Policy\">7</sl:policyInt></r:license>";
+    static const char *titles[] =
+    {
+        "Product10203040-5060-7080-90A0-B0C0D0E0F000",
+        "Product{10203040-5060-7080-90A0-B0C0D0E0F000}"
+    };
+    HRESULT (WINAPI *consume)(HSLC,const SLID *,const SLID *,PCWSTR,void *);
+    HRESULT (WINAPI *get_policy)(HSLC,PCWSTR,SLDATATYPE *,UINT *,BYTE **);
+    WCHAR system[MAX_PATH], path[MAX_PATH];
+    HMODULE module;
+    char policy[1024];
+    HSLC context;
+    SLID id;
+    HRESULT hr;
+    SLDATATYPE type;
+    UINT size, i;
+    BYTE *value;
+
+    /* The Wine implementation accepts unsigned fixture licenses. */
+    if (!winetest_platform_is_wine) return;
+    module = LoadLibraryW(L"sppc.dll");
+    consume = (void *)GetProcAddress(module, "SLConsumeRight");
+    get_policy = (void *)GetProcAddress(module, "SLGetPolicyInformation");
+    if (!consume || !get_policy) { win_skip("SPP policy functions unavailable.\n"); goto unload; }
+    hr = SLOpen(&context);
+    ok(hr == S_OK, "got %#lx\n", hr);
+    if (FAILED(hr)) goto unload;
+    hr = SLInstallLicense(context, sizeof(user_license) - 1, (const BYTE *)user_license, &id);
+    ok(hr == S_OK, "got %#lx\n", hr);
+    hr = consume(context, &app, &product, NULL, NULL);
+    ok(hr == S_OK, "got %#lx\n", hr);
+    for (i = 0; i < ARRAY_SIZE(titles); i++)
+    {
+        sprintf(policy, policy_format, titles[i]);
+        hr = SLInstallLicense(context, strlen(policy), (const BYTE *)policy, &id);
+        ok(hr == S_OK, "got %#lx\n", hr);
+        value = NULL;
+        size = 0;
+        type = SL_DATA_NONE;
+        hr = get_policy(context, L"Test-Policy", &type, &size, &value);
+        ok(hr == S_OK, "title %s: got %#lx\n", titles[i], hr);
+        ok(type == SL_DATA_DWORD, "got type %u\n", type);
+        ok(size == sizeof(DWORD), "got size %u\n", size);
+        ok(value && *(DWORD *)value == 7, "unexpected policy value\n");
+        LocalFree(value);
+    }
+    SLClose(context);
+    GetSystemDirectoryW(system, ARRAY_SIZE(system));
+    swprintf(path, ARRAY_SIZE(path), L"%s\\spp\\store\\2.0\\licenses\\{ABCDEF01-1234-5678-90AB-CDEF01234567}.xrm-ms", system);
+    DeleteFileW(path);
+    swprintf(path, ARRAY_SIZE(path), L"%s\\spp\\store\\2.0\\licenses\\{ABCDEF02-1234-5678-90AB-CDEF01234567}.xrm-ms", system);
+    DeleteFileW(path);
+unload:
+    FreeLibrary(module);
+}
+
 
 START_TEST(slc)
 {
     test_SLInstallLicense();
     test_SLGetWindowsInformationDWORD();
+    test_product_policy_guid();
 }

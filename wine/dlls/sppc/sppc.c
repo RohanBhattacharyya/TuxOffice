@@ -676,6 +676,8 @@ static HRESULT get_product_policy(const struct slc_context *context, PCWSTR name
     if ((length = WideCharToMultiByte(CP_UTF8, 0, name, -1, nameA, ARRAY_SIZE(nameA), NULL, NULL)) <= 1)
         return SL_E_VALUE_NOT_FOUND;
     format_license_idA(&context->product, guid);
+    /* Office PPD titles contain the SKU GUID without braces. */
+    guid[37] = 0;
 
     length = GetSystemDirectoryW(search, ARRAY_SIZE(search));
     if (!length) return HRESULT_FROM_WIN32(GetLastError());
