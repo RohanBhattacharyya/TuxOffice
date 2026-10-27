@@ -28,6 +28,7 @@
 #include "wine/exception.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(msg);
+WINE_DECLARE_DEBUG_CHANNEL(uiperf);
 
 #define MAX_ATOM_LEN  255
 
@@ -797,6 +798,11 @@ static LRESULT dispatch_message( const MSG *msg, BOOL ansi )
 {
     struct win_proc_params params;
     LRESULT retval = 0;
+    ULONGLONG started = TRACE_ON(uiperf) ? GetTickCount64() : 0;
+
+    if (msg->message == WM_MOUSEWHEEL)
+        TRACE_(uiperf)( "wheel hwnd %p tick %I64u queued %lu delta %d begin.\n",
+                msg->hwnd, started, msg->time, (short)HIWORD(msg->wParam) );
 
     if (!NtUserMessageCall( msg->hwnd, msg->message, msg->wParam, msg->lParam,
                             &params, NtUserGetDispatchParams, ansi )) return 0;
@@ -804,6 +810,9 @@ static LRESULT dispatch_message( const MSG *msg, BOOL ansi )
     SPY_EnterMessage( SPY_DISPATCHMESSAGE, msg->hwnd, msg->message, msg->wParam, msg->lParam );
     retval = dispatch_win_proc_params( &params );
     SPY_ExitMessage( SPY_RESULT_OK, msg->hwnd, msg->message, retval, msg->wParam, msg->lParam );
+    if (msg->message == WM_MOUSEWHEEL)
+        TRACE_(uiperf)( "wheel hwnd %p tick %I64u elapsed %I64u end.\n",
+                msg->hwnd, started, GetTickCount64() - started );
     return retval;
 }
 
