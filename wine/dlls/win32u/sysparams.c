@@ -5894,6 +5894,7 @@ static YESNO_ENTRY( BEEP, TRUE, SOUND_KEY, "Beep" );
 static DWORD_ENTRY( ACTIVEWINDOWTRACKING, 0, MOUSE_KEY, "ActiveWindowTracking" );
 static DWORD_ENTRY( ACTIVEWNDTRKTIMEOUT, 0, DESKTOP_KEY, "ActiveWndTrackTimeout" );
 static DWORD_ENTRY( CARETWIDTH, 1, DESKTOP_KEY, "CaretWidth" );
+static DWORD_ENTRY( CARETTIMEOUT, 5000, DESKTOP_KEY, "CaretTimeout" );
 static DWORD_ENTRY( DPISCALINGVER, 0, DESKTOP_KEY, "DpiScalingVer" );
 static DWORD_ENTRY( FOCUSBORDERHEIGHT, 1, DESKTOP_KEY, "FocusBorderHeight" );
 static DWORD_ENTRY( FOCUSBORDERWIDTH, 1, DESKTOP_KEY, "FocusBorderWidth" );
@@ -6002,6 +6003,7 @@ static union sysparam_all_entry * const default_entries[] =
     (union sysparam_all_entry *)&entry_CAPTIONHEIGHT,
     (union sysparam_all_entry *)&entry_CAPTIONWIDTH,
     (union sysparam_all_entry *)&entry_CARETWIDTH,
+    (union sysparam_all_entry *)&entry_CARETTIMEOUT,
     (union sysparam_all_entry *)&entry_DESKWALLPAPER,
     (union sysparam_all_entry *)&entry_DOUBLECLICKTIME,
     (union sysparam_all_entry *)&entry_DOUBLECLKHEIGHT,
@@ -7096,6 +7098,14 @@ BOOL WINAPI NtUserSystemParametersInfo( UINT action, UINT val, void *ptr, UINT w
         break;
     case SPI_SETCARETWIDTH:
         ret = set_entry( &entry_CARETWIDTH, val, ptr, winini );
+        break;
+    case SPI_GETCARETTIMEOUT:
+        /* How long a caret keeps blinking after the last input; Office's
+         * own carets stop blinking at once when this is unavailable. */
+        ret = get_entry( &entry_CARETTIMEOUT, val, ptr );
+        break;
+    case SPI_SETCARETTIMEOUT:
+        ret = set_entry( &entry_CARETTIMEOUT, val, ptr, winini );
         break;
     case SPI_GETMOUSECLICKLOCKTIME:
         ret = get_entry( &entry_MOUSECLICKLOCKTIME, val, ptr );
