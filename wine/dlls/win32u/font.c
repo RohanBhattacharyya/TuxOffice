@@ -194,6 +194,8 @@ static const WCHAR font_assoc_keyW[] =
 };
 
 static UINT font_smoothing = GGO_BITMAP;
+/* The prefix configures font smoothing explicitly, as Windows does. */
+static BOOL font_smoothing_configured;
 static UINT subpixel_orientation = GGO_GRAY4_BITMAP;
 static BOOL antialias_fakes = TRUE;
 static struct font_gamma_ramp font_gamma_ramp;
@@ -4616,7 +4618,9 @@ static HFONT font_SelectFont( PHYSDEV dev, HFONT hfont, UINT *aa_flags )
 
         if (font)
         {
-            if (!*aa_flags) *aa_flags = font->aa_flags;
+            /* The host's fontconfig antialiasing (often grayscale, without a
+             * subpixel order) otherwise overrides Windows' ClearType setting. */
+            if (!*aa_flags && !font_smoothing_configured) *aa_flags = font->aa_flags;
             if (!*aa_flags)
             {
                 if (lf.lfQuality == CLEARTYPE_QUALITY || lf.lfQuality == CLEARTYPE_NATURAL_QUALITY)
@@ -4774,7 +4778,9 @@ static UINT init_font_options(void)
                 break;
             }
         }
-        if (get_key_value( key, "FontSmoothing", &val ) && val /* enabled */)
+        if (get_key_value( key, "FontSmoothing", &val ))
+            font_smoothing_configured = TRUE;
+        if (font_smoothing_configured && val /* enabled */)
         {
             if (get_key_value( key, "FontSmoothingType", &val ) && val == 2 /* FE_FONTSMOOTHINGCLEARTYPE */)
                 font_smoothing = subpixel_orientation;
