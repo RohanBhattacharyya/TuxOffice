@@ -1,0 +1,24 @@
+; SPDX-License-Identifier: LGPL-2.1-or-later
+; A profile with one local data file: Outlook tests never touch a server.
+[General]
+Custom=1
+ProfileName=TuxTest
+DefaultProfile=Yes
+OverwriteProfile=Yes
+ModifyDefaultProfileIfPresent=FALSE
+DefaultStore=Service1
+
+[Service List]
+Service1=Unicode Personal Folders
+
+[Service1]
+UniqueService=No
+Name=TuxTest Data
+PathAndFilename=C:\tuxoffice\functional\tuxtest.pst
+EncryptionType=0x40000000
+
+[Unicode Personal Folders]
+ServiceName=MSUPST MS
+Name=PT_UNICODE,0x3001
+PathAndFilename=PT_UNICODE,0x6700
+EncryptionType=PT_LONG,0x6601

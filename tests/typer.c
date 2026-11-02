@@ -293,6 +293,10 @@ int main(int argc, char **argv)
     {
         if (!strcmp(argv[2], "excel")) office_window_class = L"XLMAIN";
         else if (!strcmp(argv[2], "powerpoint")) office_window_class = L"PPTFrameClass";
+        else if (!strcmp(argv[2], "outlook")) office_window_class = L"rctrl_renwnd32";
+        else if (!strcmp(argv[2], "onenote")) office_window_class = L"Framework::CFrame";
+        else if (!strcmp(argv[2], "access")) office_window_class = L"OMain";
+        else if (!strcmp(argv[2], "publisher")) office_window_class = L"MSWinPub";
         else if (strcmp(argv[2], "word")) return 1;
         argc -= 2; argv += 2;
     }

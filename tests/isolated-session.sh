@@ -25,6 +25,11 @@ dbus-update-activation-environment WAYLAND_DISPLAY="$WAYLAND_DISPLAY" QT_QPA_PLA
 export TUXOFFICE_HOME="$out/home" TUXOFFICE_PREFIX="$out/home/prefix"
 export TUXOFFICE_SCALE=1.25 XDG_CONFIG_HOME="$out/config"
 export QT_LOGGING_TO_CONSOLE=1
+# Own the keyring name first: otherwise D-Bus activation starts the desktop's
+# ksecretd on this bus, which opens the user's real wallet.
+python3 "$HERE/memory-secret-service.py" >"$out/secret-service.log" 2>&1 &
+secret_service=$!
+for _ in $(seq 1 50); do grep -q ready "$out/secret-service.log" 2>/dev/null && break; sleep 0.1; done
 if [[ -n ${TUXOFFICE_TEST_VK_DRIVER_FILES:-} ]]; then
   export VK_DRIVER_FILES="$TUXOFFICE_TEST_VK_DRIVER_FILES"
 elif [[ -r /usr/share/vulkan/icd.d/intel_icd.json ]] && [[ -r /usr/share/vulkan/icd.d/nvidia_icd.json ]]; then
@@ -44,7 +49,7 @@ ${kwin_egl:+env __EGL_VENDOR_LIBRARY_FILENAMES=$kwin_egl} kwin_wayland --virtual
   --no-lockscreen --no-global-shortcuts --no-kactivities >"$TUX_KWIN_LOG" 2>&1 &
 compositor=$!
 export TUX_KWIN_PID="$compositor"
-cleanup() { "$HERE/../tuxoffice" kill; kill "$compositor" 2>/dev/null || true; }
+cleanup() { "$HERE/../tuxoffice" kill; kill "$compositor" "$secret_service" 2>/dev/null || true; }
 trap cleanup EXIT
 for _ in $(seq 1 100); do
   kill -0 "$compositor" || { cat "$TUX_KWIN_LOG"; exit 1; }

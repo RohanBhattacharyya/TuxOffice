@@ -9,6 +9,8 @@ destination="$prefix/drive_c/tuxoffice"
 [[ -f $prefix/system.reg ]] || { echo "Office prefix missing: $prefix" >&2; exit 1; }
 mkdir -p "$destination"
 winegcc -b x86_64-windows -mconsole -o "$destination/typer.exe" "$HERE/typer.c" -luser32 -loleacc -lole32 -loleaut32 -luuid
+winegcc -b x86_64-windows -mconsole -municode -o "$destination/winctl.exe" "$HERE/winctl.c" -luser32 -loleacc -lole32 -loleaut32 -luuid
+winegcc -b x86_64-windows -mconsole -municode -o "$destination/onenote-api.exe" "$HERE/onenote-api.c" -lole32 -loleaut32 -luuid
 winegcc -b x86_64-windows -mconsole -o "$destination/office-probe.exe" "$HERE/office-probe.c" \
   -loleaut32 -lole32 -loleacc -luser32 -luuid
 winegcc -b x86_64-windows -mconsole -o "$destination/office-functional.exe" "$HERE/office-functional.c" \
