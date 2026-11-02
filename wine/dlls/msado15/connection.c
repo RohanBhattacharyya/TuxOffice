@@ -60,6 +60,7 @@ struct connection
     CursorLocationEnum        location;
     IUnknown                 *session;
     IDBInitialize            *dso;
+    BOOL                      wrapped_dso; /* its owner initialized it and will uninitialize it */
     struct connection_point   cp_connev;
 };
 
@@ -110,7 +111,7 @@ static ULONG WINAPI connection_Release( _Connection *iface )
         if (connection->session) IUnknown_Release( connection->session );
         if (connection->dso)
         {
-            IDBInitialize_Uninitialize( connection->dso );
+            if (!connection->wrapped_dso) IDBInitialize_Uninitialize( connection->dso );
             IDBInitialize_Release( connection->dso );
         }
         free( connection->cp_connev.sinks );
@@ -299,10 +300,11 @@ static HRESULT WINAPI connection_Close( _Connection *iface )
     }
     if (connection->dso)
     {
-        IDBInitialize_Uninitialize( connection->dso );
+        if (!connection->wrapped_dso) IDBInitialize_Uninitialize( connection->dso );
         IDBInitialize_Release( connection->dso );
         connection->dso = NULL;
     }
+    connection->wrapped_dso = FALSE;
 
     connection->state = adStateClosed;
     return S_OK;
@@ -958,8 +960,23 @@ static HRESULT WINAPI adoconstruct_WrapDSOandSession(ADOConnectionConstruction15
         IUnknown *session)
 {
     struct connection *connection = impl_from_ADOConnectionConstruction15( iface );
-    FIXME("%p, %p, %p\n", connection, dso, session);
-    return E_NOTIMPL;
+    IDBInitialize *initialize = NULL;
+    HRESULT hr;
+
+    TRACE("%p, %p, %p\n", connection, dso, session);
+
+    if (connection->state == adStateOpen) return MAKE_ADO_HRESULT( adErrObjectOpen );
+    if (dso && FAILED(hr = IUnknown_QueryInterface( dso, &IID_IDBInitialize, (void **)&initialize )))
+        return hr;
+
+    if (connection->dso) IDBInitialize_Release( connection->dso );
+    connection->dso = initialize;
+    connection->wrapped_dso = initialize != NULL;
+    if (connection->session) IUnknown_Release( connection->session );
+    connection->session = session;
+    if (session) IUnknown_AddRef( session );
+    connection->state = session ? adStateOpen : adStateClosed;
+    return S_OK;
 }
 
 struct ADOConnectionConstruction15Vtbl ado_construct_vtbl =

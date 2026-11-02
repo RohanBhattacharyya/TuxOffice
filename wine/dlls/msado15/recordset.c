@@ -626,6 +626,17 @@ static HRESULT WINAPI field_put_Value( Field *iface, VARIANT val )
 
     TRACE( "%p, %s\n", field, debugstr_variant(&val) );
 
+    if (V_ISBYREF(&val))
+    {
+        VARIANT value;
+
+        VariantInit( &value );
+        if (SUCCEEDED(hr = VariantCopyInd( &value, &val )))
+            hr = field_put_Value( iface, value );
+        VariantClear( &value );
+        return hr;
+    }
+
     if (!recordset || recordset->state == adStateClosed) return MAKE_ADO_HRESULT( adErrObjectClosed );
 
     if (!recordset->is_eof && !recordset->is_bof && !recordset->current_row)
@@ -1857,6 +1868,17 @@ static HRESULT WINAPI recordset_put_ActiveConnection( _Recordset *iface, VARIANT
 
     TRACE( "%p, %s\n", iface, debugstr_variant(&connection) );
 
+    if (V_ISBYREF(&connection))
+    {
+        VARIANT value;
+
+        VariantInit( &value );
+        if (SUCCEEDED(hr = VariantCopyInd( &value, &connection )))
+            hr = recordset_put_ActiveConnection( iface, value );
+        VariantClear( &value );
+        return hr;
+    }
+
     switch( V_VT(&connection) )
     {
     case VT_BSTR:
@@ -2129,6 +2151,36 @@ static HRESULT WINAPI recordset_put_MaxRecords( _Recordset *iface, ADO_LONGPTR m
     return S_OK;
 }
 
+/* Some providers, such as Access's, offer no exact count. GetRowsAt counts the
+ * rows from the first one and leaves the rowset's position alone. */
+static HRESULT rowset_count_rows( struct recordset *recordset, DBCOUNTITEM *count )
+{
+    BYTE first = DBBMK_FIRST;
+    IRowsetLocate *locate;
+    DBCOUNTITEM fetched;
+    HROW rows[256], *list;
+    HRESULT hr;
+
+    *count = 0;
+    if (FAILED(hr = IUnknown_QueryInterface( recordset->row_set, &IID_IRowsetLocate, (void **)&locate )))
+    {
+        TRACE( "no IRowsetLocate, hr %#lx.\n", hr );
+        return hr;
+    }
+    do
+    {
+        list = rows;
+        fetched = 0;
+        hr = IRowsetLocate_GetRowsAt( locate, 0, 0, sizeof(first), &first, *count, ARRAY_SIZE(rows), &fetched, &list );
+        if (FAILED(hr)) break;
+        if (fetched) IRowsetLocate_ReleaseRows( locate, fetched, list, NULL, NULL, NULL );
+        *count += fetched;
+    } while (hr == S_OK && fetched == ARRAY_SIZE(rows));
+    IRowsetLocate_Release( locate );
+    TRACE( "counted %Iu rows, hr %#lx.\n", *count, hr );
+    return FAILED(hr) ? hr : S_OK;
+}
+
 static HRESULT WINAPI recordset_get_RecordCount( _Recordset *iface, ADO_LONGPTR *count )
 {
     struct recordset *recordset = impl_from_Recordset( iface );
@@ -2149,9 +2201,13 @@ static HRESULT WINAPI recordset_get_RecordCount( _Recordset *iface, ADO_LONGPTR 
             recordset->rowset_es = NO_INTERFACE;
     }
     if (recordset->rowset_es == NO_INTERFACE)
+    {
+        if (SUCCEEDED(rowset_count_rows( recordset, &rows ))) *count = rows;
         return S_OK;
+    }
 
     hr = IRowsetExactScroll_GetExactPosition( recordset->rowset_es, 0, 0, 0, 0, &rows );
+    if (FAILED(hr)) hr = rowset_count_rows( recordset, &rows );
     if (SUCCEEDED(hr))
         *count = rows;
     return S_OK;
@@ -2519,6 +2575,7 @@ static inline void set_bool_prop(DBPROP *prop, DBPROPID id, BOOL b)
 
 static HRESULT get_rowset(struct recordset *recordset, IUnknown *session, BSTR source, IUnknown **rowset)
 {
+    ICommandProperties *command_properties;
     IDBCreateCommand *create_command;
     ICommandText *command_text;
     IOpenRowset *openrowset;
@@ -2587,12 +2644,24 @@ static HRESULT get_rowset(struct recordset *recordset, IUnknown *session, BSTR s
         return hr;
     }
 
+    /* The rowset of a query takes its cursor from the command. A provider may
+     * not offer all of these, which is not an error. */
+    if (SUCCEEDED(ICommandText_QueryInterface(command_text, &IID_ICommandProperties, (void **)&command_properties)))
+    {
+        unsigned int i;
+
+        for (i = 0; i < ARRAY_SIZE(props); ++i)
+            props[i].dwOptions = DBPROPOPTIONS_OPTIONAL;
+        ICommandProperties_SetProperties(command_properties, 1, &propset);
+        ICommandProperties_Release(command_properties);
+    }
+
     hr = ICommandText_Execute(command_text, NULL, &IID_IUnknown, NULL, &affected, rowset);
     ICommandText_Release(command_text);
     return hr;
 }
 
-static HRESULT WINAPI recordset_Open( _Recordset *iface, VARIANT source, VARIANT active_connection,
+static HRESULT recordset_open_values( _Recordset *iface, VARIANT source, VARIANT active_connection,
                                       CursorTypeEnum cursor_type, LockTypeEnum lock_type, LONG options )
 {
     struct recordset *recordset = impl_from_Recordset( iface );
@@ -2691,6 +2760,23 @@ static HRESULT WINAPI recordset_Open( _Recordset *iface, VARIANT source, VARIANT
 
     hr = ADORecordsetConstruction_put_Rowset(&recordset->ADORecordsetConstruction_iface, rowset);
     IUnknown_Release(rowset);
+    return hr;
+}
+
+/* Automation clients such as VBA pass their variables by reference. */
+static HRESULT WINAPI recordset_Open( _Recordset *iface, VARIANT source, VARIANT active_connection,
+                                      CursorTypeEnum cursor_type, LockTypeEnum lock_type, LONG options )
+{
+    VARIANT source_value, connection_value;
+    HRESULT hr;
+
+    VariantInit( &source_value );
+    VariantInit( &connection_value );
+    if (SUCCEEDED(hr = VariantCopyInd( &source_value, &source )) &&
+        SUCCEEDED(hr = VariantCopyInd( &connection_value, &active_connection )))
+        hr = recordset_open_values( iface, source_value, connection_value, cursor_type, lock_type, options );
+    VariantClear( &source_value );
+    VariantClear( &connection_value );
     return hr;
 }
 
