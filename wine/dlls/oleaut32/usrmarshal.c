@@ -1255,6 +1255,7 @@ HRESULT CALLBACK IDispatch_Invoke_Proxy(
         pExcepInfo, puArgErr);
 
   /* [out] args can't be null, use dummy vars if needed */
+  VariantInit(&VarResult);
   if (!pVarResult) pVarResult = &VarResult;
   if (!puArgErr) puArgErr = &uArgErr;
   if (!pExcepInfo) pExcepInfo = &ExcepInfo;
@@ -1310,6 +1311,10 @@ HRESULT CALLBACK IDispatch_Invoke_Proxy(
     CoTaskMemFree(rgVarRef);
     CoTaskMemFree(rgVarRefIdx);
   }
+
+  /* The caller did not ask for the result: it may hold a reference. */
+  if (pVarResult == &VarResult)
+    VariantClear(&VarResult);
 
   if(pExcepInfo == &ExcepInfo)
   {
