@@ -157,7 +157,8 @@ static void CALLBACK cancel_request( TP_CALLBACK_INSTANCE *instance, void *conte
     if (request) WinHttpCloseHandle( request );
 }
 
-static HRESULT http_post( const WCHAR *path, const char *body, HANDLE cancel, char **response, DWORD *status )
+static HRESULT http_post_to( const WCHAR *host, const WCHAR *path, const char *body, HANDLE cancel,
+                             char **response, DWORD *status )
 {
     static const WCHAR headers[] = L"Content-Type: application/x-www-form-urlencoded\r\n";
     HINTERNET session = NULL, connection = NULL, request = NULL;
@@ -173,7 +174,7 @@ static HRESULT http_post( const WCHAR *path, const char *body, HANDLE cancel, ch
     if (cancelled( cancel )) return HRESULT_FROM_WIN32( ERROR_CANCELLED );
     if (!(session = WinHttpOpen( L"Soda Identity/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0 )) ||
-        !(connection = WinHttpConnect( session, IDENTITY_HOST, INTERNET_DEFAULT_HTTPS_PORT, 0 )) ||
+        !(connection = WinHttpConnect( session, host, INTERNET_DEFAULT_HTTPS_PORT, 0 )) ||
         !(request = WinHttpOpenRequest( connection, L"POST", path, NULL, WINHTTP_NO_REFERER,
                                         WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE )))
     {
@@ -263,6 +264,11 @@ done:
         hr = HRESULT_FROM_WIN32( ERROR_CANCELLED );
     }
     return hr;
+}
+
+static HRESULT http_post( const WCHAR *path, const char *body, HANDLE cancel, char **response, DWORD *status )
+{
+    return http_post_to( IDENTITY_HOST, path, body, cancel, response, status );
 }
 
 static const char *skip_json_space( const char *cursor )
@@ -1023,9 +1029,13 @@ HRESULT identity_device_get_token( const GUID *application_id, HSTRING service, 
             goto done;
         }
     }
+    /* The hint is the account's name or, from Office's sign-in page, its object id. */
     if (WindowsGetStringLen(login_hint) &&
         CompareStringOrdinal( WindowsGetStringRawBuffer(login_hint, NULL), WindowsGetStringLen(login_hint),
                               WindowsGetStringRawBuffer(previous.username, NULL), WindowsGetStringLen(previous.username),
+                              TRUE ) != CSTR_EQUAL &&
+        CompareStringOrdinal( WindowsGetStringRawBuffer(login_hint, NULL), WindowsGetStringLen(login_hint),
+                              WindowsGetStringRawBuffer(previous.account_id, NULL), WindowsGetStringLen(previous.account_id),
                               TRUE ) != CSTR_EQUAL)
     {
         hr = E_ACCESSDENIED;
@@ -1186,7 +1196,10 @@ HRESULT identity_device_authorize( const GUID *application_id, HSTRING service, 
         return E_POINTER;
     }
     memset( reply, 0, sizeof(*reply) );
-    if (!force)
+    /* Office forces authentication after the user types their address on its sign-in
+     * page. If the keyring already holds that account's working token, as it does just
+     * after the prompt at first start, a second device code proves nothing more. */
+    if (!force || (login_hint && WindowsGetStringLen( login_hint )))
     {
         eagle_trace_native_identity( trace_id, 2, EAGLE_IDENTITY_CACHE, E_PENDING, __builtin_return_address(0) );
         hr = identity_device_get_token( application_id, service, authority, NULL, login_hint, cancel, reply );
@@ -1353,5 +1366,375 @@ done:
     free( error );
     end_interactive( owned, declined );
     eagle_trace_native_identity( trace_id, 2, EAGLE_IDENTITY_COMPLETE, hr, __builtin_return_address(0) );
+    return hr;
+}
+
+/* Personal Microsoft accounts. Office asks for them with a 16-digit client id, which
+ * login.microsoftonline.com rejects; login.live.com serves those clients. The keyring
+ * record is "2\nrefresh token\naccount id\nuser name". */
+#define MSA_HOST L"login.live.com"
+#define MSA_CONNECT_PATH L"/oauth20_connect.srf"
+#define MSA_TOKEN_PATH L"/oauth20_token.srf"
+
+BOOL identity_is_msa_client( HSTRING client_id )
+{
+    UINT32 length, i;
+    const WCHAR *value = WindowsGetStringRawBuffer( client_id, &length );
+
+    if (length != 16) return FALSE;
+    for (i = 0; i < length; ++i)
+        if (!iswxdigit( value[i] )) return FALSE;
+    return TRUE;
+}
+
+static HRESULT msa_client_utf8( HSTRING client_id, char client[17] )
+{
+    UINT32 length;
+    const WCHAR *value = WindowsGetStringRawBuffer( client_id, &length );
+
+    if (length != 16 || !WideCharToMultiByte( CP_UTF8, 0, value, 16, client, 16, NULL, NULL )) return E_INVALIDARG;
+    client[16] = 0;
+    return S_OK;
+}
+
+static HRESULT msa_authority( HSTRING *authority )
+{
+    return WindowsCreateString( L"consumers", 9, authority );
+}
+
+/* Fills the reply from a token response, and returns the account's id and name. */
+static HRESULT msa_token_reply( const char *response, const char *known_id, const char *known_name,
+                                char **account_out, char **username_out, struct identity_reply *reply )
+{
+    char *access = NULL, *id_token = NULL, *account = NULL, *username = NULL, *scopes = NULL;
+    FILETIME now;
+    UINT64 seconds;
+    UINT32 lifetime = 3600;
+    HRESULT hr;
+
+    if (FAILED(hr = json_string( response, "access_token", &access ))) goto done;
+    json_uint( response, "expires_in", &lifetime );
+    if (FAILED(json_string( response, "user_id", &account )) && known_id && !(account = strdup( known_id )))
+    {
+        hr = E_OUTOFMEMORY;
+        goto done;
+    }
+    if (known_name && !(username = strdup( known_name )))
+    {
+        hr = E_OUTOFMEMORY;
+        goto done;
+    }
+    if (SUCCEEDED(json_string( response, "id_token", &id_token )) && *id_token)
+        utf8_to_hstring( id_token, &reply->id_token );
+    if (!account || !*account)
+    {
+        hr = E_INVALIDARG;
+        goto done;
+    }
+    if (FAILED(hr = utf8_to_hstring( access, &reply->access_token )) ||
+        FAILED(hr = utf8_to_hstring( account, &reply->account_id ))) goto done;
+    if (username && *username &&
+        (FAILED(hr = utf8_to_hstring( username, &reply->username )) ||
+         FAILED(hr = utf8_to_hstring( username, &reply->display_name )))) goto done;
+    if (FAILED(hr = WindowsCreateString( consumer_tenant, ARRAY_SIZE(consumer_tenant) - 1, &reply->tenant_id ))) goto done;
+    if (SUCCEEDED(json_string( response, "scope", &scopes )) && scopes)
+        utf8_to_hstring( scopes, &reply->scopes );
+    GetSystemTimeAsFileTime( &now );
+    seconds = (((UINT64)now.dwHighDateTime << 32) | now.dwLowDateTime) / 10000000;
+    reply->expires_at = seconds - 11644473600 + (lifetime ? lifetime : 3600);
+    reply->error = S_OK;
+    if (account_out) { *account_out = account; account = NULL; }
+    if (username_out) { *username_out = username; username = NULL; }
+    hr = S_OK;
+
+done:
+    if (access) SecureZeroMemory( access, strlen(access) );
+    free( access );
+    free( id_token );
+    free( account );
+    free( username );
+    free( scopes );
+    return hr;
+}
+
+static HRESULT msa_save( const char *client, const char *response, const char *old_refresh,
+                         const char *account, const char *username )
+{
+    char *refresh = NULL, *record = NULL;
+    HSTRING authority = NULL;
+    SIZE_T size;
+    HRESULT hr;
+
+    hr = json_string( response, "refresh_token", &refresh );
+    if (hr == HRESULT_FROM_WIN32( ERROR_NOT_FOUND ) && old_refresh)
+        hr = (refresh = strdup( old_refresh )) ? S_OK : E_OUTOFMEMORY;
+    if (FAILED(hr)) goto done;
+    size = strlen( refresh ) + strlen( account ) + strlen( username ? username : "" ) + 6;
+    if (size > MAX_HTTP_RESPONSE || strchr( refresh, '\n' ))
+    {
+        hr = E_INVALIDARG;
+        goto done;
+    }
+    if (!(record = malloc( size )))
+    {
+        hr = E_OUTOFMEMORY;
+        goto done;
+    }
+    snprintf( record, size, "2\n%s\n%s\n%s", refresh, account, username ? username : "" );
+    if (SUCCEEDED(hr = msa_authority( &authority )))
+        hr = identity_native_credentials( credential_store, client, authority, record, size, NULL );
+
+done:
+    if (refresh) SecureZeroMemory( refresh, strlen(refresh) );
+    if (record) SecureZeroMemory( record, strlen(record) );
+    free( refresh );
+    free( record );
+    WindowsDeleteString( authority );
+    return hr;
+}
+
+/* Splits a stored record in place. */
+static HRESULT msa_lookup( const char *client, char *record, char **refresh, char **account, char **username )
+{
+    HSTRING authority = NULL;
+    DWORD size = 0;
+    HRESULT hr;
+
+    if (FAILED(hr = msa_authority( &authority ))) return hr;
+    hr = identity_native_credentials( credential_lookup, client, authority, record, MAX_HTTP_RESPONSE, &size );
+    WindowsDeleteString( authority );
+    if (FAILED(hr)) return hr;
+    if (size < 5 || record[size - 1] || strncmp( record, "2\n", 2 )) return E_INVALIDARG;
+    *refresh = record + 2;
+    if (!(*account = strchr( *refresh, '\n' ))) return E_INVALIDARG;
+    *(*account)++ = 0;
+    if (!(*username = strchr( *account, '\n' ))) return E_INVALIDARG;
+    *(*username)++ = 0;
+    return **refresh && **account ? S_OK : E_INVALIDARG;
+}
+
+HRESULT identity_msa_list_accounts( HSTRING client_id, HANDLE cancel, struct identity_reply *reply )
+{
+    char client[17], *record, *refresh, *account, *username;
+    DWORD count = 0, account_size, username_size, offset;
+    HRESULT hr;
+
+    memset( reply, 0, sizeof(*reply) );
+    if (FAILED(hr = msa_client_utf8( client_id, client ))) return hr;
+    if (!(record = calloc( 1, MAX_HTTP_RESPONSE ))) return E_OUTOFMEMORY;
+    hr = msa_lookup( client, record, &refresh, &account, &username );
+    if (SUCCEEDED(hr) && *username)
+    {
+        account_size = strlen( account );
+        username_size = strlen( username );
+        count = 1;
+    }
+    else account_size = username_size = 0;
+    offset = sizeof(count) + (count ? 2 * sizeof(DWORD) + account_size + username_size : 0);
+    if (!(reply->accounts = malloc( offset )))
+    {
+        SecureZeroMemory( record, MAX_HTTP_RESPONSE );
+        free( record );
+        return E_OUTOFMEMORY;
+    }
+    memcpy( reply->accounts, &count, sizeof(count) );
+    if (count)
+    {
+        BYTE *cursor = reply->accounts + sizeof(count);
+        memcpy( cursor, &account_size, sizeof(DWORD) ); cursor += sizeof(DWORD);
+        memcpy( cursor, account, account_size ); cursor += account_size;
+        memcpy( cursor, &username_size, sizeof(DWORD) ); cursor += sizeof(DWORD);
+        memcpy( cursor, username, username_size );
+    }
+    reply->accounts_size = offset;
+    SecureZeroMemory( record, MAX_HTTP_RESPONSE );
+    free( record );
+    return S_OK;
+}
+
+HRESULT identity_msa_get_token( HSTRING client_id, HSTRING service, HSTRING login_hint, HANDLE cancel,
+                                struct identity_reply *reply )
+{
+    char client[17], *record, *refresh, *account, *username, *scopes = NULL, *body = NULL, *response = NULL;
+    char *encoded_refresh = NULL, *encoded_scopes = NULL;
+    DWORD status;
+    SIZE_T size;
+    HRESULT hr;
+
+    memset( reply, 0, sizeof(*reply) );
+    if (FAILED(hr = msa_client_utf8( client_id, client ))) return hr;
+    if (!(record = calloc( 1, MAX_HTTP_RESPONSE ))) return E_OUTOFMEMORY;
+    if (FAILED(hr = msa_lookup( client, record, &refresh, &account, &username ))) goto done;
+    if (login_hint && WindowsGetStringLen( login_hint ))
+    {
+        UINT32 length;
+        const WCHAR *hint = WindowsGetStringRawBuffer( login_hint, &length );
+        WCHAR stored[512];
+        if (!MultiByteToWideChar( CP_UTF8, 0, username, -1, stored, ARRAY_SIZE(stored) ) || _wcsicmp( hint, stored ))
+        {
+            hr = E_ACCESSDENIED;
+            goto done;
+        }
+    }
+    if (FAILED(hr = build_scopes( service, &scopes ))) goto done;
+    if (!(encoded_refresh = form_encode( refresh )) || !(encoded_scopes = form_encode( scopes )))
+    {
+        hr = E_OUTOFMEMORY;
+        goto done;
+    }
+    size = strlen( encoded_refresh ) + strlen( encoded_scopes ) + 80;
+    if (!(body = malloc( size )))
+    {
+        hr = E_OUTOFMEMORY;
+        goto done;
+    }
+    snprintf( body, size, "grant_type=refresh_token&client_id=%s&refresh_token=%s&scope=%s",
+              client, encoded_refresh, encoded_scopes );
+    if (FAILED(hr = http_post_to( MSA_HOST, MSA_TOKEN_PATH, body, cancel, &response, &status ))) goto done;
+    if (status != 200)
+    {
+        hr = E_ACCESSDENIED;
+        goto done;
+    }
+    if (FAILED(hr = msa_token_reply( response, account, username, NULL, NULL, reply ))) goto done;
+    hr = msa_save( client, response, refresh, account, username );
+
+done:
+    if (FAILED(hr))
+    {
+        identity_reply_clear( reply );
+        reply->error = hr;
+    }
+    SecureZeroMemory( record, MAX_HTTP_RESPONSE );
+    free( record );
+    if (encoded_refresh) SecureZeroMemory( encoded_refresh, strlen(encoded_refresh) );
+    if (body) SecureZeroMemory( body, strlen(body) );
+    free( encoded_refresh );
+    free( encoded_scopes );
+    free( scopes );
+    free( body );
+    free( response );
+    return hr;
+}
+
+HRESULT identity_msa_authorize( HSTRING client_id, HSTRING service, HSTRING login_hint, BOOL force,
+                                HANDLE cancel, struct identity_reply *reply )
+{
+    char client[17], *scopes = NULL, *encoded_scopes = NULL, *body = NULL, *response = NULL;
+    char *device_code = NULL, *encoded_code = NULL, *user_code = NULL, *verification_uri = NULL, *error = NULL;
+    char *account = NULL, *username = NULL, *hint = NULL;
+    UINT32 expires = 900, interval = 5, elapsed = 0;
+    BOOL owned = FALSE, waited = FALSE, declined = FALSE;
+    DWORD status = 0;
+    SIZE_T size;
+    HRESULT hr;
+
+    memset( reply, 0, sizeof(*reply) );
+    if (FAILED(hr = msa_client_utf8( client_id, client ))) return hr;
+    if (SUCCEEDED(identity_msa_get_token( client_id, service, login_hint, cancel, reply ))) return S_OK;
+    identity_reply_clear( reply );
+    if (cancelled( cancel )) return reply->error = HRESULT_FROM_WIN32( ERROR_CANCELLED );
+    if (FAILED(hr = begin_interactive( cancel, &owned, &waited )))
+    {
+        reply->error = hr;
+        return hr;
+    }
+    if (waited && SUCCEEDED(identity_msa_get_token( client_id, service, login_hint, cancel, reply )))
+    {
+        end_interactive( owned, FALSE );
+        return S_OK;
+    }
+    identity_reply_clear( reply );
+    if (FAILED(hr = build_scopes( service, &scopes ))) goto done;
+    if (!(encoded_scopes = form_encode( scopes )))
+    {
+        hr = E_OUTOFMEMORY;
+        goto done;
+    }
+    size = strlen( encoded_scopes ) + 80;
+    if (!(body = malloc( size )))
+    {
+        hr = E_OUTOFMEMORY;
+        goto done;
+    }
+    snprintf( body, size, "client_id=%s&scope=%s&response_type=device_code", client, encoded_scopes );
+    if (FAILED(hr = http_post_to( MSA_HOST, MSA_CONNECT_PATH, body, cancel, &response, &status ))) goto done;
+    if (status != 200)
+    {
+        hr = E_ACCESSDENIED;
+        goto done;
+    }
+    if (FAILED(hr = json_string( response, "device_code", &device_code )) ||
+        FAILED(hr = json_string( response, "user_code", &user_code )) ||
+        FAILED(hr = json_string( response, "verification_uri", &verification_uri ))) goto done;
+    json_uint( response, "expires_in", &expires );
+    json_uint( response, "interval", &interval );
+    expires = min( max( expires, 60 ), 3600 );
+    interval = min( max( interval, 1 ), 60 );
+    hr = show_device_prompt( verification_uri, user_code, cancel );
+    declined = hr == HRESULT_FROM_WIN32( ERROR_CANCELLED ) && !cancelled( cancel );
+    if (FAILED(hr)) goto done;
+    if (!(encoded_code = form_encode( device_code )))
+    {
+        hr = E_OUTOFMEMORY;
+        goto done;
+    }
+    free( body );
+    size = strlen( encoded_code ) + 112;
+    if (!(body = malloc( size )))
+    {
+        hr = E_OUTOFMEMORY;
+        goto done;
+    }
+    snprintf( body, size, "grant_type=urn%%3Aietf%%3Aparams%%3Aoauth%%3Agrant-type%%3Adevice_code&client_id=%s&device_code=%s",
+              client, encoded_code );
+    do
+    {
+        if (cancel ? WaitForSingleObject( cancel, interval * 1000 ) == WAIT_OBJECT_0 :
+                     (Sleep( interval * 1000 ), FALSE))
+        {
+            hr = HRESULT_FROM_WIN32( ERROR_CANCELLED );
+            goto done;
+        }
+        elapsed += interval;
+        free( response );
+        response = NULL;
+        free( error );
+        error = NULL;
+        if (FAILED(hr = http_post_to( MSA_HOST, MSA_TOKEN_PATH, body, cancel, &response, &status ))) goto done;
+        if (status == 200) break;
+        if (FAILED(json_string( response, "error", &error )))
+        {
+            hr = E_ACCESSDENIED;
+            goto done;
+        }
+        if (!strcmp( error, "slow_down" )) interval += 5;
+        else if (strcmp( error, "authorization_pending" ))
+        {
+            declined = !strcmp( error, "authorization_declined" );
+            hr = declined ? HRESULT_FROM_WIN32( ERROR_CANCELLED ) : E_ACCESSDENIED;
+            goto done;
+        }
+    } while (elapsed < expires);
+    if (status != 200)
+    {
+        hr = HRESULT_FROM_WIN32( ERROR_TIMEOUT );
+        goto done;
+    }
+    if (login_hint && WindowsGetStringLen( login_hint ) && FAILED(hr = hstring_to_utf8( login_hint, &hint ))) goto done;
+    if (FAILED(hr = msa_token_reply( response, NULL, hint, &account, &username, reply ))) goto done;
+    if (!reply->scopes) utf8_to_hstring( scopes, &reply->scopes );
+    hr = msa_save( client, response, NULL, account, username );
+
+done:
+    if (FAILED(hr))
+    {
+        identity_reply_clear( reply );
+        reply->error = hr;
+    }
+    free( scopes ); free( encoded_scopes ); free( body ); free( response ); free( device_code );
+    free( encoded_code ); free( user_code ); free( verification_uri ); free( error );
+    free( account ); free( username ); free( hint );
+    end_interactive( owned, declined );
     return hr;
 }

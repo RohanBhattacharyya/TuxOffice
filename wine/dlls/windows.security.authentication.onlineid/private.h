@@ -79,7 +79,13 @@ extern HRESULT identity_device_get_token( const GUID *application_id, HSTRING se
 extern HRESULT identity_native_credentials( UINT operation, const char *client_id, HSTRING authority,
                                             char *data, DWORD capacity, DWORD *size );
 extern HRESULT identity_authority_tenant( HSTRING authority, WCHAR tenant[37] );
-extern HRESULT identity_device_list_accounts( HSTRING client_id, HSTRING authority, HANDLE cancel,
+extern BOOL identity_is_msa_client( HSTRING client_id );
+HRESULT identity_msa_list_accounts( HSTRING client_id, HANDLE cancel, struct identity_reply *reply );
+HRESULT identity_msa_get_token( HSTRING client_id, HSTRING service, HSTRING login_hint, HANDLE cancel,
+                                struct identity_reply *reply );
+HRESULT identity_msa_authorize( HSTRING client_id, HSTRING service, HSTRING login_hint, BOOL force,
+                                HANDLE cancel, struct identity_reply *reply );
+HRESULT identity_device_list_accounts( HSTRING client_id, HSTRING authority, HANDLE cancel,
                                               struct identity_reply *reply );
 extern void identity_reply_clear( struct identity_reply *reply );
 extern HRESULT identity_bridge_list_accounts( HSTRING client_id, HSTRING authority, HANDLE cancel,

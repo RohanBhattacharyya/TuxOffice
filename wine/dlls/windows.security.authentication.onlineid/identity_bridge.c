@@ -183,6 +183,11 @@ static HRESULT device_authorize_client( HSTRING client_id, HSTRING scopes, HSTRI
     GUID application_id;
     HRESULT hr;
 
+    if (identity_is_msa_client( client_id ))
+    {
+        if (silent) return identity_msa_get_token( client_id, scopes, login_hint, cancel, reply );
+        return identity_msa_authorize( client_id, scopes, login_hint, force, cancel, reply );
+    }
     value = WindowsGetStringRawBuffer( client_id, &length );
     if (length != 36) return E_INVALIDARG;
     guid_string[0] = '{';
@@ -388,7 +393,10 @@ HRESULT identity_bridge_list_accounts( HSTRING client_id, HSTRING authority, HAN
     if (!reply) return E_POINTER;
     memset( reply, 0, sizeof(*reply) );
     if (!GetEnvironmentVariableW( L"SODA_IDENTITY_BRIDGE_SOCKET", NULL, 0 ))
+    {
+        if (identity_is_msa_client( client_id )) return identity_msa_list_accounts( client_id, cancel, reply );
         return identity_device_list_accounts( client_id, authority, cancel, reply );
+    }
     if (FAILED(hr = hstring_to_utf8( client_id, &client, &client_size )) ||
         FAILED(hr = hstring_to_utf8( authority, &tenant, &tenant_size ))) goto done;
     if (client_size && FAILED(hr = builder_add( &builder, FIELD_CLIENT_ID, client, client_size ))) goto done;

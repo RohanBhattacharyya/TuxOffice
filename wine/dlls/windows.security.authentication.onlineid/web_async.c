@@ -396,6 +396,32 @@ static const IAsyncInfoVtbl info_vtbl =
     info_Close,
 };
 
+/* Without an account object, the address the user typed comes as a request property. */
+static void request_login_hint( IWebTokenRequest *request, HSTRING *hint )
+{
+    static const WCHAR * const names[] = {L"LoginHint", L"login_hint", L"LOGIN_HINT"};
+    IMap_HSTRING_HSTRING *properties = NULL;
+    unsigned int i;
+
+    if (FAILED(IWebTokenRequest_get_Properties( request, &properties )) || !properties) return;
+    for (i = 0; i < ARRAY_SIZE(names); ++i)
+    {
+        HSTRING name, value = NULL;
+
+        if (FAILED(WindowsCreateString( names[i], wcslen( names[i] ), &name ))) break;
+        if (SUCCEEDED(IMap_HSTRING_HSTRING_Lookup( properties, name, &value )) && WindowsGetStringLen( value ))
+        {
+            WindowsDeleteString( *hint );
+            *hint = value;
+            WindowsDeleteString( name );
+            break;
+        }
+        WindowsDeleteString( value );
+        WindowsDeleteString( name );
+    }
+    IMap_HSTRING_HSTRING_Release( properties );
+}
+
 static HRESULT token_worker( struct web_async_operation *impl, IInspectable **result )
 {
     IWebAccountProvider *provider = NULL;
@@ -438,6 +464,8 @@ static HRESULT token_worker( struct web_async_operation *impl, IInspectable **re
     else
         hr = WindowsCreateString( L"", 0, &login_hint );
     if (FAILED(hr)) goto done;
+    if (!impl->u.token.account) request_login_hint( impl->u.token.request, &login_hint );
+    TRACE( "login hint %d characters\n", login_hint ? (int)WindowsGetStringLen( login_hint ) : 0 );
     TRACE( "token request silent %d prompt %d client %s authority %s scopes %s account %d\n",
            impl->u.token.silent, prompt, debugstr_hstring( client_id ), debugstr_hstring( authority ),
            debugstr_hstring( scopes ), impl->u.token.account != NULL );
