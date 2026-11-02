@@ -444,6 +444,16 @@ static void add_desktop_thread( struct desktop *desktop, struct thread *thread )
     if (desktop == desktop->winstation->input_desktop) set_rawinput_process( thread->process, 1 );
 }
 
+/* does any process other than the given one and the system processes use the desktop? */
+static int desktop_has_other_users( struct desktop *desktop, struct process *process )
+{
+    struct thread *thread;
+
+    LIST_FOR_EACH_ENTRY( thread, &desktop->threads, struct thread, desktop_entry )
+        if (thread->process != process && !thread->process->is_system) return 1;
+    return 0;
+}
+
 /* remove a user of the desktop and start the close timeout if necessary */
 static void remove_desktop_user( struct desktop *desktop, struct thread *thread )
 {
@@ -452,8 +462,12 @@ static void remove_desktop_user( struct desktop *desktop, struct thread *thread 
     assert( desktop->users > 0 );
     desktop->users--;
 
-    /* if we have one remaining user, it has to be the manager of the desktop window */
-    if ((process = get_top_window_owner( desktop )) && desktop->users == process->running_threads && !desktop->close_timeout)
+    /* Close the desktop once only its manager uses it. Compare threads, not counts: the
+     * manager's thread count also includes threads with no desktop, so it can equal the
+     * number of users while other processes are still running on this desktop. Closing
+     * then ends explorer under them and each later process gets its own desktop window. */
+    if ((process = get_top_window_owner( desktop )) && !desktop_has_other_users( desktop, process ) &&
+        !desktop->close_timeout)
         desktop->close_timeout = add_timeout_user( desktop->close_timeout_val, close_desktop_timeout, desktop );
 }
 
