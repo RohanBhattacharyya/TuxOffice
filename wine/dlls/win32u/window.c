@@ -165,7 +165,8 @@ static NTSTATUS get_shared_window( HANDLE handle, struct object_lock *lock, cons
     {
         shared_object_acquire_seqlock( object, &lock->seq );
         *window_shm = &object->shm.window;
-        lock->id = object->id;
+        /* the server zeroes the id of a freed object; zero here means "not locked yet" */
+        if (!(lock->id = object->id)) lock->id = -1;
         return STATUS_PENDING;
     }
 

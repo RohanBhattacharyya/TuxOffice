@@ -227,7 +227,8 @@ NTSTATUS get_shared_desktop( struct object_lock *lock, const desktop_shm_t **des
     {
         shared_object_acquire_seqlock( object, &lock->seq );
         *desktop_shm = &object->shm.desktop;
-        lock->id = object->id;
+        /* the server zeroes the id of a freed object; zero here means "not locked yet" */
+        if (!(lock->id = object->id)) lock->id = -1;
         return STATUS_PENDING;
     }
 
@@ -260,7 +261,8 @@ NTSTATUS get_shared_queue( struct object_lock *lock, const queue_shm_t **queue_s
     {
         shared_object_acquire_seqlock( object, &lock->seq );
         *queue_shm = &object->shm.queue;
-        lock->id = object->id;
+        /* the server zeroes the id of a freed object; zero here means "not locked yet" */
+        if (!(lock->id = object->id)) lock->id = -1;
         return STATUS_PENDING;
     }
 
