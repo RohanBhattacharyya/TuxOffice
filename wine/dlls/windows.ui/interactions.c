@@ -706,6 +706,528 @@ static struct composition_conditional_value_factory composition_conditional_valu
 IActivationFactory *composition_conditional_value_factory =
     &composition_conditional_value_factory_impl.IActivationFactory_iface;
 
+struct inertia_resting_value
+{
+    IInteractionTrackerInertiaRestingValue IInteractionTrackerInertiaRestingValue_iface;
+    ICompositionObject ICompositionObject_iface;
+    IClosable IClosable_iface;
+    IExpressionAnimation *condition;
+    IExpressionAnimation *value;
+    ICompositionPropertySet *properties;
+    ICompositor *compositor;
+    LONG ref;
+};
+
+static inline struct inertia_resting_value *impl_from_IInteractionTrackerInertiaRestingValue(
+        IInteractionTrackerInertiaRestingValue *iface )
+{
+    return CONTAINING_RECORD( iface, struct inertia_resting_value,
+                              IInteractionTrackerInertiaRestingValue_iface );
+}
+
+static inline struct inertia_resting_value *resting_value_from_ICompositionObject(
+        ICompositionObject *iface )
+{
+    return CONTAINING_RECORD( iface, struct inertia_resting_value, ICompositionObject_iface );
+}
+
+static inline struct inertia_resting_value *resting_value_from_IClosable( IClosable *iface )
+{
+    return CONTAINING_RECORD( iface, struct inertia_resting_value, IClosable_iface );
+}
+
+static HRESULT inertia_resting_value_query_interface( struct inertia_resting_value *impl,
+        REFIID iid, void **out )
+{
+    if (!out) return E_POINTER;
+    if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
+        IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_IInteractionTrackerInertiaRestingValue ) ||
+        IsEqualGUID( iid, &IID_IInteractionTrackerInertiaModifier ))
+        *out = &impl->IInteractionTrackerInertiaRestingValue_iface;
+    else if (IsEqualGUID( iid, &IID_ICompositionObject ))
+        *out = &impl->ICompositionObject_iface;
+    else if (IsEqualGUID( iid, &IID_IClosable ))
+        *out = &impl->IClosable_iface;
+    else
+    {
+        *out = NULL;
+        return E_NOINTERFACE;
+    }
+    IUnknown_AddRef( (IUnknown *)*out );
+    return S_OK;
+}
+
+static ULONG inertia_resting_value_add_ref( struct inertia_resting_value *impl )
+{
+    return InterlockedIncrement( &impl->ref );
+}
+
+static ULONG inertia_resting_value_release( struct inertia_resting_value *impl )
+{
+    ULONG ref = InterlockedDecrement( &impl->ref );
+
+    if (!ref)
+    {
+        if (impl->condition) IExpressionAnimation_Release( impl->condition );
+        if (impl->value) IExpressionAnimation_Release( impl->value );
+        ICompositionPropertySet_Release( impl->properties );
+        ICompositor_Release( impl->compositor );
+        free( impl );
+    }
+    return ref;
+}
+
+static HRESULT inertia_resting_value_get_iids( ULONG *count, IID **iids )
+{
+    IID *values;
+
+    if (!count || !iids) return E_POINTER;
+    if (!(values = CoTaskMemAlloc( 3 * sizeof(*values) ))) return E_OUTOFMEMORY;
+    values[0] = IID_IInteractionTrackerInertiaRestingValue;
+    values[1] = IID_ICompositionObject;
+    values[2] = IID_IClosable;
+    *count = 3;
+    *iids = values;
+    return S_OK;
+}
+
+static HRESULT inertia_resting_value_get_class_name( HSTRING *name )
+{
+    if (!name) return E_POINTER;
+    return WindowsCreateString(
+            RuntimeClass_Windows_UI_Composition_Interactions_InteractionTrackerInertiaRestingValue,
+            ARRAY_SIZE(RuntimeClass_Windows_UI_Composition_Interactions_InteractionTrackerInertiaRestingValue) - 1,
+            name );
+}
+
+static HRESULT inertia_resting_value_get_trust_level( TrustLevel *level )
+{
+    if (!level) return E_POINTER;
+    *level = BaseTrust;
+    return S_OK;
+}
+
+static HRESULT WINAPI inertia_resting_value_QueryInterface( IInteractionTrackerInertiaRestingValue *iface,
+        REFIID iid, void **out )
+{
+    return inertia_resting_value_query_interface(
+            impl_from_IInteractionTrackerInertiaRestingValue( iface ), iid, out );
+}
+
+static ULONG WINAPI inertia_resting_value_AddRef( IInteractionTrackerInertiaRestingValue *iface )
+{
+    return inertia_resting_value_add_ref( impl_from_IInteractionTrackerInertiaRestingValue( iface ) );
+}
+
+static ULONG WINAPI inertia_resting_value_Release( IInteractionTrackerInertiaRestingValue *iface )
+{
+    return inertia_resting_value_release( impl_from_IInteractionTrackerInertiaRestingValue( iface ) );
+}
+
+static HRESULT WINAPI inertia_resting_value_GetIids( IInteractionTrackerInertiaRestingValue *iface,
+        ULONG *count, IID **iids )
+{
+    return inertia_resting_value_get_iids( count, iids );
+}
+
+static HRESULT WINAPI inertia_resting_value_GetRuntimeClassName(
+        IInteractionTrackerInertiaRestingValue *iface, HSTRING *name )
+{
+    return inertia_resting_value_get_class_name( name );
+}
+
+static HRESULT WINAPI inertia_resting_value_GetTrustLevel(
+        IInteractionTrackerInertiaRestingValue *iface, TrustLevel *level )
+{
+    return inertia_resting_value_get_trust_level( level );
+}
+
+static HRESULT inertia_resting_value_get_animation( IExpressionAnimation *animation,
+        IExpressionAnimation **value )
+{
+    if (!value) return E_POINTER;
+    if (animation) IExpressionAnimation_AddRef( animation );
+    *value = animation;
+    return S_OK;
+}
+
+static HRESULT inertia_resting_value_put_animation( IExpressionAnimation **current,
+        IExpressionAnimation *value )
+{
+    if (value) IExpressionAnimation_AddRef( value );
+    if (*current) IExpressionAnimation_Release( *current );
+    *current = value;
+    return S_OK;
+}
+
+static HRESULT WINAPI inertia_resting_value_get_Condition( IInteractionTrackerInertiaRestingValue *iface,
+        IExpressionAnimation **value )
+{
+    return inertia_resting_value_get_animation(
+            impl_from_IInteractionTrackerInertiaRestingValue( iface )->condition, value );
+}
+
+static HRESULT WINAPI inertia_resting_value_put_Condition( IInteractionTrackerInertiaRestingValue *iface,
+        IExpressionAnimation *value )
+{
+    return inertia_resting_value_put_animation(
+            &impl_from_IInteractionTrackerInertiaRestingValue( iface )->condition, value );
+}
+
+static HRESULT WINAPI inertia_resting_value_get_RestingValue( IInteractionTrackerInertiaRestingValue *iface,
+        IExpressionAnimation **value )
+{
+    return inertia_resting_value_get_animation(
+            impl_from_IInteractionTrackerInertiaRestingValue( iface )->value, value );
+}
+
+static HRESULT WINAPI inertia_resting_value_put_RestingValue( IInteractionTrackerInertiaRestingValue *iface,
+        IExpressionAnimation *value )
+{
+    return inertia_resting_value_put_animation(
+            &impl_from_IInteractionTrackerInertiaRestingValue( iface )->value, value );
+}
+
+static const IInteractionTrackerInertiaRestingValueVtbl inertia_resting_value_vtbl =
+{
+    inertia_resting_value_QueryInterface,
+    inertia_resting_value_AddRef,
+    inertia_resting_value_Release,
+    inertia_resting_value_GetIids,
+    inertia_resting_value_GetRuntimeClassName,
+    inertia_resting_value_GetTrustLevel,
+    inertia_resting_value_get_Condition,
+    inertia_resting_value_put_Condition,
+    inertia_resting_value_get_RestingValue,
+    inertia_resting_value_put_RestingValue,
+};
+
+static HRESULT WINAPI resting_value_composition_object_QueryInterface( ICompositionObject *iface,
+        REFIID iid, void **out )
+{
+    return inertia_resting_value_query_interface(
+            resting_value_from_ICompositionObject( iface ), iid, out );
+}
+
+static ULONG WINAPI resting_value_composition_object_AddRef( ICompositionObject *iface )
+{
+    return inertia_resting_value_add_ref( resting_value_from_ICompositionObject( iface ) );
+}
+
+static ULONG WINAPI resting_value_composition_object_Release( ICompositionObject *iface )
+{
+    return inertia_resting_value_release( resting_value_from_ICompositionObject( iface ) );
+}
+
+static HRESULT WINAPI resting_value_composition_object_GetIids( ICompositionObject *iface,
+        ULONG *count, IID **iids )
+{
+    return inertia_resting_value_get_iids( count, iids );
+}
+
+static HRESULT WINAPI resting_value_composition_object_GetRuntimeClassName(
+        ICompositionObject *iface, HSTRING *name )
+{
+    return inertia_resting_value_get_class_name( name );
+}
+
+static HRESULT WINAPI resting_value_composition_object_GetTrustLevel( ICompositionObject *iface,
+        TrustLevel *level )
+{
+    return inertia_resting_value_get_trust_level( level );
+}
+
+static HRESULT WINAPI resting_value_composition_object_get_Compositor( ICompositionObject *iface,
+        ICompositor **value )
+{
+    struct inertia_resting_value *impl = resting_value_from_ICompositionObject( iface );
+
+    if (!value) return E_POINTER;
+    ICompositor_AddRef( impl->compositor );
+    *value = impl->compositor;
+    return S_OK;
+}
+
+static HRESULT WINAPI resting_value_composition_object_get_Dispatcher( ICompositionObject *iface,
+        ICoreDispatcher **value )
+{
+    if (!value) return E_POINTER;
+    *value = NULL;
+    return S_OK;
+}
+
+static HRESULT WINAPI resting_value_composition_object_get_Properties( ICompositionObject *iface,
+        ICompositionPropertySet **value )
+{
+    struct inertia_resting_value *impl = resting_value_from_ICompositionObject( iface );
+
+    if (!value) return E_POINTER;
+    ICompositionPropertySet_AddRef( impl->properties );
+    *value = impl->properties;
+    return S_OK;
+}
+
+static HRESULT WINAPI resting_value_composition_object_StartAnimation( ICompositionObject *iface,
+        HSTRING name, ICompositionAnimation *animation )
+{
+    TRACE( "iface %p, name %s, animation %p.\n", iface, debugstr_hstring( name ), animation );
+    return S_OK;
+}
+
+static HRESULT WINAPI resting_value_composition_object_StopAnimation( ICompositionObject *iface,
+        HSTRING name )
+{
+    TRACE( "iface %p, name %s.\n", iface, debugstr_hstring( name ) );
+    return S_OK;
+}
+
+static const ICompositionObjectVtbl resting_value_composition_object_vtbl =
+{
+    resting_value_composition_object_QueryInterface,
+    resting_value_composition_object_AddRef,
+    resting_value_composition_object_Release,
+    resting_value_composition_object_GetIids,
+    resting_value_composition_object_GetRuntimeClassName,
+    resting_value_composition_object_GetTrustLevel,
+    resting_value_composition_object_get_Compositor,
+    resting_value_composition_object_get_Dispatcher,
+    resting_value_composition_object_get_Properties,
+    resting_value_composition_object_StartAnimation,
+    resting_value_composition_object_StopAnimation,
+};
+
+static HRESULT WINAPI resting_value_closable_QueryInterface( IClosable *iface,
+        REFIID iid, void **out )
+{
+    return inertia_resting_value_query_interface(
+            resting_value_from_IClosable( iface ), iid, out );
+}
+
+static ULONG WINAPI resting_value_closable_AddRef( IClosable *iface )
+{
+    return inertia_resting_value_add_ref( resting_value_from_IClosable( iface ) );
+}
+
+static ULONG WINAPI resting_value_closable_Release( IClosable *iface )
+{
+    return inertia_resting_value_release( resting_value_from_IClosable( iface ) );
+}
+
+static HRESULT WINAPI resting_value_closable_GetIids( IClosable *iface, ULONG *count, IID **iids )
+{
+    return inertia_resting_value_get_iids( count, iids );
+}
+
+static HRESULT WINAPI resting_value_closable_GetRuntimeClassName( IClosable *iface, HSTRING *name )
+{
+    return inertia_resting_value_get_class_name( name );
+}
+
+static HRESULT WINAPI resting_value_closable_GetTrustLevel( IClosable *iface, TrustLevel *level )
+{
+    return inertia_resting_value_get_trust_level( level );
+}
+
+static HRESULT WINAPI resting_value_closable_Close( IClosable *iface )
+{
+    TRACE( "iface %p.\n", iface );
+    return S_OK;
+}
+
+static const IClosableVtbl resting_value_closable_vtbl =
+{
+    resting_value_closable_QueryInterface,
+    resting_value_closable_AddRef,
+    resting_value_closable_Release,
+    resting_value_closable_GetIids,
+    resting_value_closable_GetRuntimeClassName,
+    resting_value_closable_GetTrustLevel,
+    resting_value_closable_Close,
+};
+
+static HRESULT inertia_resting_value_create( ICompositor *compositor,
+        IInteractionTrackerInertiaRestingValue **result )
+{
+    struct inertia_resting_value *impl;
+    HRESULT hr;
+
+    if (!compositor || !result) return E_INVALIDARG;
+    *result = NULL;
+    if (!(impl = calloc( 1, sizeof(*impl) ))) return E_OUTOFMEMORY;
+    impl->IInteractionTrackerInertiaRestingValue_iface.lpVtbl = &inertia_resting_value_vtbl;
+    impl->ICompositionObject_iface.lpVtbl = &resting_value_composition_object_vtbl;
+    impl->IClosable_iface.lpVtbl = &resting_value_closable_vtbl;
+    impl->compositor = compositor;
+    impl->ref = 1;
+    ICompositor_AddRef( compositor );
+    if (FAILED(hr = composition_property_set_create( compositor, &impl->properties )))
+    {
+        IInteractionTrackerInertiaRestingValue_Release( &impl->IInteractionTrackerInertiaRestingValue_iface );
+        return hr;
+    }
+    *result = &impl->IInteractionTrackerInertiaRestingValue_iface;
+    return S_OK;
+}
+
+struct inertia_resting_value_factory
+{
+    IActivationFactory IActivationFactory_iface;
+    IInteractionTrackerInertiaRestingValueStatics IInteractionTrackerInertiaRestingValueStatics_iface;
+    LONG ref;
+};
+
+static inline struct inertia_resting_value_factory *resting_value_factory_from_IActivationFactory(
+        IActivationFactory *iface )
+{
+    return CONTAINING_RECORD( iface, struct inertia_resting_value_factory, IActivationFactory_iface );
+}
+
+static inline struct inertia_resting_value_factory *resting_value_factory_from_statics(
+        IInteractionTrackerInertiaRestingValueStatics *iface )
+{
+    return CONTAINING_RECORD( iface, struct inertia_resting_value_factory,
+                              IInteractionTrackerInertiaRestingValueStatics_iface );
+}
+
+static HRESULT WINAPI inertia_resting_value_factory_QueryInterface( IActivationFactory *iface,
+        REFIID iid, void **out )
+{
+    struct inertia_resting_value_factory *impl =
+        resting_value_factory_from_IActivationFactory( iface );
+
+    if (!out) return E_POINTER;
+    if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
+        IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_IActivationFactory ))
+        *out = &impl->IActivationFactory_iface;
+    else if (IsEqualGUID( iid, &IID_IInteractionTrackerInertiaRestingValueStatics ))
+        *out = &impl->IInteractionTrackerInertiaRestingValueStatics_iface;
+    else
+    {
+        *out = NULL;
+        return E_NOINTERFACE;
+    }
+    IUnknown_AddRef( (IUnknown *)*out );
+    return S_OK;
+}
+
+static ULONG WINAPI inertia_resting_value_factory_AddRef( IActivationFactory *iface )
+{
+    return InterlockedIncrement( &resting_value_factory_from_IActivationFactory( iface )->ref );
+}
+
+static ULONG WINAPI inertia_resting_value_factory_Release( IActivationFactory *iface )
+{
+    return InterlockedDecrement( &resting_value_factory_from_IActivationFactory( iface )->ref );
+}
+
+static HRESULT WINAPI inertia_resting_value_factory_GetIids( IActivationFactory *iface,
+        ULONG *count, IID **iids )
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI inertia_resting_value_factory_GetRuntimeClassName(
+        IActivationFactory *iface, HSTRING *name )
+{
+    return inertia_resting_value_get_class_name( name );
+}
+
+static HRESULT WINAPI inertia_resting_value_factory_GetTrustLevel(
+        IActivationFactory *iface, TrustLevel *level )
+{
+    return inertia_resting_value_get_trust_level( level );
+}
+
+static HRESULT WINAPI inertia_resting_value_factory_ActivateInstance(
+        IActivationFactory *iface, IInspectable **instance )
+{
+    if (!instance) return E_POINTER;
+    *instance = NULL;
+    return E_NOTIMPL;
+}
+
+static const IActivationFactoryVtbl inertia_resting_value_factory_vtbl =
+{
+    inertia_resting_value_factory_QueryInterface,
+    inertia_resting_value_factory_AddRef,
+    inertia_resting_value_factory_Release,
+    inertia_resting_value_factory_GetIids,
+    inertia_resting_value_factory_GetRuntimeClassName,
+    inertia_resting_value_factory_GetTrustLevel,
+    inertia_resting_value_factory_ActivateInstance,
+};
+
+static HRESULT WINAPI inertia_resting_value_statics_QueryInterface(
+        IInteractionTrackerInertiaRestingValueStatics *iface, REFIID iid, void **out )
+{
+    struct inertia_resting_value_factory *impl = resting_value_factory_from_statics( iface );
+    return IActivationFactory_QueryInterface( &impl->IActivationFactory_iface, iid, out );
+}
+
+static ULONG WINAPI inertia_resting_value_statics_AddRef(
+        IInteractionTrackerInertiaRestingValueStatics *iface )
+{
+    struct inertia_resting_value_factory *impl = resting_value_factory_from_statics( iface );
+    return IActivationFactory_AddRef( &impl->IActivationFactory_iface );
+}
+
+static ULONG WINAPI inertia_resting_value_statics_Release(
+        IInteractionTrackerInertiaRestingValueStatics *iface )
+{
+    struct inertia_resting_value_factory *impl = resting_value_factory_from_statics( iface );
+    return IActivationFactory_Release( &impl->IActivationFactory_iface );
+}
+
+static HRESULT WINAPI inertia_resting_value_statics_GetIids(
+        IInteractionTrackerInertiaRestingValueStatics *iface, ULONG *count, IID **iids )
+{
+    struct inertia_resting_value_factory *impl = resting_value_factory_from_statics( iface );
+    return IActivationFactory_GetIids( &impl->IActivationFactory_iface, count, iids );
+}
+
+static HRESULT WINAPI inertia_resting_value_statics_GetRuntimeClassName(
+        IInteractionTrackerInertiaRestingValueStatics *iface, HSTRING *name )
+{
+    struct inertia_resting_value_factory *impl = resting_value_factory_from_statics( iface );
+    return IActivationFactory_GetRuntimeClassName( &impl->IActivationFactory_iface, name );
+}
+
+static HRESULT WINAPI inertia_resting_value_statics_GetTrustLevel(
+        IInteractionTrackerInertiaRestingValueStatics *iface, TrustLevel *level )
+{
+    struct inertia_resting_value_factory *impl = resting_value_factory_from_statics( iface );
+    return IActivationFactory_GetTrustLevel( &impl->IActivationFactory_iface, level );
+}
+
+static HRESULT WINAPI inertia_resting_value_statics_Create(
+        IInteractionTrackerInertiaRestingValueStatics *iface, ICompositor *compositor,
+        IInteractionTrackerInertiaRestingValue **result )
+{
+    TRACE( "iface %p, compositor %p, result %p.\n", iface, compositor, result );
+    return inertia_resting_value_create( compositor, result );
+}
+
+static const IInteractionTrackerInertiaRestingValueStaticsVtbl inertia_resting_value_statics_vtbl =
+{
+    inertia_resting_value_statics_QueryInterface,
+    inertia_resting_value_statics_AddRef,
+    inertia_resting_value_statics_Release,
+    inertia_resting_value_statics_GetIids,
+    inertia_resting_value_statics_GetRuntimeClassName,
+    inertia_resting_value_statics_GetTrustLevel,
+    inertia_resting_value_statics_Create,
+};
+
+static struct inertia_resting_value_factory inertia_resting_value_factory_impl =
+{
+    {&inertia_resting_value_factory_vtbl},
+    {&inertia_resting_value_statics_vtbl},
+    1,
+};
+
+IActivationFactory *inertia_resting_value_factory =
+    &inertia_resting_value_factory_impl.IActivationFactory_iface;
+
 static CRITICAL_SECTION tracker_binding_cs;
 static CRITICAL_SECTION_DEBUG tracker_binding_cs_debug =
 {
@@ -2567,6 +3089,7 @@ static HRESULT interaction_tracker_update_position( struct interaction_tracker *
     BOOL was_active, closed;
     HRESULT hr;
 
+    TRACE( "impl %p, value {%f, %f, %f}, relative %d, clamp %d.\n", impl, value.X, value.Y, value.Z, relative, clamp );
     EnterCriticalSection( &impl->animation_cs );
     closed = impl->notifications_closed;
     LeaveCriticalSection( &impl->animation_cs );
@@ -2637,9 +3160,23 @@ static HRESULT WINAPI interaction_tracker_TryUpdatePositionWithAnimation( IInter
         IInspectable *animation, INT32 *request_id )
 {
     struct interaction_tracker *impl = impl_from_IInteractionTracker( iface );
+    ICompositionAnimation *composition_animation;
+    struct Vector3 value;
     HRESULT hr = S_OK;
 
+    TRACE( "iface %p, animation %p, request_id %p.\n", iface, animation, request_id );
     if (!request_id) return E_POINTER;
+    /* Like animations on visuals, this goes straight to the final key frame. */
+    if (animation && SUCCEEDED(IInspectable_QueryInterface( animation, &IID_ICompositionAnimation,
+            (void **)&composition_animation )))
+    {
+        hr = vector3_key_frame_animation_get_final_value( composition_animation, &value );
+        ICompositionAnimation_Release( composition_animation );
+        if (SUCCEEDED(hr))
+            return interaction_tracker_update_position( impl, value, FALSE, TRUE, request_id );
+        FIXME( "animation %p has no final value, hr %#lx.\n", animation, hr );
+        hr = S_OK;
+    }
     EnterCriticalSection( &impl->animation_cs );
     if (impl->notifications_closed) hr = RO_E_CLOSED;
     else *request_id = interaction_tracker_next_request_id( impl );
@@ -2696,9 +3233,22 @@ static HRESULT WINAPI interaction_tracker_TryUpdateScaleWithAnimation( IInteract
         IInspectable *animation, struct Vector3 center_point, INT32 *request_id )
 {
     struct interaction_tracker *impl = impl_from_IInteractionTracker( iface );
+    ICompositionAnimation *composition_animation;
     HRESULT hr = S_OK;
+    FLOAT value;
 
+    TRACE( "iface %p, animation %p, request_id %p.\n", iface, animation, request_id );
     if (!request_id) return E_POINTER;
+    if (animation && SUCCEEDED(IInspectable_QueryInterface( animation, &IID_ICompositionAnimation,
+            (void **)&composition_animation )))
+    {
+        hr = scalar_key_frame_animation_get_final_value( composition_animation, &value );
+        ICompositionAnimation_Release( composition_animation );
+        if (SUCCEEDED(hr))
+            return IInteractionTracker_TryUpdateScale( iface, value, center_point, request_id );
+        FIXME( "animation %p has no final value, hr %#lx.\n", animation, hr );
+        hr = S_OK;
+    }
     EnterCriticalSection( &impl->animation_cs );
     if (impl->notifications_closed) hr = RO_E_CLOSED;
     else *request_id = interaction_tracker_next_request_id( impl );

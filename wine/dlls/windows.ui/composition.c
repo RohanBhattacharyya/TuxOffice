@@ -2896,6 +2896,7 @@ static HRESULT color_brush_create( ICompositor *compositor, struct Color color,
 struct surface_brush
 {
     ICompositionSurfaceBrush ICompositionSurfaceBrush_iface;
+    ICompositionSurfaceBrush2 ICompositionSurfaceBrush2_iface;
     ICompositionSurfaceBrush3 ICompositionSurfaceBrush3_iface;
     ICompositionBrush ICompositionBrush_iface;
     ICompositionObject ICompositionObject_iface;
@@ -2908,6 +2909,13 @@ struct surface_brush
     FLOAT horizontal_alignment_ratio;
     FLOAT vertical_alignment_ratio;
     boolean snap_to_pixels;
+    /* ICompositionSurfaceBrush2: how the surface is placed inside the brush. */
+    struct Vector2 anchor_point;
+    struct Vector2 center_point;
+    struct Vector2 offset;
+    FLOAT rotation_angle;
+    struct Vector2 scale;
+    struct Matrix3x2 transform_matrix;
     LONG ref;
     LONG closed;
     CRITICAL_SECTION lock;
@@ -2934,6 +2942,12 @@ static void surface_brush_bind( ICompositionSurfaceBrush *iface, IDCompositionVi
         if (visual) IDCompositionVisual_SetContent( visual, (IUnknown *)impl->surface );
     }
     LeaveCriticalSection( &impl->lock );
+}
+
+static inline struct surface_brush *surface_brush_from_ICompositionSurfaceBrush2(
+        ICompositionSurfaceBrush2 *iface )
+{
+    return CONTAINING_RECORD( iface, struct surface_brush, ICompositionSurfaceBrush2_iface );
 }
 
 static inline struct surface_brush *surface_brush_from_ICompositionSurfaceBrush3(
@@ -2964,6 +2978,12 @@ static BOOL surface_brush_snapshot( struct surface_brush *brush, struct surface_
         snapshot->horizontal_alignment_ratio = brush->horizontal_alignment_ratio;
         snapshot->vertical_alignment_ratio = brush->vertical_alignment_ratio;
         snapshot->snap_to_pixels = brush->snap_to_pixels;
+        snapshot->anchor_point = brush->anchor_point;
+        snapshot->center_point = brush->center_point;
+        snapshot->offset = brush->offset;
+        snapshot->rotation_angle = brush->rotation_angle;
+        snapshot->scale = brush->scale;
+        snapshot->transform_matrix = brush->transform_matrix;
     }
     LeaveCriticalSection( &brush->lock );
     return snapshot->surface != NULL;
@@ -2978,6 +2998,8 @@ static HRESULT surface_brush_query_interface( struct surface_brush *impl, REFIID
         *out = &impl->ICompositionSurfaceBrush_iface;
     else if (IsEqualGUID( iid, &IID_ICompositionBrush ))
         *out = &impl->ICompositionBrush_iface;
+    else if (IsEqualGUID( iid, &IID_ICompositionSurfaceBrush2 ))
+        *out = &impl->ICompositionSurfaceBrush2_iface;
     else if (IsEqualGUID( iid, &IID_ICompositionSurfaceBrush3 ))
         *out = &impl->ICompositionSurfaceBrush3_iface;
     else if (IsEqualGUID( iid, &IID_ICompositionObject ))
@@ -3056,6 +3078,8 @@ static ULONG surface_brush_release( struct surface_brush *impl )
 SURFACE_BRUSH_FORWARD( surface_brush, ICompositionSurfaceBrush, impl_from_ICompositionSurfaceBrush )
 SURFACE_BRUSH_FORWARD( surface_composition_brush, ICompositionBrush,
                        surface_brush_from_ICompositionBrush )
+SURFACE_BRUSH_FORWARD( surface_brush2, ICompositionSurfaceBrush2,
+                       surface_brush_from_ICompositionSurfaceBrush2 )
 SURFACE_BRUSH_FORWARD( surface_brush3, ICompositionSurfaceBrush3,
                        surface_brush_from_ICompositionSurfaceBrush3 )
 
@@ -3161,6 +3185,72 @@ static const ICompositionBrushVtbl surface_composition_brush_vtbl =
     surface_composition_brush_GetIids,
     surface_composition_brush_GetRuntimeClassName,
     surface_composition_brush_GetTrustLevel,
+};
+
+#define SURFACE_BRUSH2_PROPERTY(name, type, field) \
+    static HRESULT WINAPI surface_brush2_get_##name( ICompositionSurfaceBrush2 *iface, type *value ) \
+    { \
+        struct surface_brush *impl = surface_brush_from_ICompositionSurfaceBrush2( iface ); \
+        HRESULT hr = S_OK; \
+        if (!value) return E_POINTER; \
+        EnterCriticalSection( &impl->lock ); \
+        if (impl->closed) hr = RO_E_CLOSED; \
+        else *value = impl->field; \
+        LeaveCriticalSection( &impl->lock ); \
+        return hr; \
+    } \
+    static HRESULT WINAPI surface_brush2_put_##name( ICompositionSurfaceBrush2 *iface, type value ) \
+    { \
+        struct surface_brush *impl = surface_brush_from_ICompositionSurfaceBrush2( iface ); \
+        HRESULT hr = S_OK; \
+        EnterCriticalSection( &impl->lock ); \
+        if (impl->closed) hr = RO_E_CLOSED; \
+        else impl->field = value; \
+        LeaveCriticalSection( &impl->lock ); \
+        return hr; \
+    }
+
+SURFACE_BRUSH2_PROPERTY( AnchorPoint, struct Vector2, anchor_point )
+SURFACE_BRUSH2_PROPERTY( CenterPoint, struct Vector2, center_point )
+SURFACE_BRUSH2_PROPERTY( Offset, struct Vector2, offset )
+SURFACE_BRUSH2_PROPERTY( RotationAngle, FLOAT, rotation_angle )
+SURFACE_BRUSH2_PROPERTY( Scale, struct Vector2, scale )
+SURFACE_BRUSH2_PROPERTY( TransformMatrix, struct Matrix3x2, transform_matrix )
+
+static HRESULT WINAPI surface_brush2_get_RotationAngleInDegrees( ICompositionSurfaceBrush2 *iface, FLOAT *value )
+{
+    HRESULT hr = surface_brush2_get_RotationAngle( iface, value );
+    if (SUCCEEDED(hr)) *value = *value * 180.0f / 3.14159265f;
+    return hr;
+}
+
+static HRESULT WINAPI surface_brush2_put_RotationAngleInDegrees( ICompositionSurfaceBrush2 *iface, FLOAT value )
+{
+    return surface_brush2_put_RotationAngle( iface, value * 3.14159265f / 180.0f );
+}
+
+static const ICompositionSurfaceBrush2Vtbl surface_brush2_vtbl =
+{
+    surface_brush2_QueryInterface,
+    surface_brush2_AddRef,
+    surface_brush2_Release,
+    surface_brush2_GetIids,
+    surface_brush2_GetRuntimeClassName,
+    surface_brush2_GetTrustLevel,
+    surface_brush2_get_AnchorPoint,
+    surface_brush2_put_AnchorPoint,
+    surface_brush2_get_CenterPoint,
+    surface_brush2_put_CenterPoint,
+    surface_brush2_get_Offset,
+    surface_brush2_put_Offset,
+    surface_brush2_get_RotationAngle,
+    surface_brush2_put_RotationAngle,
+    surface_brush2_get_RotationAngleInDegrees,
+    surface_brush2_put_RotationAngleInDegrees,
+    surface_brush2_get_Scale,
+    surface_brush2_put_Scale,
+    surface_brush2_get_TransformMatrix,
+    surface_brush2_put_TransformMatrix,
 };
 
 static HRESULT WINAPI surface_brush3_get_SnapToPixels( ICompositionSurfaceBrush3 *iface,
@@ -3310,7 +3400,10 @@ static HRESULT surface_brush_create( ICompositor *compositor, ICompositionSurfac
     *result = NULL;
     if (!(impl = calloc( 1, sizeof(*impl) ))) return E_OUTOFMEMORY;
     impl->ICompositionSurfaceBrush_iface.lpVtbl = &surface_brush_vtbl;
+    impl->ICompositionSurfaceBrush2_iface.lpVtbl = &surface_brush2_vtbl;
     impl->ICompositionSurfaceBrush3_iface.lpVtbl = &surface_brush3_vtbl;
+    impl->scale.X = impl->scale.Y = 1.0f;
+    impl->transform_matrix.M11 = impl->transform_matrix.M22 = 1.0f;
     impl->ICompositionBrush_iface.lpVtbl = &surface_composition_brush_vtbl;
     impl->ICompositionObject_iface.lpVtbl = &surface_object_vtbl;
     impl->IClosable_iface.lpVtbl = &surface_closable_vtbl;
@@ -11309,9 +11402,61 @@ static struct composition_drawing_surface *drawing_surface_from_surface_brush(
     return drawing_surface_from_composition_surface( brush->surface );
 }
 
+static BOOL surface_brush_has_transform( const struct surface_brush *brush )
+{
+    const struct Matrix3x2 *m = &brush->transform_matrix;
+
+    return brush->anchor_point.X || brush->anchor_point.Y || brush->offset.X || brush->offset.Y ||
+            brush->rotation_angle || brush->scale.X != 1.0f || brush->scale.Y != 1.0f ||
+            m->M11 != 1.0f || m->M12 || m->M21 || m->M22 != 1.0f || m->M31 || m->M32;
+}
+
+static void matrix_multiply( D2D1_MATRIX_3X2_F *result, const D2D1_MATRIX_3X2_F *a, const D2D1_MATRIX_3X2_F *b )
+{
+    D2D1_MATRIX_3X2_F r;
+
+    r._11 = a->_11 * b->_11 + a->_12 * b->_21;
+    r._12 = a->_11 * b->_12 + a->_12 * b->_22;
+    r._21 = a->_21 * b->_11 + a->_22 * b->_21;
+    r._22 = a->_21 * b->_12 + a->_22 * b->_22;
+    r._31 = a->_31 * b->_11 + a->_32 * b->_21 + b->_31;
+    r._32 = a->_31 * b->_12 + a->_32 * b->_22 + b->_32;
+    *result = r;
+}
+
+/* The brush's own placement, in the space of its content: Windows applies the anchor,
+ * then scale and rotation around the centre point, the offset and the matrix. */
+static void surface_brush_transform( const struct surface_brush *brush, const D2D1_RECT_F *dest,
+        const D2D1_MATRIX_3X2_F *outer, D2D1_MATRIX_3X2_F *result )
+{
+    const FLOAT width = dest->right - dest->left, height = dest->bottom - dest->top;
+    const FLOAT c = cosf( brush->rotation_angle ), s = sinf( brush->rotation_angle );
+    const struct Matrix3x2 *m = &brush->transform_matrix;
+    D2D1_MATRIX_3X2_F step, total;
+
+    /* To content space, with the anchor point at the origin. */
+    total = (D2D1_MATRIX_3X2_F){1.0f, 0.0f, 0.0f, 1.0f, -dest->left - brush->anchor_point.X * width,
+            -dest->top - brush->anchor_point.Y * height};
+    step = (D2D1_MATRIX_3X2_F){1.0f, 0.0f, 0.0f, 1.0f, -brush->center_point.X, -brush->center_point.Y};
+    matrix_multiply( &total, &total, &step );
+    step = (D2D1_MATRIX_3X2_F){brush->scale.X * c, brush->scale.X * s, -brush->scale.Y * s, brush->scale.Y * c, 0.0f, 0.0f};
+    matrix_multiply( &total, &total, &step );
+    step = (D2D1_MATRIX_3X2_F){1.0f, 0.0f, 0.0f, 1.0f, brush->center_point.X + brush->offset.X,
+            brush->center_point.Y + brush->offset.Y};
+    matrix_multiply( &total, &total, &step );
+    step = (D2D1_MATRIX_3X2_F){m->M11, m->M12, m->M21, m->M22, m->M31, m->M32};
+    matrix_multiply( &total, &total, &step );
+    /* And back into the target. */
+    step = (D2D1_MATRIX_3X2_F){1.0f, 0.0f, 0.0f, 1.0f, dest->left, dest->top};
+    matrix_multiply( &total, &total, &step );
+    matrix_multiply( result, &total, outer );
+}
+
 static void draw_surface_brush_content( ID2D1DeviceContext *context, struct surface_brush *brush,
         const D2D1_RECT_F *bounds, FLOAT opacity )
 {
+    D2D1_MATRIX_3X2_F outer_transform, brush_transform;
+    BOOL transformed;
     struct composition_drawing_surface *surface = drawing_surface_from_surface_brush( brush );
     D2D1_INTERPOLATION_MODE interpolation;
     ID2D1Bitmap1 *bitmap;
@@ -11359,6 +11504,12 @@ static void draw_surface_brush_content( ID2D1DeviceContext *context, struct surf
     interpolation = brush->interpolation_mode == CompositionBitmapInterpolationMode_NearestNeighbor ?
             D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR : D2D1_INTERPOLATION_MODE_LINEAR;
     ID2D1DeviceContext_PushAxisAlignedClip( context, bounds, D2D1_ANTIALIAS_MODE_ALIASED );
+    if ((transformed = surface_brush_has_transform( brush )))
+    {
+        ID2D1DeviceContext_GetTransform( context, &outer_transform );
+        surface_brush_transform( brush, &dest_rect, &outer_transform, &brush_transform );
+        ID2D1DeviceContext_SetTransform( context, &brush_transform );
+    }
     if (surface->virtual)
     {
         scale_x = (dest_rect.right - dest_rect.left) / size.width;
@@ -11390,6 +11541,7 @@ static void draw_surface_brush_content( ID2D1DeviceContext *context, struct surf
     else
         ID2D1DeviceContext_DrawBitmap( context, (ID2D1Bitmap *)bitmap, &dest_rect,
                 opacity, interpolation, &source_rect, NULL );
+    if (transformed) ID2D1DeviceContext_SetTransform( context, &outer_transform );
     ID2D1DeviceContext_PopAxisAlignedClip( context );
 }
 
@@ -12430,6 +12582,12 @@ static void snapshot_brush( struct target_snapshot *snap, ICompositionBrush *bru
         }
         SNAPSHOT_FIELD( snap, copy.surface );
         SNAPSHOT_FIELD( snap, copy.interpolation_mode );
+        SNAPSHOT_FIELD( snap, copy.anchor_point );
+        SNAPSHOT_FIELD( snap, copy.center_point );
+        SNAPSHOT_FIELD( snap, copy.offset );
+        SNAPSHOT_FIELD( snap, copy.rotation_angle );
+        SNAPSHOT_FIELD( snap, copy.scale );
+        SNAPSHOT_FIELD( snap, copy.transform_matrix );
         SNAPSHOT_FIELD( snap, copy.stretch );
         SNAPSHOT_FIELD( snap, copy.horizontal_alignment_ratio );
         SNAPSHOT_FIELD( snap, copy.vertical_alignment_ratio );

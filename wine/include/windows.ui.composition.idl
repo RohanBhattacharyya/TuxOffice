@@ -740,6 +740,29 @@ namespace Windows.UI.Composition {
     }
 
     [
+        contract(Windows.Foundation.UniversalApiContract, 3.0),
+        exclusiveto(Windows.UI.Composition.CompositionSurfaceBrush),
+        uuid(d27174d5-64f5-4692-9dc7-71b61d7e5880)
+    ]
+    interface ICompositionSurfaceBrush2 : IInspectable
+    {
+        [propget] HRESULT AnchorPoint([out, retval] Windows.Foundation.Numerics.Vector2 *value);
+        [propput] HRESULT AnchorPoint([in] Windows.Foundation.Numerics.Vector2 value);
+        [propget] HRESULT CenterPoint([out, retval] Windows.Foundation.Numerics.Vector2 *value);
+        [propput] HRESULT CenterPoint([in] Windows.Foundation.Numerics.Vector2 value);
+        [propget] HRESULT Offset([out, retval] Windows.Foundation.Numerics.Vector2 *value);
+        [propput] HRESULT Offset([in] Windows.Foundation.Numerics.Vector2 value);
+        [propget] HRESULT RotationAngle([out, retval] FLOAT *value);
+        [propput] HRESULT RotationAngle([in] FLOAT value);
+        [propget] HRESULT RotationAngleInDegrees([out, retval] FLOAT *value);
+        [propput] HRESULT RotationAngleInDegrees([in] FLOAT value);
+        [propget] HRESULT Scale([out, retval] Windows.Foundation.Numerics.Vector2 *value);
+        [propput] HRESULT Scale([in] Windows.Foundation.Numerics.Vector2 value);
+        [propget] HRESULT TransformMatrix([out, retval] Windows.Foundation.Numerics.Matrix3x2 *value);
+        [propput] HRESULT TransformMatrix([in] Windows.Foundation.Numerics.Matrix3x2 value);
+    }
+
+    [
         contract(Windows.Foundation.UniversalApiContract, 8.0),
         exclusiveto(Windows.UI.Composition.CompositionSurfaceBrush),
         uuid(550bb289-1fe0-42e5-8195-1eefa87ff08e)

@@ -58,5 +58,6 @@ namespace Windows.UI.Composition.Core {
 namespace Windows.UI.Composition.Interactions {
     runtimeclass CompositionConditionalValue;
     runtimeclass InteractionTracker;
+    runtimeclass InteractionTrackerInertiaRestingValue;
     runtimeclass VisualInteractionSource;
 }
