@@ -71,6 +71,7 @@ static void CB_Paint( HWND hwnd, HDC hDC, UINT action );
 static void GB_Paint( HWND hwnd, HDC hDC, UINT action );
 static void UB_Paint( HWND hwnd, HDC hDC, UINT action );
 static void OB_Paint( HWND hwnd, HDC hDC, UINT action );
+static void PX_Paint( HWND hwnd, HDC hDC, UINT action );
 static void BUTTON_CheckAutoRadioButton( HWND hwnd );
 
 #define MAX_BTN_TYPE  16
@@ -105,7 +106,7 @@ static const pfPaint btnPaintFunc[MAX_BTN_TYPE] =
     GB_Paint,    /* BS_GROUPBOX */
     UB_Paint,    /* BS_USERBUTTON */
     CB_Paint,    /* BS_AUTORADIOBUTTON */
-    NULL,        /* BS_PUSHBOX */
+    PX_Paint,    /* BS_PUSHBOX */
     OB_Paint     /* BS_OWNERDRAW */
 };
 
@@ -799,6 +800,55 @@ draw_focus:
     SelectObject( hDC, hOldPen );
     SelectObject( hDC, hOldBrush );
     SetBkMode(hDC, oldBkMode);
+    SelectClipRgn( hDC, hrgn );
+    if (hrgn) DeleteObject( hrgn );
+}
+
+/**********************************************************************
+ *       Push Box Functions
+ *
+ * A push button with no face or frame: only its text appears.
+ */
+static void PX_Paint( HWND hwnd, HDC hDC, UINT action )
+{
+    RECT rc, r;
+    UINT dtFlags;
+    INT oldBkMode;
+    COLORREF oldTxtColor;
+    HFONT hFont;
+    LONG state = get_button_state( hwnd );
+    HWND parent;
+    HRGN hrgn;
+
+    GetClientRect( hwnd, &rc );
+
+    if ((hFont = get_button_font( hwnd ))) SelectObject( hDC, hFont );
+    parent = GetParent( hwnd );
+    if (!parent) parent = hwnd;
+    SendMessageW( parent, WM_CTLCOLORBTN, (WPARAM)hDC, (LPARAM)hwnd );
+
+    hrgn = set_control_clipping( hDC, &rc );
+    oldBkMode = SetBkMode( hDC, TRANSPARENT );
+
+    if (action != ODA_FOCUS)
+    {
+        r = rc;
+        dtFlags = BUTTON_CalcLabelRect( hwnd, hDC, &r );
+        if (dtFlags != (UINT)-1L)
+        {
+            oldTxtColor = SetTextColor( hDC, GetSysColor(COLOR_BTNTEXT) );
+            BUTTON_DrawLabel( hwnd, hDC, dtFlags, &r );
+            SetTextColor( hDC, oldTxtColor );
+        }
+    }
+
+    if (action == ODA_FOCUS || (state & BST_FOCUS))
+    {
+        InflateRect( &rc, -2, -2 );
+        DrawFocusRect( hDC, &rc );
+    }
+
+    SetBkMode( hDC, oldBkMode );
     SelectClipRgn( hDC, hrgn );
     if (hrgn) DeleteObject( hrgn );
 }
