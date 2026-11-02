@@ -997,7 +997,15 @@ HRESULT WINAPI VariantChangeTypeEx(VARIANTARG* pvargDest, const VARIANTARG* pvar
 
         if (SUCCEEDED(res))
         {
-          res = VariantCopyInd(&vSrcDeref, pvargSrc);
+          /* Converting a string only reads it up to its terminator. Callers such
+           * as Access's Excel driver pass plain strings with no length prefix,
+           * so copying one would trust whatever precedes it in memory. */
+          BOOL borrowed = V_VT(pvargSrc) == VT_BSTR && vt != VT_BSTR && !(vt & VT_ARRAY);
+
+          if (borrowed)
+            vSrcDeref = *pvargSrc;
+          else
+            res = VariantCopyInd(&vSrcDeref, pvargSrc);
           if (SUCCEEDED(res))
           {
             if (V_ISARRAY(&vSrcDeref) || (vt & VT_ARRAY))
@@ -1010,7 +1018,7 @@ HRESULT WINAPI VariantChangeTypeEx(VARIANTARG* pvargDest, const VARIANTARG* pvar
                 res = VariantCopy(pvargDest, &vTmp);
             }
             VariantClear(&vTmp);
-            VariantClear(&vSrcDeref);
+            if (!borrowed) VariantClear(&vSrcDeref);
           }
         }
       }
