@@ -577,9 +577,16 @@ static HRESULT create_surrogate_server(REFCLSID rclsid, HANDLE *process)
     size = (MAX_PATH + 1) * sizeof(WCHAR);
     ret = RegQueryValueExW(key, L"DllSurrogate", NULL, NULL, (LPBYTE)command, &size);
     RegCloseKey(key);
-    if (ret || !size || !command[0])
+    /* An AppID without the value is not a surrogate: such a class can only be reached while
+     * a running server has registered it, as Office's chart data classes in Excel are. */
+    if (ret)
     {
-        TRACE("No value for DllSurrogate key\n");
+        TRACE("No DllSurrogate value.\n");
+        return REGDB_E_CLASSNOTREG;
+    }
+    if (!size || !command[0])
+    {
+        TRACE("Empty DllSurrogate value: using the default surrogate.\n");
 
         if ((sizeof(void *) == 8 || is_wow64) && opposite == KEY_WOW64_32KEY)
             GetSystemWow64DirectoryW(command, MAX_PATH - ARRAY_SIZE(L"\\dllhost.exe"));
