@@ -58,17 +58,18 @@ at 1.25× scaling. Tested with Office 16.0.20527 (Current Channel, x64):
 
 | App | State |
 | --- | --- |
-| Word, Excel, PowerPoint | Open, edit, save, print to PDF, charts, slide shows, spelling |
-| OneNote | Notebooks open, text input works |
-| Outlook | Starts and reaches account setup |
-| Access | Opens to its start page |
-| Publisher | Installed; sign-in licensing is not working yet |
+| Word, Excel, PowerPoint | Open, edit, save, print to PDF, charts, slide shows, spelling, VBA macros |
+| Outlook | Mail, compose, calendar in every view, contacts, tasks and folders on a local data file; a real account is untested |
+| OneNote | Local notebooks, pages, search, PDF export |
+| Access | Databases, tables, queries, forms, reports, VBA, ADO, export; XML export fails, and closing a database after an Excel import can rarely abort |
+| Publisher | Create, edit, save, PDF export; shows "Unlicensed Product", likely because Microsoft retired it in October 2026 |
 
 Known limitations, measurements and the full change history are in
 [`docs/STATUS.md`](docs/STATUS.md). In short: dragging *out of* Office into Linux
-apps is not implemented, Office's embedded sign-in page has minor rendering
-glitches, and there is no matched Windows baseline, so performance parity with
-Windows is not claimed.
+apps is not implemented, sign-in with personal Microsoft accounts is untested, tray icons
+are not shown, Office's embedded sign-in page has minor rendering glitches, and
+there is no matched Windows baseline, so performance parity with Windows is not
+claimed.
 
 ## Install
 
@@ -163,7 +164,7 @@ GnuTLS, libsecret, …) and the `libsystemd` headers.
 | `fonts status\|office\|cloud\|import PATH\|segoe` | Inspect and install the fonts Office expects |
 | `graphics auto\|builtin\|dxvk` | Choose the Direct3D backend for Office |
 | `ui` | Re-apply Windows UI fonts, colours and window effects |
-| `repair` | Re-register Office's chart proxies and Windows Installer components |
+| `repair` | Re-register Office's chart proxies, Windows Installer components and virtual registry |
 | `doctor` | Check the runner, environment, kernel, Vulkan and installed apps |
 | `cmd [SCRIPT [ARGS…]]` | Open a Windows command prompt in the Office environment, or run a `.bat`/`.cmd` script in it |
 | `wine ARGS…` | Run a command in the Office environment (`winecfg`, `regedit`, …) |

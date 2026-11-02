@@ -3,7 +3,7 @@
 Office build tested: 16.0.20527.20088, x64. Wine source is in `wine/` (see
 [`runner/README.md`](../runner/README.md)); `runner/build.sh` builds the
 overlay runner. This log runs from 25 October 2026; newer entries follow the
-summary below.
+summary below, newest first.
 
 The rebuilt runner and bundled DXVK are installed and selected in the regular
 Office prefix. Prefix registration completed, all six installed graphics DLLs
@@ -94,7 +94,168 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   apply the repair; it is also installed in the regular prefix.
 - Removed tracked `wine/autom4te.cache` output and ignored that directory.
 
+## 2 November: the rest of the suite (Outlook, OneNote, Access, Publisher)
+
+Tested in the isolated session on a clean copy of the prefix, with a real
+sign-in (device code, tokens in `tests/memory-secret-service.py`, memory only).
+Outlook and OneNote ran with no network at all (`unshare --net`), on a local
+data file and a local notebook, so no real mailbox or notebook was touched.
+
+### What was wrong
+
+- **Office's virtual registry was empty, in every app.** Click-to-Run merges
+  per-package hives (`root\vreg\*.vreg.dat`) into `VirtualRegistry.dat`, which
+  App-V overlays on the registry of Office's processes. Its own database records
+  these as up to 2 MB each; under Wine all of them end up as 8 KB hives holding
+  only `ROOT\REGISTRY`, so about 27,000 keys were missing. The merge reports
+  success. Symptoms included VBA never loading (`Vbe71DllPath`). `lib/c2rvreg.py`
+  reads the originals from the payload through Click-to-Run's database, checks
+  each SHA-256, parses the hive format and imports the result where App-V reads
+  it. Setup, install and `repair` do this; existing installs get it on their next
+  start (`update_prefix`). VBA macros now run in Word, Excel and Access, which
+  they did not before. Why the merge empties the hives is still not known.
+- **Explorer died during about 1 in 3 starts of any app** (7 of 21; 0 of 20 after
+  the fix). wineserver compared the number of desktop users with the manager's
+  thread count, which also counts threads without a desktop, so it could close
+  the desktop under running apps. Every later process then got its own desktop
+  window and could not see the others' windows. It now checks whether any other
+  process is on the desktop. Polling with a Wine process hides the race.
+- **Access crashed opening any database:** Windows' OID table names the CNG
+  algorithm of each hash and Wine's did not, so Access built a string from NULL.
+  crypt32 now has them for hash, public key and signature OIDs (and SHA-512
+  ECDSA). Conformance: `oid` 175 tests, 0 failures on both runners.
+- **Outlook crashed closing a message and opening the Calendar:** Office treats a
+  missing `ICompositionSurfaceBrush2` and `InteractionTrackerInertiaRestingValue`
+  as fatal. Both are implemented, the brush with its transform. Resting values are
+  stored, but inertia modifiers are not applied yet: scrolling works without snapping.
+- **Outlook's Month view was blank.** Its week rows sit near y=262,000 in a large
+  scrolling layer, and Outlook moves there with `TryUpdatePositionWithAnimation`,
+  which Wine accepted and ignored. Animated tracker updates now go to the final
+  key frame, as animations on visuals already do.
+- **Access's one-click Form and Report crashed.** Three causes in `oleaut32`: a
+  coclass's default dual interface must resolve to its dispatch view (Access
+  computes a vtable offset from it, which overflowed, error 0x717D);
+  `SetFuncCustData` and its siblings, `DeleteTypeInfo` and the member deletions
+  were stubs (error 0x717E); custom data rejected small integer and boolean types.
+- **ADO on Access's own connection failed.** `WrapDSOandSession` was a stub, and
+  `Recordset.Open` refused VBA's by-reference variants. Queries now get their cursor
+  and lock properties, and `RecordCount` counts through `IRowsetLocate`, because
+  Access's provider reports no count of its own.
+- **Virtual registry paths ignored App-V's folder merge.** A path that only the
+  package supplies, such as `MSCDM.DLL`, now names its place in `root\VFS`.
+- **Word, Excel and PowerPoint could hang for good on exit.** When the server frees
+  a shared object it zeroes its id. `get_shared_class` and four similar functions
+  read "id 0" as "not locked yet" and retried forever, here with `user_lock` held,
+  so the thread that would unlink a class being destroyed queued behind the spinner
+  and every other thread followed. `get_shared_input` already guarded this. Found
+  with gdb attached from outside a user namespace, because `winedbg` injects a thread
+  that needs the stuck loader lock. Permanent hangs: 4 of 60 suite runs before, 0 of
+  84 after.
+- **Excel import in Access could fault or misread values.** `ACEEXCL.DLL` builds a
+  `VT_BSTR` variant from a plain string with no length prefix and converts it to
+  `VT_R8`. Wine's `VariantChangeTypeEx` copied the source first, trusting the bytes
+  before the string as a length (607 MB in the case captured). Conversions from
+  strings now borrow the source. `ERROR_NOACCESS` during import: 8 of 119 runs with the
+  failure type recorded before, 0 of 108 after.
+- **OneNote's offline first-run dialog showed no way forward.** "Continue Anyway" is
+  a `BS_PUSHBOX`, a button with no face or frame, only text. Wine's button classes had
+  no painter for that type and drew nothing. Both `user32` and `comctl32_v6` now draw
+  it. Checked by screenshot and `BM_CLICK`; a physical pointer click was not tested.
+- **A result nobody asked for leaked across processes.** `IDispatch_Invoke_Proxy`
+  never released its local result when the caller passed none, keeping server objects
+  alive. Calling `db.CreateQueryDef "Q", "..."` as a statement held the database open.
+- **Type libraries mixed pointer sizes.** 64-bit Office ships 32-bit-syskind
+  libraries such as MSACC.OLB. Wine resolved their imports through the `win32`
+  key, loading 32-bit stdole2 into 64-bit processes, and scaled `oVft` but not
+  `cbSizeVft`. Base interfaces reported 28-byte vtables.
+- **COM started `dllhost` for any class with an AppID,** even without a
+  `DllSurrogate` value. With the real registry in place this made PowerPoint's
+  chart insertion fail; such classes now report `REGDB_E_CLASSNOTREG`.
+- **A stray box floated over Outlook and OneNote:** Wine's standalone tray window.
+  It is hidden (`ShowSystray=0`). Tray icons are therefore not shown at all.
+  `winemenubuilder` is disabled so Office cannot add Wine entries to the
+  application menu.
+
+### Results on this build
+
+| Test | Result |
+| --- | --- |
+| Office suite (Word, Excel, PowerPoint), 24 runs | 18 clean; the other 6 are the Excel crash below, with all checks passing |
+| VBA macro in Excel and Word | runs and returns the right value |
+| Outlook object model (`tests/functional/outlook.vbs`) | 27 of 27 |
+| OneNote API (`tests/onenote-api.c`) | 9 of 10; `FindPages` fails, though search in the app finds and highlights text |
+| Publisher object model | 17 of 17; the client then hangs, see below |
+| Access object model (`tests/functional/access.vbs`) | 41 of 43; XML export and compact after the full run fail, see below |
+| Access Create: Form, Report, Blank Form, Blank Report, Form Design, Report Design, Table, Query Design, Macro, Module | all open |
+| Outlook Calendar: Week, Month with scrolling, Schedule View | draw correctly |
+| Start to a responsive window, warm, isolated session | 3.4 s for each app tried; 3.7-4.9 s before |
+
+Not run: Wine's `oleaut32` conformance tests (they need generated test libraries
+that the overlay build disables). No Windows baseline exists, so performance
+parity with Windows remains unmeasured.
+
+### Still open
+
+- **Access:**
+  - `ExportXML` fails (0x7B2C). Access reaches it through `MSCDM.DLL`, which needs
+    Windows's MSDataShape provider and asks it for a private, undocumented
+    interface, `{e6b53f52-c260-11d0-ad71-00c04fc29863}`. Wine has neither. Other
+    uses of `MSCDM.DLL` probably fail the same way; only `ExportXML` was tested.
+  - Intermittent abort at `CloseCurrentDatabase` after a `TransferSpreadsheet` import:
+    3 of the last 128 scripted runs failed, 1 of them seen as this abort and 2 with the
+    failure type not recorded. A lookup in a global registry used from 446 call sites
+    (`MSACCESS.EXE+0x36e0`) finds no entry, Office asserts with tag `0x30303030`, and
+    Access terminates. The cause is not known. Not tried in the UI.
+  - `DBEngine.CompactDatabase` reports the file in use once `CurrentProject.Connection`
+    has been used in that session, even after closing the connection and the database
+    and waiting 20 s. `RunCommand acCmdCompactDatabase` reports no error either way, but
+    the file did not shrink, so it is not shown to work. The hold predates the ADO
+    wrapper working and survives replacing the thread's error object, so it comes from
+    the data source Access creates. Whether Windows behaves the same is unknown.
+  - Split Form, Multiple Items and Labels have not been opened: they are in menus
+    the test helper did not open.
+- **Outlook:** one intermittent abort on switching modules, not reproduced in 8
+  more switches. Scripted access shows security prompts because no antivirus is
+  reported. A real account has not been tried, by choice.
+- **Sign-in:** the code for personal accounts (`login.live.com`) is written but has
+  never run end to end: it needs a personal account. The embedded page runs on
+  Gecko 2.47 and draws its placeholder twice. Installing WebView2 (works, 69 s) did
+  not change this page, so setup does not install it.
+- **Publisher** titles itself "Unlicensed Product" and asks to sign in although
+  Word is licensed for the same account. The cached licence is the same for both
+  (`O365ProPlusRetail`, `Provisioned`), Publisher does not reach `sppc` for this, and
+  no retirement marker was found in `MSPUB.EXE`, the cached rules or the registry, so
+  the decision is made inside Office or by its service. Microsoft's support pages say Microsoft
+  365 subscribers lose Publisher after October 2026, which fits, though nothing
+  here proves it is the cause. It still created, edited and saved in the tests. It
+  is not worked around. After `Quit` by automation `MSPUB.EXE` never exits: its main
+  thread waits on a lock while a worker sits in an infinite wait inside `mso98`, and
+  the client waits for both. Closing its window exits in about 5 s.
+- **OneNote:** the offline first-run dialog's "Continue Anyway" button exists and
+  works when activated, but did not appear in one screenshot; not checked further.
+  `FindPages` returns `hrInvalidQuery` (0x80042019) after failing to create the
+  unregistered class `{9e175b8b-f52a-11d8-b9a5-505054503030}`. That looks like Windows
+  Search's provider, but nothing here confirms the name. Search in the app works.
+  Killing OneNote can make its next start show "We couldn't start OneNote", and
+  `tests/functional/run.py` ends with a kill, so it may need "Start Normally" first.
+- **Word, Excel and PowerPoint:** `Quit` left a process running past 15 s in 2 of 60
+  runs before the hang fix and 0 of 24 after, with no lock waits logged. Whether the
+  fix cured it is not established.
+- Bulk cross-process COM is slow: about 2.5 ms per call (14,000 calls in 35 s).
+  In-process VBA is not affected.
+- Wine's VBScript releases temporaries mid-expression, which invalidates chains
+  like `db.OpenRecordset(q).Fields(0).Value`. Office's VBA does not use it.
+
 ## Open: Excel crash after an embedded chart's workbook closes
+
+**2 November:** now the most frequent failure: 21 of 174 scripted suite runs (12%).
+Whether the day's fixes changed the rate was not measured. The chart edit through the
+desktop UI (`tests/embedded-chart-ui.py`), as a person does it, crashed in 0 of 24 runs,
+though with a 12% rate that sample could still miss it about 5% of the time.
+
+Excel is running a deferred work item (flag at `+0x128`) from its main message loop
+after `[context+0x130]+0x3e0` has been cleared, with no Wine frames in the chain. There
+is no Windows trace to compare with, so what shifts the order is still unknown.
 
 PowerPoint's functional step (insert a chart, open its data in Excel's
 chart data window, edit a cell, `Workbook.Close`) crashed Excel in 1 of 15
