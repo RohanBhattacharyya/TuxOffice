@@ -1088,6 +1088,7 @@ typedef struct tagITypeLibImpl
     LCID lcid;
     SYSKIND syskind;
     int ptr_size;
+    BOOL resized_vtables; /* cbSizeVft was converted from the library's pointer size */
     WORD ver_major;
     WORD ver_minor;
     WORD libflags;
@@ -1107,6 +1108,8 @@ typedef struct tagITypeLibImpl
     DWORD dwHelpContext;
     int TypeInfoCount;          /* nr of typeinfo's in librarry */
     struct tagITypeInfoImpl **typeinfos;
+    int deleted_typeinfo_count;
+    struct tagITypeInfoImpl **deleted_typeinfos; /* removed, but possibly still in use */
     struct list custdata_list;
     struct list implib_list;
     int ctTypeDesc;             /* number of items in type desc array */
@@ -1848,6 +1851,11 @@ static HRESULT TLB_set_custdata(struct list *custdata_list, TLBGuid *tlbguid, VA
     TLBCustData *cust_data;
 
     switch(V_VT(var)){
+    case VT_I1:
+    case VT_UI1:
+    case VT_BOOL:
+    case VT_I2:
+    case VT_UI2:
     case VT_I4:
     case VT_R4:
     case VT_UI4:
@@ -1857,6 +1865,8 @@ static HRESULT TLB_set_custdata(struct list *custdata_list, TLBGuid *tlbguid, VA
     case VT_BSTR:
         break;
     default:
+        if (V_VT(var) != VT_EMPTY)
+            FIXME("unsupported custom data type %#x\n", V_VT(var));
         return DISP_E_BADVARTYPE;
     }
 
@@ -2661,6 +2671,8 @@ static void TLB_fix_typeinfo_ptr_size(ITypeInfoImpl *info)
             info->typeattr.typekind == TKIND_COCLASS){
         info->typeattr.cbSizeInstance = sizeof(void*);
         info->typeattr.cbAlignment = sizeof(void*);
+        /* Function offsets are scaled when read; the vtable size must agree with them. */
+        info->typeattr.cbSizeVft = info->typeattr.cbSizeVft * sizeof(void*) / info->pTypeLib->ptr_size;
     }
 }
 
@@ -3653,6 +3665,7 @@ static ITypeLib2* ITypeLib2_Constructor_MSFT(LPVOID pLib, DWORD dwTLBLength)
     {
         for(i = 0; i < pTypeLibImpl->TypeInfoCount; ++i)
             TLB_fix_typeinfo_ptr_size(pTypeLibImpl->typeinfos[i]);
+        pTypeLibImpl->resized_vtables = TRUE;
     }
 
     TRACE("(%p)\n", pTypeLibImpl);
@@ -4870,6 +4883,11 @@ static ULONG WINAPI ITypeLib2_fnRelease( ITypeLib2 *iface)
           ITypeInfoImpl_Destroy(This->typeinfos[i]);
       }
       free(This->typeinfos);
+      for (i = 0; i < This->deleted_typeinfo_count; ++i){
+          free(This->deleted_typeinfos[i]->tdescAlias);
+          ITypeInfoImpl_Destroy(This->deleted_typeinfos[i]);
+      }
+      free(This->deleted_typeinfos);
       free(This);
     }
 
@@ -5683,6 +5701,20 @@ static void typeinfo_release_funcdesc(TLBFuncDesc *func)
     TLB_FreeCustData(&func->custdata_list);
 }
 
+static void typeinfo_release_vardesc(TLBVarDesc *var)
+{
+    if (var->vardesc_create)
+    {
+        TLB_FreeVarDesc(var->vardesc_create);
+    }
+    else if (var->vardesc.varkind == VAR_CONST)
+    {
+        VariantClear(var->vardesc.lpvarValue);
+        free(var->vardesc.lpvarValue);
+    }
+    TLB_FreeCustData(&var->custdata_list);
+}
+
 static void ITypeInfoImpl_Destroy(ITypeInfoImpl *This)
 {
     UINT i;
@@ -5697,14 +5729,7 @@ static void ITypeInfoImpl_Destroy(ITypeInfoImpl *This)
 
     for(i = 0; i < This->typeattr.cVars; ++i)
     {
-        TLBVarDesc *pVInfo = &This->vardescs[i];
-        if (pVInfo->vardesc_create) {
-            TLB_FreeVarDesc(pVInfo->vardesc_create);
-        } else if (pVInfo->vardesc.varkind == VAR_CONST) {
-            VariantClear(pVInfo->vardesc.lpvarValue);
-            free(pVInfo->vardesc.lpvarValue);
-        }
-        TLB_FreeCustData(&pVInfo->custdata_list);
+        typeinfo_release_vardesc(&This->vardescs[i]);
     }
     free(This->vardescs);
 
@@ -5764,7 +5789,8 @@ static HRESULT WINAPI ITypeInfo_fnGetTypeAttr( ITypeInfo2 *iface,
 
     if((*ppTypeAttr)->typekind == TKIND_DISPATCH) {
         /* This should include all the inherited funcs */
-        (*ppTypeAttr)->cFuncs = (*ppTypeAttr)->cbSizeVft / This->pTypeLib->ptr_size;
+        (*ppTypeAttr)->cFuncs = (*ppTypeAttr)->cbSizeVft /
+                (This->pTypeLib->resized_vtables ? sizeof(void *) : This->pTypeLib->ptr_size);
         /* This is always the size of IDispatch's vtbl */
         (*ppTypeAttr)->cbSizeVft = sizeof(IDispatchVtbl);
         (*ppTypeAttr)->wTypeFlags &= ~TYPEFLAG_FOLEAUTOMATION;
@@ -7886,8 +7912,17 @@ static HRESULT WINAPI ITypeInfo_fnGetRefTypeInfo(
         {
             if (This->pTypeLib->typeinfos[i]->hreftype == (hRefType&(~0x3)))
             {
+                ITypeInfoImpl *target = This->pTypeLib->typeinfos[i];
+
+                /* A coclass refers to a dual interface's dispatch view, the form compiled
+                 * libraries store. Dual interfaces made with ICreateTypeInfo are held as
+                 * TKIND_INTERFACE, so give their alternate here: callers such as Access ask
+                 * it for the interface view next, with the -1 reference. */
+                if (This->typeattr.typekind == TKIND_COCLASS && target->typeattr.typekind == TKIND_INTERFACE &&
+                        (target->typeattr.wTypeFlags & TYPEFLAG_FDUAL))
+                    return ITypeInfo2_GetRefTypeInfo(&target->ITypeInfo2_iface, (HREFTYPE)-2, ppTInfo);
                 result = S_OK;
-                type_info = (ITypeInfo*)&This->pTypeLib->typeinfos[i]->ITypeInfo2_iface;
+                type_info = (ITypeInfo*)&target->ITypeInfo2_iface;
                 ITypeInfo_AddRef(type_info);
                 break;
             }
@@ -7945,12 +7980,20 @@ static HRESULT WINAPI ITypeInfo_fnGetRefTypeInfo(
                 {
                     BSTR libnam;
 
-                    /* Search on disk */
+                    /* Search on disk. A library's syskind says how it was built, not how it
+                     * is used: 64-bit Office ships 32-bit ones such as MSACC.OLB. Its imports
+                     * must still be this process's own, or base interfaces get 32-bit vtables. */
                     result = query_typelib_path(TLB_get_guid_null(ref_type->pImpTLInfo->guid),
                             ref_type->pImpTLInfo->wVersionMajor,
                             ref_type->pImpTLInfo->wVersionMinor,
-                            This->pTypeLib->syskind,
+                            is_win64 ? SYS_WIN64 : This->pTypeLib->syskind,
                             ref_type->pImpTLInfo->lcid, &libnam, TRUE);
+                    if (FAILED(result) && is_win64)
+                        result = query_typelib_path(TLB_get_guid_null(ref_type->pImpTLInfo->guid),
+                                ref_type->pImpTLInfo->wVersionMajor,
+                                ref_type->pImpTLInfo->wVersionMinor,
+                                This->pTypeLib->syskind,
+                                ref_type->pImpTLInfo->lcid, &libnam, TRUE);
                     if (FAILED(result))
                         libnam = SysAllocString(ref_type->pImpTLInfo->name);
 
@@ -8945,6 +8988,7 @@ static HRESULT WINAPI ICreateTypeLib2_fnCreateTypeInfo(ICreateTypeLib2 *iface,
     ITypeLibImpl *This = impl_from_ICreateTypeLib2(iface);
     ITypeInfoImpl *info;
     HRESULT hres;
+    int i;
 
     TRACE("%p %s %d %p\n", This, wine_dbgstr_w(name), kind, ctinfo);
 
@@ -8995,7 +9039,13 @@ static HRESULT WINAPI ICreateTypeLib2_fnCreateTypeInfo(ICreateTypeLib2 *iface,
         return hres;
     }
 
+    /* After a deletion the index no longer gives an unused hreftype. */
     info->hreftype = info->index * sizeof(MSFT_TypeInfoBase);
+    for (i = 0; i < This->TypeInfoCount; ++i)
+    {
+        if (This->typeinfos[i]->hreftype >= info->hreftype)
+            info->hreftype = This->typeinfos[i]->hreftype + sizeof(MSFT_TypeInfoBase);
+    }
 
     ++This->TypeInfoCount;
 
@@ -10344,8 +10394,38 @@ static HRESULT WINAPI ICreateTypeLib2_fnDeleteTypeInfo(ICreateTypeLib2 *iface,
         LPOLESTR name)
 {
     ITypeLibImpl *This = impl_from_ICreateTypeLib2(iface);
-    FIXME("%p %s - stub\n", This, wine_dbgstr_w(name));
-    return E_NOTIMPL;
+    ITypeInfoImpl **deleted;
+    int i;
+
+    TRACE("%p %s\n", This, wine_dbgstr_w(name));
+
+    if (!name)
+        return E_INVALIDARG;
+
+    for (i = 0; i < This->TypeInfoCount; ++i)
+    {
+        if (This->typeinfos[i]->Name && !wcsicmp(TLB_get_bstr(This->typeinfos[i]->Name), name))
+            break;
+    }
+    if (i == This->TypeInfoCount)
+        return TYPE_E_ELEMENTNOTFOUND;
+
+    /* The caller may still hold this type info, and type infos are owned by
+     * the library, so it stays allocated until the library goes away. */
+    deleted = realloc(This->deleted_typeinfos, sizeof(*deleted) * (This->deleted_typeinfo_count + 1));
+    if (!deleted)
+        return E_OUTOFMEMORY;
+    This->deleted_typeinfos = deleted;
+    deleted[This->deleted_typeinfo_count++] = This->typeinfos[i];
+
+    --This->TypeInfoCount;
+    memmove(This->typeinfos + i, This->typeinfos + i + 1,
+            sizeof(*This->typeinfos) * (This->TypeInfoCount - i));
+    /* The hreftypes stay as they are: other type infos refer to them. */
+    for (; i < This->TypeInfoCount; ++i)
+        This->typeinfos[i]->index = i;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI ICreateTypeLib2_fnSetCustData(ICreateTypeLib2 *iface,
@@ -11258,22 +11338,62 @@ static HRESULT WINAPI ICreateTypeInfo2_fnDeleteFuncDesc(ICreateTypeInfo2 *iface,
 static HRESULT WINAPI ICreateTypeInfo2_fnDeleteFuncDescByMemId(ICreateTypeInfo2 *iface,
         MEMBERID memid, INVOKEKIND invKind)
 {
-    FIXME("%p, %#lx, %d - stub\n", iface, memid, invKind);
-    return E_NOTIMPL;
+    ITypeInfoImpl *This = info_impl_from_ICreateTypeInfo2(iface);
+    unsigned int i;
+
+    TRACE("%p, %#lx, %d\n", iface, memid, invKind);
+
+    for (i = 0; i < This->typeattr.cFuncs; ++i)
+    {
+        if (This->funcdescs[i].funcdesc.memid == memid && This->funcdescs[i].funcdesc.invkind == invKind)
+            return ICreateTypeInfo2_DeleteFuncDesc(iface, i);
+    }
+
+    return TYPE_E_ELEMENTNOTFOUND;
 }
 
 static HRESULT WINAPI ICreateTypeInfo2_fnDeleteVarDesc(ICreateTypeInfo2 *iface,
         UINT index)
 {
-    FIXME("%p, %u - stub\n", iface, index);
-    return E_NOTIMPL;
+    ITypeInfoImpl *This = info_impl_from_ICreateTypeInfo2(iface);
+    unsigned int i;
+
+    TRACE("%p, %u\n", iface, index);
+
+    if (index >= This->typeattr.cVars)
+        return TYPE_E_ELEMENTNOTFOUND;
+
+    typeinfo_release_vardesc(&This->vardescs[index]);
+
+    --This->typeattr.cVars;
+    if (index != This->typeattr.cVars)
+    {
+        memmove(This->vardescs + index, This->vardescs + index + 1,
+                sizeof(*This->vardescs) * (This->typeattr.cVars - index));
+        for (i = index; i < This->typeattr.cVars; ++i)
+            TLB_relink_custdata(&This->vardescs[i].custdata_list);
+    }
+
+    This->needs_layout = TRUE;
+
+    return S_OK;
 }
 
 static HRESULT WINAPI ICreateTypeInfo2_fnDeleteVarDescByMemId(ICreateTypeInfo2 *iface,
         MEMBERID memid)
 {
-    FIXME("%p, %#lx - stub\n", iface, memid);
-    return E_NOTIMPL;
+    ITypeInfoImpl *This = info_impl_from_ICreateTypeInfo2(iface);
+    unsigned int i;
+
+    TRACE("%p, %#lx\n", iface, memid);
+
+    for (i = 0; i < This->typeattr.cVars; ++i)
+    {
+        if (This->vardescs[i].vardesc.memid == memid)
+            return ICreateTypeInfo2_DeleteVarDesc(iface, i);
+    }
+
+    return TYPE_E_ELEMENTNOTFOUND;
 }
 
 static HRESULT WINAPI ICreateTypeInfo2_fnDeleteImplType(ICreateTypeInfo2 *iface,
@@ -11322,32 +11442,74 @@ static HRESULT WINAPI ICreateTypeInfo2_fnSetFuncCustData(ICreateTypeInfo2 *iface
         UINT index, REFGUID guid, VARIANT *varVal)
 {
     ITypeInfoImpl *This = info_impl_from_ICreateTypeInfo2(iface);
-    FIXME("%p %u %s %p - stub\n", This, index, debugstr_guid(guid), varVal);
-    return E_NOTIMPL;
+    TLBGuid *tlbguid;
+
+    TRACE("%p %u %s %p\n", This, index, debugstr_guid(guid), varVal);
+
+    if (!guid || !varVal)
+        return E_INVALIDARG;
+    if (index >= This->typeattr.cFuncs)
+        return TYPE_E_ELEMENTNOTFOUND;
+
+    tlbguid = TLB_append_guid(&This->pTypeLib->guid_list, guid, -1);
+
+    return TLB_set_custdata(&This->funcdescs[index].custdata_list, tlbguid, varVal);
 }
 
 static HRESULT WINAPI ICreateTypeInfo2_fnSetParamCustData(ICreateTypeInfo2 *iface,
         UINT funcIndex, UINT paramIndex, REFGUID guid, VARIANT *varVal)
 {
     ITypeInfoImpl *This = info_impl_from_ICreateTypeInfo2(iface);
-    FIXME("%p %u %u %s %p - stub\n", This, funcIndex, paramIndex, debugstr_guid(guid), varVal);
-    return E_NOTIMPL;
+    TLBGuid *tlbguid;
+
+    TRACE("%p %u %u %s %p\n", This, funcIndex, paramIndex, debugstr_guid(guid), varVal);
+
+    if (!guid || !varVal)
+        return E_INVALIDARG;
+    if (funcIndex >= This->typeattr.cFuncs ||
+            paramIndex >= This->funcdescs[funcIndex].funcdesc.cParams)
+        return TYPE_E_ELEMENTNOTFOUND;
+
+    tlbguid = TLB_append_guid(&This->pTypeLib->guid_list, guid, -1);
+
+    return TLB_set_custdata(&This->funcdescs[funcIndex].pParamDesc[paramIndex].custdata_list,
+            tlbguid, varVal);
 }
 
 static HRESULT WINAPI ICreateTypeInfo2_fnSetVarCustData(ICreateTypeInfo2 *iface,
         UINT index, REFGUID guid, VARIANT *varVal)
 {
     ITypeInfoImpl *This = info_impl_from_ICreateTypeInfo2(iface);
-    FIXME("%p %u %s %p - stub\n", This, index, debugstr_guid(guid), varVal);
-    return E_NOTIMPL;
+    TLBGuid *tlbguid;
+
+    TRACE("%p %u %s %p\n", This, index, debugstr_guid(guid), varVal);
+
+    if (!guid || !varVal)
+        return E_INVALIDARG;
+    if (index >= This->typeattr.cVars)
+        return TYPE_E_ELEMENTNOTFOUND;
+
+    tlbguid = TLB_append_guid(&This->pTypeLib->guid_list, guid, -1);
+
+    return TLB_set_custdata(&This->vardescs[index].custdata_list, tlbguid, varVal);
 }
 
 static HRESULT WINAPI ICreateTypeInfo2_fnSetImplTypeCustData(ICreateTypeInfo2 *iface,
         UINT index, REFGUID guid, VARIANT *varVal)
 {
     ITypeInfoImpl *This = info_impl_from_ICreateTypeInfo2(iface);
-    FIXME("%p %u %s %p - stub\n", This, index, debugstr_guid(guid), varVal);
-    return E_NOTIMPL;
+    TLBGuid *tlbguid;
+
+    TRACE("%p %u %s %p\n", This, index, debugstr_guid(guid), varVal);
+
+    if (!guid || !varVal)
+        return E_INVALIDARG;
+    if (index >= This->typeattr.cImplTypes)
+        return TYPE_E_ELEMENTNOTFOUND;
+
+    tlbguid = TLB_append_guid(&This->pTypeLib->guid_list, guid, -1);
+
+    return TLB_set_custdata(&This->impltypes[index].custdata_list, tlbguid, varVal);
 }
 
 static HRESULT WINAPI ICreateTypeInfo2_fnSetHelpStringContext(ICreateTypeInfo2 *iface,
