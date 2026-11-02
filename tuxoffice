@@ -190,7 +190,52 @@ cmd_setup() {
   configure_office_ui
   configure_chart_proxies
   configure_installer_components
+  configure_shell
+  configure_virtual_registry || true
   msg "setup complete; next: tuxoffice install"
+}
+
+# Click-to-Run's merged virtual registry (Access's wizards, VBA's location,
+# Outlook's services, about 27,000 keys) comes out empty under Wine. Rebuild it
+# from the payload and add it where App-V reads it, as Windows mounts the hive.
+configure_virtual_registry() {
+  local registration="$TUX_CACHE/c2r-virtual-registry.reg" key='HKLM\Software\Microsoft\Office\ClickToRun\REGISTRY\MACHINE\Software\Microsoft\VBA'
+  [[ -d "$OFFICE_ROOT/../vreg" ]] || return 0
+  if ! python3 -I "$TUX_SRC/lib/c2rvreg.py" "$TUX_PREFIX" "$registration" >"$TUX_CACHE/c2r-virtual-registry.log" 2>&1; then
+    warn "Office's virtual registry was not rebuilt: $(tail -1 "$TUX_CACHE/c2r-virtual-registry.log")"
+    return 1
+  fi
+  if ! wine reg import "Z:${registration//\//\\}" >"$TUX_CACHE/c2r-virtual-registry-import.log" 2>&1 ||
+     ! wine reg query "$key" /v Vbe71DllPath /reg:64 >/dev/null 2>&1; then
+    warn "Office's virtual registry import failed; see $TUX_CACHE/c2r-virtual-registry-import.log"
+    return 1
+  fi
+}
+
+# Settings that older TuxOffice versions did not apply: run once per revision,
+# so an installed Office picks them up on its next start.
+PREFIX_REVISION=1
+update_prefix() {
+  local stamp="$TUX_CACHE/prefix-revision"
+  [[ -f "$OFFICE_ROOT/WINWORD.EXE" || -f "$OFFICE_ROOT/EXCEL.EXE" ]] || return 0
+  [[ -f $stamp && $(<"$stamp") == "$PREFIX_REVISION" ]] && return 0
+  mkdir -p "$TUX_CACHE"
+  msg "updating the Office environment"
+  configure_shell
+  configure_virtual_registry || return 0
+  printf '%s\n' "$PREFIX_REVISION" >"$stamp"
+}
+
+# Hide Wine's standalone tray window (a box floating over Office with an icon
+# for each tray item; Windows shows these in its taskbar) and keep Office from
+# writing Wine's menu entries into the user's application menu.
+configure_shell() {
+  wreg 'HKCU\Software\Wine\Explorer' /v ShowSystray /t REG_DWORD /d 0
+  wreg 'HKCU\Software\Wine\DllOverrides' /v winemenubuilder.exe /t REG_SZ /d ''
+  # WinRT classes are normally registered when a prefix is created. Add the ones
+  # TuxOffice's runner introduced to prefixes made by an earlier version.
+  local key='HKLM\Software\Microsoft\WindowsRuntime\ActivatableClassId\Windows.UI.Composition.Interactions.InteractionTrackerInertiaRestingValue'
+  wreg "$key" /v DllPath /t REG_SZ /d 'C:\windows\system32\windows.ui.dll' /reg:64
 }
 
 configure_installer_components() {
@@ -390,6 +435,10 @@ post_install() {
   fonts_office
   configure_chart_proxies
   configure_installer_components
+  configure_shell
+  configure_virtual_registry || true
+  [[ -f "$OFFICE_ROOT/WINWORD.EXE" || -f "$OFFICE_ROOT/EXCEL.EXE" ]] &&
+    { mkdir -p "$TUX_CACHE"; printf '%s\n' "$PREFIX_REVISION" >"$TUX_CACHE/prefix-revision"; }
 }
 
 # ---------------------------------------------------------------------------
@@ -660,6 +709,7 @@ cmd_run() {
   runner_env
   [[ -f "$OFFICE_ROOT/$exe" ]] || die "$exe not installed"
   fix_locker
+  update_prefix
   refresh_root_certs
   sync_app_theme
 
@@ -862,7 +912,7 @@ usage: tuxoffice <command> [args]   (TuxOffice $TUX_VERSION)
   doctor                    check the environment
   graphics [auto|builtin|dxvk] configure Office graphics (auto requires the updated runner)
   ui                        re-apply Windows UI fonts, colours and window effects to the prefix
-  repair                    re-register Office's chart proxies and Windows Installer components
+  repair                    re-register Office's chart proxies, Installer components and virtual registry
   cmd [SCRIPT [ARGS...]]    open a Windows command prompt in the Office prefix,
                             or run a batch script (.bat/.cmd) in it
   wine ARGS...              run a command inside the Office prefix (winecfg, regedit, ...)
@@ -887,7 +937,8 @@ main() {
     kill) cmd_kill ;;
     graphics) cmd_graphics "$@" ;;
     ui) runner_env; configure_office_ui; msg "UI fonts, colours and window effects applied" ;;
-    repair) runner_env; configure_chart_proxies; configure_installer_components; msg "Office registrations repaired" ;;
+    repair) runner_env; configure_chart_proxies; configure_installer_components; configure_shell
+            configure_virtual_registry || true; msg "Office registrations repaired" ;;
     -V|--version|version) echo "tuxoffice $TUX_VERSION" ;;
     ""|-h|--help|help) usage ;;
     *) die "unknown command: $c" ;;
