@@ -6692,6 +6692,14 @@ struct effect_source_binding
     struct effect_source_binding *next;
 };
 
+/* A property of an effect brush that follows an expression, evaluated when drawing. */
+struct effect_expression
+{
+    struct effect_expression *next;
+    HSTRING name;
+    IExpressionAnimation *expression;
+};
+
 struct composition_effect
 {
     ICompositionEffectFactory ICompositionEffectFactory_iface;
@@ -6703,6 +6711,7 @@ struct composition_effect
     ICompositor *compositor;
     ICompositionPropertySet *properties;
     struct effect_source_binding *bindings;
+    struct effect_expression *expressions;
     CRITICAL_SECTION lock;
     BOOL factory;
     LONG closed;
@@ -6817,6 +6826,15 @@ static ULONG WINAPI effect_object_Release( ICompositionObject *iface )
             WindowsDeleteString( binding->name );
             free( binding );
         }
+        while (impl->expressions)
+        {
+            struct effect_expression *expression = impl->expressions;
+
+            impl->expressions = expression->next;
+            IExpressionAnimation_Release( expression->expression );
+            WindowsDeleteString( expression->name );
+            free( expression );
+        }
         if (impl->properties) ICompositionPropertySet_Release( impl->properties );
         if (impl->graph) composition_effect_graph_release( impl->graph );
         ICompositor_Release( impl->compositor );
@@ -6891,19 +6909,100 @@ static HRESULT WINAPI effect_object_get_Properties( ICompositionObject *iface, I
     return S_OK;
 }
 
+static void effect_remove_expression( struct composition_effect *impl, HSTRING name )
+{
+    struct effect_expression **entry, *expression;
+    INT32 order;
+
+    for (entry = &impl->expressions; (expression = *entry); entry = &expression->next)
+    {
+        if (FAILED(WindowsCompareStringOrdinal( expression->name, name, &order )) || order) continue;
+        *entry = expression->next;
+        IExpressionAnimation_Release( expression->expression );
+        WindowsDeleteString( expression->name );
+        free( expression );
+        return;
+    }
+}
+
+/* Office fades thumbnails in by animating an effect's amounts: until this took effect
+ * the fade stayed on its first source, so the new picture never showed. */
 static HRESULT WINAPI effect_object_StartAnimation( ICompositionObject *iface, HSTRING name,
         ICompositionAnimation *animation )
 {
-    if (InterlockedCompareExchange( &effect_from_ICompositionObject( iface )->closed, 0, 0 )) return RO_E_CLOSED;
+    struct composition_effect *impl = effect_from_ICompositionObject( iface );
+    struct effect_expression *entry;
+    IExpressionAnimation *expression, *copy;
+    HRESULT hr;
+    FLOAT value;
+
+    TRACE( "iface %p, name %s, animation %p.\n", iface, debugstr_hstring( name ), animation );
+
+    if (InterlockedCompareExchange( &impl->closed, 0, 0 )) return RO_E_CLOSED;
     if (!name || !animation) return E_INVALIDARG;
-    return E_NOTIMPL;
+
+    if (SUCCEEDED(ICompositionAnimation_QueryInterface( animation, &IID_IExpressionAnimation, (void **)&expression )))
+    {
+        hr = expression_animation_clone( expression, &copy );
+        IExpressionAnimation_Release( expression );
+        if (FAILED(hr)) return hr;
+        if (!(entry = calloc( 1, sizeof(*entry) )))
+        {
+            IExpressionAnimation_Release( copy );
+            return E_OUTOFMEMORY;
+        }
+        if (FAILED(hr = WindowsDuplicateString( name, &entry->name )))
+        {
+            IExpressionAnimation_Release( copy );
+            free( entry );
+            return hr;
+        }
+        entry->expression = copy;
+        EnterCriticalSection( &impl->lock );
+        effect_remove_expression( impl, name );
+        entry->next = impl->expressions;
+        impl->expressions = entry;
+        LeaveCriticalSection( &impl->lock );
+        return S_OK;
+    }
+
+    /* Like animations on visuals, this goes straight to the final key frame. */
+    if (FAILED(hr = scalar_key_frame_animation_get_final_value( animation, &value )))
+    {
+        FIXME( "unsupported animation for %s, hr %#lx.\n", debugstr_hstring( name ), hr );
+        return E_NOTIMPL;
+    }
+    EnterCriticalSection( &impl->lock );
+    effect_remove_expression( impl, name );
+    LeaveCriticalSection( &impl->lock );
+    return ICompositionPropertySet_InsertScalar( impl->properties, name, value );
 }
 
 static HRESULT WINAPI effect_object_StopAnimation( ICompositionObject *iface, HSTRING name )
 {
-    if (InterlockedCompareExchange( &effect_from_ICompositionObject( iface )->closed, 0, 0 )) return RO_E_CLOSED;
+    struct composition_effect *impl = effect_from_ICompositionObject( iface );
+
+    if (InterlockedCompareExchange( &impl->closed, 0, 0 )) return RO_E_CLOSED;
     if (!name) return E_INVALIDARG;
+    EnterCriticalSection( &impl->lock );
+    effect_remove_expression( impl, name );
+    LeaveCriticalSection( &impl->lock );
     return S_OK;
+}
+
+static void effect_update_expressions( struct composition_effect *impl )
+{
+    struct effect_expression *entry;
+    FLOAT value;
+
+    EnterCriticalSection( &impl->lock );
+    for (entry = impl->expressions; entry; entry = entry->next)
+    {
+        if (SUCCEEDED(expression_animation_evaluate_scalar( entry->expression,
+                &impl->ICompositionObject_iface, &value )))
+            ICompositionPropertySet_InsertScalar( impl->properties, entry->name, value );
+    }
+    LeaveCriticalSection( &impl->lock );
 }
 
 static const ICompositionObjectVtbl effect_object_vtbl =
@@ -11844,6 +11943,7 @@ static HRESULT draw_effect_brush( ID2D1DeviceContext *context, struct compositio
     HRESULT hr, end;
 
     if (InterlockedCompareExchange( &effect->closed, 0, 0 )) return RO_E_CLOSED;
+    effect_update_expressions( effect );
     if (FAILED(hr = ID2D1DeviceContext_CreateCompatibleRenderTarget( context, &sources.size, NULL,
             &format, D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE, &target ))) goto done;
     if (FAILED(hr = ID2D1BitmapRenderTarget_QueryInterface( target, &IID_ID2D1DeviceContext,
@@ -12751,6 +12851,68 @@ static void snapshot_visual( struct target_snapshot *snap, IVisual *visual, UINT
 
 #undef SNAPSHOT_FIELD
 
+/* A device for targets with no surface to take one from. Each brings a set of worker
+ * threads, and Office opens many targets, so they share one per rendering thread for
+ * the life of the process. It is not shared across threads because Direct3D's immediate
+ * context is not thread safe. */
+struct thread_render_device
+{
+    struct list entry;
+    DWORD thread;
+    ID3D11Device *d3d_device;
+    ID2D1Device *d2d_device;
+};
+
+static struct list thread_render_devices = LIST_INIT( thread_render_devices );
+static CRITICAL_SECTION thread_render_devices_cs;
+static CRITICAL_SECTION_DEBUG thread_render_devices_cs_debug =
+{
+    0, 0, &thread_render_devices_cs,
+    { &thread_render_devices_cs_debug.ProcessLocksList, &thread_render_devices_cs_debug.ProcessLocksList },
+      0, 0, { (DWORD_PTR)(__FILE__ ": thread_render_devices_cs") }
+};
+static CRITICAL_SECTION thread_render_devices_cs = { &thread_render_devices_cs_debug, -1, 0, 0, 0, 0 };
+
+static HRESULT get_thread_render_device( ID3D11Device **d3d_device, ID2D1Device **d2d_device )
+{
+    DWORD thread = GetCurrentThreadId();
+    struct thread_render_device *device;
+    IDXGIDevice *dxgi_device;
+    HRESULT hr = S_OK;
+
+    EnterCriticalSection( &thread_render_devices_cs );
+    LIST_FOR_EACH_ENTRY( device, &thread_render_devices, struct thread_render_device, entry )
+        if (device->thread == thread) goto found;
+
+    if (!(device = calloc( 1, sizeof(*device) ))) hr = E_OUTOFMEMORY;
+    else if (FAILED(hr = D3D11CreateDevice( NULL, D3D_DRIVER_TYPE_HARDWARE, NULL,
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT, NULL, 0, D3D11_SDK_VERSION,
+            &device->d3d_device, NULL, NULL )))
+        ;
+    else if (SUCCEEDED(hr = ID3D11Device_QueryInterface( device->d3d_device, &IID_IDXGIDevice, (void **)&dxgi_device )))
+    {
+        hr = D2D1CreateDevice( dxgi_device, NULL, &device->d2d_device );
+        IDXGIDevice_Release( dxgi_device );
+    }
+    if (FAILED(hr))
+    {
+        if (device && device->d3d_device) ID3D11Device_Release( device->d3d_device );
+        free( device );
+        LeaveCriticalSection( &thread_render_devices_cs );
+        return hr;
+    }
+    device->thread = thread;
+    list_add_tail( &thread_render_devices, &device->entry );
+
+found:
+    *d3d_device = device->d3d_device;
+    ID3D11Device_AddRef( *d3d_device );
+    *d2d_device = device->d2d_device;
+    ID2D1Device_AddRef( *d2d_device );
+    LeaveCriticalSection( &thread_render_devices_cs );
+    return S_OK;
+}
+
 static HRESULT desktop_window_target_render_locked( struct desktop_window_target *target )
 {
     struct composition_drawing_surface *source;
@@ -12839,14 +13001,10 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
         }
         else
         {
-            stage = "create d3d device";
-            if (FAILED(hr = D3D11CreateDevice( NULL, D3D_DRIVER_TYPE_HARDWARE, NULL,
-                    D3D11_CREATE_DEVICE_BGRA_SUPPORT, NULL, 0, D3D11_SDK_VERSION,
-                    &d3d_device, NULL, NULL ))) goto done;
+            stage = "get render device";
+            if (FAILED(hr = get_thread_render_device( &d3d_device, &target->render_device ))) goto done;
             if (FAILED(hr = ID3D11Device_QueryInterface( d3d_device, &IID_IDXGIDevice,
                     (void **)&dxgi_device ))) goto done;
-            stage = "create d2d device";
-            if (FAILED(hr = D2D1CreateDevice( dxgi_device, NULL, &target->render_device ))) goto done;
         }
         stage = "get adapter";
         if (FAILED(hr = IDXGIDevice_GetAdapter( dxgi_device, &adapter ))) goto done;
@@ -14107,15 +14265,28 @@ static HRESULT WINAPI compositor_controller_Commit( ICompositorController *iface
     struct compositor_controller *controller = impl_from_ICompositorController( iface );
     struct compositor *compositor = impl_from_ICompositor(
             controller->compositor );
-    struct desktop_window_target *target;
+    struct desktop_window_target *target, *next;
     BOOL rendered = FALSE;
     HRESULT hr;
     ULONGLONG started = perf_us();
     unsigned int count = 0;
 
     FIXME( "iface %p.\n", iface );
-    LIST_FOR_EACH_ENTRY( target, &compositor->targets, struct desktop_window_target, entry )
+    LIST_FOR_EACH_ENTRY_SAFE( target, next, &compositor->targets, struct desktop_window_target, entry )
     {
+        BOOL window_gone = !IsWindow( target->hwnd );
+
+        /* The list holds a reference of its own. Without this, a target the application
+         * has let go of, or whose window is gone, would keep its swapchain, device and
+         * layer until the compositor itself goes, and be visited by every commit. */
+        if (window_gone || ReadNoFence( &target->ref ) == 1)
+        {
+            list_remove( &target->entry );
+            target->linked = FALSE;
+            if (window_gone) desktop_window_target_reset_renderer( target );
+            desktop_window_target_release( target );
+            continue;
+        }
         ++count;
         hr = desktop_window_target_render( target );
         if (hr == S_OK) rendered = TRUE;
