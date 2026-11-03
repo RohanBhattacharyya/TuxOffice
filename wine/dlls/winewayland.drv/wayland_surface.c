@@ -2010,6 +2010,8 @@ void wayland_restack_client_surfaces(HWND toplevel)
 
 done:
     free(popups);
+    free(covered);
+    free(rects);
     free(stack);
     free(list);
 }
