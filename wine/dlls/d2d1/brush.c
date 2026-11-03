@@ -1023,12 +1023,10 @@ static void STDMETHODCALLTYPE d2d_bitmap_brush_SetInterpolationMode1(ID2D1Bitmap
     {
         case D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR:
         case D2D1_INTERPOLATION_MODE_LINEAR:
-            break;
         case D2D1_INTERPOLATION_MODE_CUBIC:
         case D2D1_INTERPOLATION_MODE_MULTI_SAMPLE_LINEAR:
         case D2D1_INTERPOLATION_MODE_ANISOTROPIC:
         case D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC:
-            FIXME("Unhandled interpolation mode %#x.\n", mode);
             break;
         default:
             WARN("Unknown interpolation mode %#x.\n", mode);
@@ -1507,19 +1505,38 @@ BOOL d2d_brush_fill_cb(const struct d2d_brush *brush, struct d2d_brush_cb *cb, D
     }
 }
 
-static void d2d_brush_bind_bitmap(struct d2d_bitmap *bitmap, struct d2d_device_context *context,
-        D2D1_EXTEND_MODE extend_mode_x, D2D1_EXTEND_MODE extend_mode_y,
+/* Whether the bitmap's pixels are smaller than the target's in either direction. */
+static BOOL d2d_brush_bitmap_is_reduced(const struct d2d_bitmap *bitmap, const struct d2d_brush *brush,
+        const struct d2d_device_context *context)
+{
+    const D2D1_MATRIX_3X2_F *b = &brush->transform, *w = &context->drawing_state.transform;
+    float x_x = b->m11 * w->m11 + b->m12 * w->m21, x_y = b->m11 * w->m12 + b->m12 * w->m22;
+    float y_x = b->m21 * w->m11 + b->m22 * w->m21, y_y = b->m21 * w->m12 + b->m22 * w->m22;
+    float scale_x = sqrtf(x_x * x_x + x_y * x_y) * context->desc.dpiX / bitmap->dpi_x;
+    float scale_y = sqrtf(y_x * y_x + y_y * y_y) * context->desc.dpiY / bitmap->dpi_y;
+
+    return scale_x < 0.8f || scale_y < 0.8f;
+}
+
+static void d2d_brush_bind_bitmap(struct d2d_bitmap *bitmap, struct d2d_brush *brush,
+        struct d2d_device_context *context, D2D1_EXTEND_MODE extend_mode_x, D2D1_EXTEND_MODE extend_mode_y,
         D2D1_INTERPOLATION_MODE interpolation_mode, unsigned int brush_idx)
 {
+    BOOL nearest = interpolation_mode == D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR;
+    ID3D11ShaderResourceView *srv = bitmap->srv;
     ID3D11SamplerState **sampler_state;
     ID3D11DeviceContext *d3d_context;
     HRESULT hr;
 
     ID3D11Device1_GetImmediateContext(context->d3d_device, &d3d_context);
-    ID3D11DeviceContext_PSSetShaderResources(d3d_context, brush_idx, 1, &bitmap->srv);
+    if (!nearest && d2d_brush_bitmap_is_reduced(bitmap, brush, context))
+        srv = d2d_bitmap_get_mip_srv(bitmap, (ID3D11Device *)context->d3d_device, d3d_context);
+    ID3D11DeviceContext_PSSetShaderResources(d3d_context, brush_idx, 1, &srv);
 
+    /* Everything but nearest neighbour shares the linear sampler. Taking the mode modulo
+     * the count would put cubic in with nearest, and whichever came first would win. */
     sampler_state = &context->sampler_states
-            [interpolation_mode % D2D_SAMPLER_INTERPOLATION_MODE_COUNT]
+            [nearest ? D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR : D2D1_INTERPOLATION_MODE_LINEAR]
             [extend_mode_x % D2D_SAMPLER_EXTEND_MODE_COUNT]
             [extend_mode_y % D2D_SAMPLER_EXTEND_MODE_COUNT];
 
@@ -1527,14 +1544,15 @@ static void d2d_brush_bind_bitmap(struct d2d_bitmap *bitmap, struct d2d_device_c
     {
         D3D11_SAMPLER_DESC sampler_desc;
 
-        if (interpolation_mode == D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR)
+        if (nearest)
             sampler_desc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
         else
             sampler_desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
         sampler_desc.AddressU = texture_address_mode_from_extend_mode(extend_mode_x);
         sampler_desc.AddressV = texture_address_mode_from_extend_mode(extend_mode_y);
         sampler_desc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-        sampler_desc.MipLODBias = 0.0f;
+        /* Box filtered mips are a little soft, this keeps some of the detail. */
+        sampler_desc.MipLODBias = nearest ? 0.0f : -0.25f;
         sampler_desc.MaxAnisotropy = 0;
         sampler_desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
         sampler_desc.BorderColor[0] = 0.0f;
@@ -1542,7 +1560,7 @@ static void d2d_brush_bind_bitmap(struct d2d_bitmap *bitmap, struct d2d_device_c
         sampler_desc.BorderColor[2] = 0.0f;
         sampler_desc.BorderColor[3] = 0.0f;
         sampler_desc.MinLOD = 0.0f;
-        sampler_desc.MaxLOD = 0.0f;
+        sampler_desc.MaxLOD = nearest ? 0.0f : D3D11_FLOAT32_MAX;
 
         if (FAILED(hr = ID3D11Device1_CreateSamplerState(context->d3d_device, &sampler_desc, sampler_state)))
             ERR("Failed to create sampler state, hr %#lx.\n", hr);
@@ -1566,7 +1584,7 @@ static void d2d_brush_bind_image(struct d2d_brush *brush, struct d2d_device_cont
 
     bitmap = unsafe_impl_from_ID2D1Bitmap(image_bitmap);
 
-    d2d_brush_bind_bitmap(bitmap, context, brush->u.image.extend_mode_x, brush->u.image.extend_mode_y,
+    d2d_brush_bind_bitmap(bitmap, brush, context, brush->u.image.extend_mode_x, brush->u.image.extend_mode_y,
             brush->u.image.interpolation_mode, brush_idx);
 
     ID2D1Bitmap_Release(image_bitmap);
@@ -1588,7 +1606,7 @@ void d2d_brush_bind_resources(struct d2d_brush *brush, struct d2d_device_context
             break;
 
         case D2D_BRUSH_TYPE_BITMAP:
-            d2d_brush_bind_bitmap(brush->u.bitmap.bitmap, context, brush->u.bitmap.extend_mode_x,
+            d2d_brush_bind_bitmap(brush->u.bitmap.bitmap, brush, context, brush->u.bitmap.extend_mode_x,
                     brush->u.bitmap.extend_mode_y, brush->u.bitmap.interpolation_mode, brush_idx);
             break;
 

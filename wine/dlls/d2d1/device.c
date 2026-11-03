@@ -1492,12 +1492,6 @@ static HRESULT d2d_device_context_update_ps_cb(struct d2d_device_context *contex
     cb_data->clamp_output = context->color_matrix ? context->color_matrix_clamp : context->arithmetic_clamp;
     cb_data->color_matrix_mode = context->color_matrix ? context->color_matrix_mode : 0;
     if (context->color_matrix) cb_data->color_matrix = *context->color_matrix;
-    cb_data->shadow_mode = !!context->shadow_kernel;
-    if (context->shadow_kernel)
-    {
-        cb_data->shadow_kernel = *context->shadow_kernel;
-        cb_data->shadow_color = *context->shadow_color;
-    }
     if (context->arithmetic_coefficients)
         cb_data->coefficients = *context->arithmetic_coefficients;
     if (!d2d_brush_fill_cb(brush, &cb_data->colour_brush, context->drawing_state.unitMode))
@@ -1685,6 +1679,9 @@ static void d2d_device_context_draw_geometry(struct d2d_device_context *render_t
 static void STDMETHODCALLTYPE d2d_device_context_DrawGeometry(ID2D1DeviceContext6 *iface,
         ID2D1Geometry *geometry, ID2D1Brush *brush, float stroke_width, ID2D1StrokeStyle *stroke_style)
 {
+    const D2D1_MATRIX_3X2_F *m;
+    float scale;
+    BOOL merge;
     const struct d2d_geometry *geometry_impl = unsafe_impl_from_ID2D1Geometry(geometry);
     struct d2d_device_context *context = impl_from_ID2D1DeviceContext(iface);
     struct d2d_brush *brush_impl = unsafe_impl_from_ID2D1Brush(brush);
@@ -1709,13 +1706,42 @@ static void STDMETHODCALLTYPE d2d_device_context_DrawGeometry(ID2D1DeviceContext
         return;
     }
 
-    if (stroke_style)
-        FIXME("Ignoring stroke style %p.\n", stroke_style);
+    m = &context->drawing_state.transform;
+    scale = sqrtf(fabsf(m->m11 * m->m22 - m->m12 * m->m21));
 
-    if (stroke_style_impl)
+    if (stroke_style_impl && scale > 0.0f)
     {
+        /* m11 alone is zero for a quarter turn, and negative for a mirror. */
         if (stroke_style_impl->desc.transformType == D2D1_STROKE_TRANSFORM_TYPE_FIXED)
-            stroke_width /= context->drawing_state.transform.m11;
+            stroke_width /= scale;
+        else if (stroke_style_impl->desc.transformType == D2D1_STROKE_TRANSFORM_TYPE_HAIRLINE)
+            stroke_width = 1.0f / scale;
+    }
+
+    merge = stroke_width * scale >= 2.0f && (brush_impl->opacity < 1.0f
+            || (brush_impl->type == D2D_BRUSH_TYPE_SOLID && brush_impl->u.solid.color.a < 1.0f));
+
+    if (merge || (stroke_style_impl && (stroke_style_impl->dash_count
+            || stroke_style_impl->desc.startCap != D2D1_CAP_STYLE_FLAT
+            || stroke_style_impl->desc.endCap != D2D1_CAP_STYLE_FLAT
+            || stroke_style_impl->desc.lineJoin == D2D1_LINE_JOIN_ROUND
+            || stroke_style_impl->desc.lineJoin == D2D1_LINE_JOIN_BEVEL)))
+    {
+        ID2D1Geometry *lines, *fill;
+
+        if (SUCCEEDED(d2d_geometry_create_stroke(context->factory, geometry, stroke_style_impl, stroke_width,
+                scale, merge, &lines, &fill)))
+        {
+            d2d_device_context_draw_geometry(context, unsafe_impl_from_ID2D1Geometry(lines), brush_impl, stroke_width);
+            ID2D1Geometry_Release(lines);
+            if (fill)
+            {
+                ID2D1DeviceContext6_FillGeometry(iface, fill, brush, NULL);
+                ID2D1Geometry_Release(fill);
+            }
+            return;
+        }
+        WARN("Failed to build the stroke, drawing it plainly.\n");
     }
 
     d2d_device_context_draw_geometry(context, geometry_impl, brush_impl, stroke_width);
@@ -3576,13 +3602,7 @@ static HRESULT d2d_affine_matrix(struct d2d_device_context *context, ID2D1Effect
             D2D1_PROPERTY_TYPE_MATRIX_3X2, (BYTE *)matrix, sizeof(*matrix)))) return hr;
     if (!isfinite(matrix->_11) || !isfinite(matrix->_12) || !isfinite(matrix->_21)
             || !isfinite(matrix->_22) || !isfinite(matrix->_31) || !isfinite(matrix->_32)) return E_INVALIDARG;
-    if (mode == D2D1_UNIT_MODE_PIXELS)
-    {
-        matrix->_12 *= context->desc.dpiY / context->desc.dpiX;
-        matrix->_21 *= context->desc.dpiX / context->desc.dpiY;
-        matrix->_31 *= context->desc.dpiX / 96.0f;
-        matrix->_32 *= context->desc.dpiY / 96.0f;
-    }
+    /* Whoever draws in pixels gives the matrix in pixels: Office places its effects with it. */
     return S_OK;
 }
 
@@ -3634,6 +3654,83 @@ HRESULT d2d_effect_image_bounds(struct d2d_device_context *context, ID2D1Image *
     frame.parent = parent;
     if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_PROPERTY_CLSID, D2D1_PROPERTY_TYPE_CLSID,
             (BYTE *)&clsid, sizeof(clsid)))) goto done;
+    if (IsEqualGUID(&clsid, &CLSID_D2D1GaussianBlur))
+    {
+        D2D1_BORDER_MODE border;
+
+        ID2D1Effect_GetInput(effect, 0, &input);
+        if (!input) {hr = D2DERR_WRONG_STATE; goto done;}
+        hr = d2d_effect_image_bounds(context, input, &frame, mode, bounds);
+        ID2D1Image_Release(input);
+        if (FAILED(hr)) goto done;
+        if (FAILED(ID2D1Effect_GetValue(effect, D2D1_GAUSSIANBLUR_PROP_BORDER_MODE,
+                D2D1_PROPERTY_TYPE_ENUM, (BYTE *)&border, sizeof(border))))
+            border = D2D1_BORDER_MODE_SOFT;
+        if (border == D2D1_BORDER_MODE_HARD) goto done;
+        if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION,
+                D2D1_PROPERTY_TYPE_FLOAT, (BYTE *)&sigma, sizeof(sigma)))) goto done;
+        if (!isfinite(sigma) || sigma < 0.0f) {hr = E_INVALIDARG; goto done;}
+        radius_x = radius_y = 3.0f * sigma;
+        if (mode == D2D1_UNIT_MODE_PIXELS)
+        {
+            radius_x *= context->desc.dpiX / 96.0f;
+            radius_y *= context->desc.dpiY / 96.0f;
+        }
+        bounds->left -= radius_x;
+        bounds->top -= radius_y;
+        bounds->right += radius_x;
+        bounds->bottom += radius_y;
+        goto done;
+    }
+    if (IsEqualGUID(&clsid, &CLSID_D2D1DirectionalBlur))
+    {
+        D2D1_BORDER_MODE border;
+        float angle;
+
+        ID2D1Effect_GetInput(effect, 0, &input);
+        if (!input) {hr = D2DERR_WRONG_STATE; goto done;}
+        hr = d2d_effect_image_bounds(context, input, &frame, mode, bounds);
+        ID2D1Image_Release(input);
+        if (FAILED(hr)) goto done;
+        if (FAILED(ID2D1Effect_GetValue(effect, D2D1_DIRECTIONALBLUR_PROP_BORDER_MODE,
+                D2D1_PROPERTY_TYPE_ENUM, (BYTE *)&border, sizeof(border))))
+            border = D2D1_BORDER_MODE_SOFT;
+        if (border == D2D1_BORDER_MODE_HARD) goto done;
+        if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_DIRECTIONALBLUR_PROP_STANDARD_DEVIATION,
+                D2D1_PROPERTY_TYPE_FLOAT, (BYTE *)&sigma, sizeof(sigma)))) goto done;
+        if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_DIRECTIONALBLUR_PROP_ANGLE,
+                D2D1_PROPERTY_TYPE_FLOAT, (BYTE *)&angle, sizeof(angle)))) goto done;
+        if (!isfinite(sigma) || sigma < 0.0f) {hr = E_INVALIDARG; goto done;}
+        radius_x = fabsf(cosf(angle * M_PI / 180.0f)) * 3.0f * sigma;
+        radius_y = fabsf(sinf(angle * M_PI / 180.0f)) * 3.0f * sigma;
+        if (mode == D2D1_UNIT_MODE_PIXELS)
+        {
+            radius_x *= context->desc.dpiX / 96.0f;
+            radius_y *= context->desc.dpiY / 96.0f;
+        }
+        bounds->left -= radius_x;
+        bounds->top -= radius_y;
+        bounds->right += radius_x;
+        bounds->bottom += radius_y;
+        goto done;
+    }
+    if (!IsEqualGUID(&clsid, &CLSID_D2D1ArithmeticComposite) && !IsEqualGUID(&clsid, &CLSID_D2D1ColorMatrix)
+            && !IsEqualGUID(&clsid, &CLSID_D2D1Shadow) && !IsEqualGUID(&clsid, &CLSID_D2D12DAffineTransform)
+            && !IsEqualGUID(&clsid, &CLSID_D2D1Composite) && !d2d_effect_get_custom_render_info(effect))
+    {
+        /* Drawn as its input, see d2d_device_context_draw_effect(). */
+        d2d_rect_set(bounds, 0.0f, 0.0f, 0.0f, 0.0f);
+        if (ID2D1Effect_GetInputCount(effect))
+        {
+            ID2D1Effect_GetInput(effect, 0, &input);
+            if (input)
+            {
+                hr = d2d_effect_image_bounds(context, input, &frame, mode, bounds);
+                ID2D1Image_Release(input);
+            }
+        }
+        goto done;
+    }
     if (IsEqualGUID(&clsid, &CLSID_D2D1ColorMatrix) || IsEqualGUID(&clsid, &CLSID_D2D1Shadow)
             || IsEqualGUID(&clsid, &CLSID_D2D12DAffineTransform))
     {
@@ -3672,6 +3769,34 @@ HRESULT d2d_effect_image_bounds(struct d2d_device_context *context, ID2D1Image *
             bounds->top -= radius_y;
             bounds->right += radius_x;
             bounds->bottom += radius_y;
+        }
+        goto done;
+    }
+    if (d2d_effect_get_custom_render_info(effect) || IsEqualGUID(&clsid, &CLSID_D2D1Composite))
+    {
+        UINT32 count = ID2D1Effect_GetInputCount(effect);
+
+        d2d_rect_set(bounds, 0.0f, 0.0f, 0.0f, 0.0f);
+        for (i = 0; i < count; ++i)
+        {
+            D2D1_RECT_F input_bounds;
+
+            ID2D1Effect_GetInput(effect, i, &input);
+            if (!input) {hr = D2DERR_WRONG_STATE; goto done;}
+            hr = d2d_effect_image_bounds(context, input, &frame, mode, &input_bounds);
+            ID2D1Image_Release(input);
+            if (FAILED(hr)) goto done;
+            if (!i)
+            {
+                *bounds = input_bounds;
+            }
+            else
+            {
+                bounds->left = min(bounds->left, input_bounds.left);
+                bounds->top = min(bounds->top, input_bounds.top);
+                bounds->right = max(bounds->right, input_bounds.right);
+                bounds->bottom = max(bounds->bottom, input_bounds.bottom);
+            }
         }
         goto done;
     }
@@ -3915,137 +4040,6 @@ static HRESULT d2d_device_context_draw_color_matrix(struct d2d_device_context *c
     return hr;
 }
 
-static HRESULT d2d_shadow_pass(struct d2d_device_context *context, ID2D1Bitmap *input,
-        const D2D1_RECT_F *input_bounds, const D2D1_RECT_F *bounds, float scale_x, float scale_y,
-        float sigma, BOOL vertical, const D2D1_VECTOR_4F *color, ID2D1Bitmap **output)
-{
-    D2D1_PIXEL_FORMAT format = {DXGI_FORMAT_R32G32B32A32_FLOAT, D2D1_ALPHA_MODE_PREMULTIPLIED};
-    D2D1_BITMAP_BRUSH_PROPERTIES1 bitmap_desc = {D2D1_EXTEND_MODE_CLAMP,
-            D2D1_EXTEND_MODE_CLAMP, D2D1_INTERPOLATION_MODE_LINEAR};
-    D2D1_BRUSH_PROPERTIES brush_desc = {1.0f};
-    D2D1_COLOR_F transparent = {0};
-    ID2D1BitmapRenderTarget *target = NULL;
-    ID2D1DeviceContext6 *iface = NULL;
-    struct d2d_device_context *child;
-    struct d2d_brush *brush = NULL;
-    D2D1_SIZE_U input_size = ID2D1Bitmap_GetPixelSize(input);
-    D2D1_SIZE_U size;
-    D2D1_RECT_F rect;
-    D2D1_VECTOR_4F kernel;
-    HRESULT hr, end_hr;
-    UINT32 max_size = ID2D1DeviceContext6_GetMaximumBitmapSize(&context->ID2D1DeviceContext6_iface);
-    float width = roundf((bounds->right - bounds->left) * scale_x);
-    float height = roundf((bounds->bottom - bounds->top) * scale_y);
-
-    *output = NULL;
-    if (!isfinite(width) || !isfinite(height) || width > max_size || height > max_size)
-        return D2DERR_EXCEEDS_MAX_BITMAP_SIZE;
-    if (width <= 0.0f || height <= 0.0f || input_size.width <= 0.0f || input_size.height <= 0.0f)
-        return E_INVALIDARG;
-    size.width = width;
-    size.height = height;
-    if (FAILED(hr = ID2D1DeviceContext6_CreateCompatibleRenderTarget(&context->ID2D1DeviceContext6_iface,
-            NULL, &size, &format, D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE, &target))) goto done;
-    if (FAILED(hr = ID2D1BitmapRenderTarget_QueryInterface(target, &IID_ID2D1DeviceContext6,
-            (void **)&iface))) goto done;
-    child = impl_from_ID2D1DeviceContext(iface);
-    ID2D1DeviceContext6_SetDpi(iface, 96.0f, 96.0f);
-    ID2D1DeviceContext6_SetUnitMode(iface, D2D1_UNIT_MODE_PIXELS);
-    brush_desc.transform = identity;
-    brush_desc.transform._11 = (input_bounds->right - input_bounds->left) * scale_x / input_size.width;
-    brush_desc.transform._22 = (input_bounds->bottom - input_bounds->top) * scale_y / input_size.height;
-    brush_desc.transform._31 = (input_bounds->left - bounds->left) * scale_x;
-    brush_desc.transform._32 = (input_bounds->top - bounds->top) * scale_y;
-    if (FAILED(hr = d2d_bitmap_brush_create(context->factory, input, &bitmap_desc, &brush_desc, &brush)))
-        goto done;
-    kernel.x = vertical ? 0.0f : 1.0f / ((input_bounds->right - input_bounds->left) * scale_x);
-    kernel.y = vertical ? 1.0f / ((input_bounds->bottom - input_bounds->top) * scale_y) : 0.0f;
-    kernel.z = sigma;
-    kernel.w = ceilf(3.0f * sigma);
-    d2d_rect_set(&rect, 0.0f, 0.0f, width, height);
-    ID2D1DeviceContext6_BeginDraw(iface);
-    ID2D1DeviceContext6_Clear(iface, &transparent);
-    child->shadow_kernel = &kernel;
-    child->shadow_color = color;
-    ID2D1DeviceContext6_FillRectangle(iface, &rect, &brush->ID2D1Brush_iface);
-    child->shadow_kernel = NULL;
-    child->shadow_color = NULL;
-    end_hr = ID2D1DeviceContext6_EndDraw(iface, NULL, NULL);
-    if (FAILED(end_hr)) {hr = end_hr; goto done;}
-    hr = ID2D1BitmapRenderTarget_GetBitmap(target, output);
-done:
-    if (brush) ID2D1Brush_Release(&brush->ID2D1Brush_iface);
-    if (iface) ID2D1DeviceContext6_Release(iface);
-    if (target) ID2D1BitmapRenderTarget_Release(target);
-    return hr;
-}
-
-static HRESULT d2d_device_context_draw_shadow(struct d2d_device_context *context, ID2D1Effect *effect,
-        const D2D1_POINT_2F *offset, const D2D1_RECT_F *image_rect, D2D1_INTERPOLATION_MODE interpolation_mode,
-        const struct d2d_effect_frame *parent)
-{
-    struct d2d_effect_frame frame = {effect, parent};
-    const struct d2d_effect_frame *ancestor;
-    ID2D1Bitmap *bitmap = NULL, *horizontal = NULL, *shadow = NULL;
-    ID2D1Image *input;
-    D2D1_VECTOR_4F color, white = {1.0f, 1.0f, 1.0f, 1.0f};
-    D2D1_RECT_F input_bounds, bounds, source, destination;
-    BOOL pixels = context->drawing_state.unitMode == D2D1_UNIT_MODE_PIXELS;
-    float scale_x = pixels ? 1.0f : context->desc.dpiX / 96.0f;
-    float scale_y = pixels ? 1.0f : context->desc.dpiY / 96.0f;
-    float sigma, sigma_x, sigma_y;
-    HRESULT hr;
-
-    for (ancestor = parent; ancestor; ancestor = ancestor->parent)
-        if (ancestor->effect == effect) return D2DERR_CYCLIC_GRAPH;
-    if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION,
-            D2D1_PROPERTY_TYPE_FLOAT, (BYTE *)&sigma, sizeof(sigma)))) return hr;
-    if (!isfinite(sigma) || sigma < 0.0f) return E_INVALIDARG;
-    if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_SHADOW_PROP_COLOR,
-            D2D1_PROPERTY_TYPE_VECTOR4, (BYTE *)&color, sizeof(color)))) return hr;
-    ID2D1Effect_GetInput(effect, 0, &input);
-    if (!input) return D2DERR_WRONG_STATE;
-    hr = d2d_effect_input_bitmap(context, input, &frame, &bitmap, &input_bounds);
-    ID2D1Image_Release(input);
-    if (FAILED(hr)) return hr;
-    if (input_bounds.right <= input_bounds.left || input_bounds.bottom <= input_bounds.top) goto done;
-    sigma_x = sigma * context->desc.dpiX / 96.0f;
-    sigma_y = sigma * context->desc.dpiY / 96.0f;
-    bounds.left = floorf(input_bounds.left * scale_x - 3.0f * sigma_x) / scale_x;
-    bounds.top = floorf(input_bounds.top * scale_y - 3.0f * sigma_y) / scale_y;
-    bounds.right = ceilf(input_bounds.right * scale_x + 3.0f * sigma_x) / scale_x;
-    bounds.bottom = ceilf(input_bounds.bottom * scale_y + 3.0f * sigma_y) / scale_y;
-    if (FAILED(hr = d2d_shadow_pass(context, bitmap, &input_bounds, &bounds, scale_x, scale_y,
-            sigma_x, FALSE, &white, &horizontal))) goto done;
-    if (FAILED(hr = d2d_shadow_pass(context, horizontal, &bounds, &bounds, scale_x, scale_y,
-            sigma_y, TRUE, &color, &shadow))) goto done;
-    source = bounds;
-    if (image_rect) d2d_rect_intersect(&source, image_rect);
-    if (source.right > source.left && source.bottom > source.top)
-    {
-        destination = source;
-        if (image_rect)
-        {
-            destination.left -= image_rect->left;
-            destination.right -= image_rect->left;
-            destination.top -= image_rect->top;
-            destination.bottom -= image_rect->top;
-        }
-        source.left = (source.left - bounds.left) * scale_x;
-        source.top = (source.top - bounds.top) * scale_y;
-        source.right = (source.right - bounds.left) * scale_x;
-        source.bottom = (source.bottom - bounds.top) * scale_y;
-        d2d_device_context_draw_bitmap(context, shadow, &destination, 1.0f,
-                interpolation_mode, &source, offset, NULL);
-        hr = context->error.code;
-    }
-done:
-    if (shadow) ID2D1Bitmap_Release(shadow);
-    if (horizontal) ID2D1Bitmap_Release(horizontal);
-    ID2D1Bitmap_Release(bitmap);
-    return hr;
-}
-
 static HRESULT d2d_device_context_draw_affine(struct d2d_device_context *context, ID2D1Effect *effect,
         const D2D1_POINT_2F *offset, const D2D1_RECT_F *image_rect, const struct d2d_effect_frame *parent)
 {
@@ -4138,22 +4132,886 @@ done:
     return hr;
 }
 
+/* What Direct2D gives a custom pixel shader: the pixel, the position in the scene, and
+ * for each input its texture coordinates with the size of a texel in them. */
+static const char custom_effect_vs_code[] =
+    "cbuffer transform : register(b0)\n"
+    "{\n"
+    "    float4 scene;\n" /* left, top, width, height */
+    "    float4 uv[8];\n" /* x, y, width, height of the output in each input */
+    "    float4 texel[8];\n"
+    "};\n"
+    "\n"
+    "struct output\n"
+    "{\n"
+    "    float4 position : SV_POSITION;\n"
+    "    float4 scene_position : SCENE_POSITION;\n"
+    "    float4 t0 : TEXCOORD0;\n"
+    "    float4 t1 : TEXCOORD1;\n"
+    "    float4 t2 : TEXCOORD2;\n"
+    "    float4 t3 : TEXCOORD3;\n"
+    "    float4 t4 : TEXCOORD4;\n"
+    "    float4 t5 : TEXCOORD5;\n"
+    "    float4 t6 : TEXCOORD6;\n"
+    "    float4 t7 : TEXCOORD7;\n"
+    "};\n"
+    "\n"
+    "float4 coordinates(uint i, float2 p)\n"
+    "{\n"
+    "    return float4(uv[i].xy + p * uv[i].zw, texel[i].xy);\n"
+    "}\n"
+    "\n"
+    "output main(uint id : SV_VertexID)\n"
+    "{\n"
+    "    float2 p = float2(id & 1, id >> 1);\n"
+    "    output o;\n"
+    "    o.position = float4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);\n"
+    "    o.scene_position = float4(scene.xy + p * scene.zw, 0.0, 1.0);\n"
+    "    o.t0 = coordinates(0, p);\n"
+    "    o.t1 = coordinates(1, p);\n"
+    "    o.t2 = coordinates(2, p);\n"
+    "    o.t3 = coordinates(3, p);\n"
+    "    o.t4 = coordinates(4, p);\n"
+    "    o.t5 = coordinates(5, p);\n"
+    "    o.t6 = coordinates(6, p);\n"
+    "    o.t7 = coordinates(7, p);\n"
+    "    return o;\n"
+    "}\n";
+
+/* {6f3a1f52-7a0e-4b6e-9d57-2a4c5d0e7b11}, a key of our own in the device's shader table. */
+static const GUID custom_effect_vs_id =
+        {0x6f3a1f52, 0x7a0e, 0x4b6e, {0x9d, 0x57, 0x2a, 0x4c, 0x5d, 0x0e, 0x7b, 0x11}};
+
+static HRESULT d2d_effect_compile(const char *code, size_t size, const char *target, ID3DBlob **blob)
+{
+    ID3DBlob *errors = NULL;
+    HRESULT hr;
+
+    if (FAILED(hr = D3DCompile(code, size, "d2d_effect", NULL, NULL, "main", target, 0, 0, blob, &errors)))
+        ERR("Failed to compile an effect shader, hr %#lx: %s.\n", hr,
+                errors ? (const char *)ID3D10Blob_GetBufferPointer(errors) : "");
+    if (errors) ID3D10Blob_Release(errors);
+    return hr;
+}
+
+static HRESULT d2d_effect_get_vs(struct d2d_device_context *context, ID3D11VertexShader **shader)
+{
+    struct d2d_device *device = context->device;
+    IUnknown *object;
+    ID3DBlob *code;
+    HRESULT hr;
+
+    if (d2d_device_get_indexed_object(&device->shaders, &custom_effect_vs_id, &object))
+        return IUnknown_QueryInterface(object, &IID_ID3D11VertexShader, (void **)shader);
+    if (FAILED(hr = d2d_effect_compile(custom_effect_vs_code, sizeof(custom_effect_vs_code) - 1, "vs_4_0", &code)))
+        return hr;
+    hr = ID3D11Device1_CreateVertexShader(context->d3d_device, ID3D10Blob_GetBufferPointer(code),
+            ID3D10Blob_GetBufferSize(code), NULL, shader);
+    ID3D10Blob_Release(code);
+    if (SUCCEEDED(hr))
+        hr = d2d_device_add_indexed_object(&device->shaders, &custom_effect_vs_id, (IUnknown *)*shader);
+    return hr;
+}
+
+static HRESULT d2d_effect_get_ps(struct d2d_device_context *context, const GUID *id, const char *source,
+        size_t size, ID3D11PixelShader **shader)
+{
+    struct d2d_device *device = context->device;
+    IUnknown *object;
+    ID3DBlob *code;
+    HRESULT hr;
+
+    if (d2d_device_get_indexed_object(&device->shaders, id, &object))
+        return IUnknown_QueryInterface(object, &IID_ID3D11PixelShader, (void **)shader);
+    if (FAILED(hr = d2d_effect_compile(source, size, "ps_4_0", &code)))
+        return hr;
+    hr = ID3D11Device1_CreatePixelShader(context->d3d_device, ID3D10Blob_GetBufferPointer(code),
+            ID3D10Blob_GetBufferSize(code), NULL, shader);
+    ID3D10Blob_Release(code);
+    if (SUCCEEDED(hr))
+        hr = d2d_device_add_indexed_object(&device->shaders, id, (IUnknown *)*shader);
+    return hr;
+}
+
+/* One pass over a bitmap the size of an effect's output: a quad covering it, with a pixel
+ * shader reading from the inputs. */
+struct d2d_effect_pass
+{
+    ID3D11PixelShader *ps;
+    const void *constants;
+    UINT32 constants_size;
+    D3D11_FILTER filter;
+    D3D11_TEXTURE_ADDRESS_MODE address;
+    ID3D11BlendState *blend;
+    BOOL clear;
+    ID2D1Bitmap *const *inputs;
+    const D2D1_RECT_F *input_bounds;
+    UINT32 input_count;
+};
+
+static HRESULT d2d_effect_run_pass(struct d2d_device_context *context, const struct d2d_effect_pass *pass,
+        struct d2d_bitmap *output, D2D1_SIZE_U size, const D2D1_RECT_F *bounds, float scale_x, float scale_y)
+{
+    static const float transparent[4];
+    ID3D11ShaderResourceView *srvs[8] = {NULL};
+    ID3D11SamplerState *samplers[8] = {NULL};
+    ID3D11Buffer *vs_cb = NULL, *ps_cb = NULL;
+    ID3D11VertexShader *vs = NULL;
+    ID3D11Multithread *multithread = NULL;
+    ID3DDeviceContextState *prev_state;
+    ID3D11DeviceContext1 *d3d_context;
+    D3D11_SUBRESOURCE_DATA data = {0};
+    D3D11_BUFFER_DESC buffer_desc = {0};
+    D3D11_VIEWPORT vp;
+    struct
+    {
+        float scene[4];
+        float uv[8][4];
+        float texel[8][4];
+    } transform = {{0}};
+    UINT32 i;
+    HRESULT hr;
+
+    if (!output->rtv || pass->input_count > ARRAY_SIZE(srvs))
+        return D2DERR_UNSUPPORTED_OPERATION;
+    if (FAILED(hr = d2d_effect_get_vs(context, &vs)))
+        return hr;
+
+    transform.scene[0] = bounds->left * scale_x;
+    transform.scene[1] = bounds->top * scale_y;
+    transform.scene[2] = size.width;
+    transform.scene[3] = size.height;
+    for (i = 0; i < pass->input_count; ++i)
+    {
+        D2D1_SIZE_U input_size = ID2D1Bitmap_GetPixelSize(pass->inputs[i]);
+        float width = pass->input_bounds[i].right - pass->input_bounds[i].left;
+        float height = pass->input_bounds[i].bottom - pass->input_bounds[i].top;
+        D3D11_SAMPLER_DESC sampler_desc = {0};
+
+        if (!(width > 0.0f) || !(height > 0.0f) || !input_size.width || !input_size.height)
+        {
+            hr = D2DERR_UNSUPPORTED_OPERATION;
+            goto done;
+        }
+        transform.uv[i][0] = (bounds->left - pass->input_bounds[i].left) / width;
+        transform.uv[i][1] = (bounds->top - pass->input_bounds[i].top) / height;
+        transform.uv[i][2] = (bounds->right - bounds->left) / width;
+        transform.uv[i][3] = (bounds->bottom - bounds->top) / height;
+        transform.texel[i][0] = 1.0f / input_size.width;
+        transform.texel[i][1] = 1.0f / input_size.height;
+
+        srvs[i] = unsafe_impl_from_ID2D1Bitmap(pass->inputs[i])->srv;
+        sampler_desc.Filter = pass->filter;
+        sampler_desc.AddressU = sampler_desc.AddressV = sampler_desc.AddressW = pass->address;
+        sampler_desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+        sampler_desc.MaxLOD = D3D11_FLOAT32_MAX;
+        if (FAILED(hr = ID3D11Device1_CreateSamplerState(context->d3d_device, &sampler_desc, &samplers[i])))
+            goto done;
+    }
+
+    buffer_desc.Usage = D3D11_USAGE_DEFAULT;
+    buffer_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    buffer_desc.ByteWidth = sizeof(transform);
+    data.pSysMem = &transform;
+    if (FAILED(hr = ID3D11Device1_CreateBuffer(context->d3d_device, &buffer_desc, &data, &vs_cb)))
+        goto done;
+    if (pass->constants_size)
+    {
+        BYTE *padded;
+
+        /* Constant buffers come in whole multiples of 16 bytes. */
+        buffer_desc.ByteWidth = (pass->constants_size + 15) & ~15u;
+        if (!(padded = calloc(1, buffer_desc.ByteWidth)))
+        {
+            hr = E_OUTOFMEMORY;
+            goto done;
+        }
+        memcpy(padded, pass->constants, pass->constants_size);
+        data.pSysMem = padded;
+        hr = ID3D11Device1_CreateBuffer(context->d3d_device, &buffer_desc, &data, &ps_cb);
+        free(padded);
+        if (FAILED(hr))
+            goto done;
+    }
+
+    vp.TopLeftX = 0.0f;
+    vp.TopLeftY = 0.0f;
+    vp.Width = size.width;
+    vp.Height = size.height;
+    vp.MinDepth = 0.0f;
+    vp.MaxDepth = 1.0f;
+
+    if (context->cs)
+        EnterCriticalSection(context->cs);
+    ID3D11Device1_GetImmediateContext1(context->d3d_device, &d3d_context);
+    if (SUCCEEDED(ID3D11DeviceContext1_QueryInterface(d3d_context, &IID_ID3D11Multithread,
+            (void **)&multithread)))
+        ID3D11Multithread_Enter(multithread);
+    ID3D11DeviceContext1_SwapDeviceContextState(d3d_context, context->d3d_state, &prev_state);
+
+    if (pass->clear)
+        ID3D11DeviceContext1_ClearRenderTargetView(d3d_context, output->rtv, transparent);
+    ID3D11DeviceContext1_IASetInputLayout(d3d_context, NULL);
+    ID3D11DeviceContext1_IASetPrimitiveTopology(d3d_context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+    ID3D11DeviceContext1_VSSetShader(d3d_context, vs, NULL, 0);
+    ID3D11DeviceContext1_VSSetConstantBuffers(d3d_context, 0, 1, &vs_cb);
+    ID3D11DeviceContext1_PSSetShader(d3d_context, pass->ps, NULL, 0);
+    ID3D11DeviceContext1_PSSetConstantBuffers(d3d_context, 0, 1, &ps_cb);
+    ID3D11DeviceContext1_PSSetShaderResources(d3d_context, 0, pass->input_count, srvs);
+    ID3D11DeviceContext1_PSSetSamplers(d3d_context, 0, pass->input_count, samplers);
+    ID3D11DeviceContext1_RSSetViewports(d3d_context, 1, &vp);
+    ID3D11DeviceContext1_RSSetState(d3d_context, NULL);
+    ID3D11DeviceContext1_OMSetBlendState(d3d_context, pass->blend, NULL, D3D11_DEFAULT_SAMPLE_MASK);
+    ID3D11DeviceContext1_OMSetRenderTargets(d3d_context, 1, &output->rtv, NULL);
+    ID3D11DeviceContext1_Draw(d3d_context, 4, 0);
+
+    /* The output may be read next, and the inputs drawn into. */
+    memset(srvs, 0, sizeof(srvs));
+    ID3D11DeviceContext1_PSSetShaderResources(d3d_context, 0, pass->input_count, srvs);
+    ID3D11DeviceContext1_OMSetRenderTargets(d3d_context, 0, NULL, NULL);
+
+    ID3D11DeviceContext1_SwapDeviceContextState(d3d_context, prev_state, NULL);
+    if (multithread)
+    {
+        ID3D11Multithread_Leave(multithread);
+        ID3D11Multithread_Release(multithread);
+    }
+    ID3D11DeviceContext1_Release(d3d_context);
+    ID3DDeviceContextState_Release(prev_state);
+    if (context->cs)
+        LeaveCriticalSection(context->cs);
+
+done:
+    for (i = 0; i < ARRAY_SIZE(samplers); ++i)
+        if (samplers[i]) ID3D11SamplerState_Release(samplers[i]);
+    if (ps_cb) ID3D11Buffer_Release(ps_cb);
+    if (vs_cb) ID3D11Buffer_Release(vs_cb);
+    ID3D11VertexShader_Release(vs);
+    return hr;
+}
+
+/* A bitmap to run passes on, covering the bounds. */
+static HRESULT d2d_effect_create_output(struct d2d_device_context *context, const D2D1_RECT_F *bounds,
+        float scale_x, float scale_y, D2D1_SIZE_U *size, ID2D1Bitmap **output)
+{
+    D2D1_PIXEL_FORMAT format = {DXGI_FORMAT_R32G32B32A32_FLOAT, D2D1_ALPHA_MODE_PREMULTIPLIED};
+    UINT32 max_size = ID2D1DeviceContext6_GetMaximumBitmapSize(&context->ID2D1DeviceContext6_iface);
+    float width = ceilf((bounds->right - bounds->left) * scale_x);
+    float height = ceilf((bounds->bottom - bounds->top) * scale_y);
+    ID2D1BitmapRenderTarget *target;
+    HRESULT hr;
+
+    *output = NULL;
+    if (!isfinite(width) || !isfinite(height) || width > max_size || height > max_size)
+        return D2DERR_EXCEEDS_MAX_BITMAP_SIZE;
+    size->width = max(width, 1.0f);
+    size->height = max(height, 1.0f);
+    if (FAILED(hr = ID2D1DeviceContext6_CreateCompatibleRenderTarget(&context->ID2D1DeviceContext6_iface,
+            NULL, size, &format, D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE, &target)))
+        return hr;
+    if (context->drawing_state.unitMode == D2D1_UNIT_MODE_PIXELS)
+        ID2D1BitmapRenderTarget_SetDpi(target, context->desc.dpiX, context->desc.dpiY);
+    hr = ID2D1BitmapRenderTarget_GetBitmap(target, output);
+    ID2D1BitmapRenderTarget_Release(target);
+    return hr;
+}
+
+/* Draw an effect's finished output, whose top left is at the bounds' in the effect's space. */
+static HRESULT d2d_effect_draw_output(struct d2d_device_context *context, ID2D1Bitmap *output,
+        const D2D1_RECT_F *bounds, const D2D1_POINT_2F *offset, const D2D1_RECT_F *image_rect,
+        D2D1_INTERPOLATION_MODE interpolation_mode)
+{
+    D2D1_RECT_F source = *bounds;
+    D2D1_POINT_2F destination;
+
+    if (image_rect)
+        d2d_rect_intersect(&source, image_rect);
+    if (source.right <= source.left || source.bottom <= source.top)
+        return S_OK;
+    destination.x = source.left - (image_rect ? image_rect->left : 0.0f) + (offset ? offset->x : 0.0f);
+    destination.y = source.top - (image_rect ? image_rect->top : 0.0f) + (offset ? offset->y : 0.0f);
+    source.left -= bounds->left;
+    source.top -= bounds->top;
+    source.right -= bounds->left;
+    source.bottom -= bounds->top;
+    ID2D1DeviceContext6_DrawImage(&context->ID2D1DeviceContext6_iface, (ID2D1Image *)output, &destination,
+            &source, interpolation_mode, D2D1_COMPOSITE_MODE_SOURCE_OVER);
+    return context->error.code;
+}
+
+/* Render all of an effect's inputs to bitmaps, and find what they cover together. */
+static HRESULT d2d_effect_get_inputs(struct d2d_device_context *context, ID2D1Effect *effect,
+        const struct d2d_effect_frame *frame, ID2D1Bitmap **inputs, D2D1_RECT_F *input_bounds,
+        UINT32 count, D2D1_RECT_F *bounds)
+{
+    ID2D1Image *input;
+    HRESULT hr;
+    UINT32 i;
+
+    for (i = 0; i < count; ++i)
+    {
+        ID2D1Effect_GetInput(effect, i, &input);
+        if (!input)
+            return D2DERR_WRONG_STATE;
+        hr = d2d_effect_input_bitmap(context, input, frame, &inputs[i], &input_bounds[i]);
+        ID2D1Image_Release(input);
+        if (FAILED(hr))
+            return hr;
+        if (!i)
+        {
+            *bounds = input_bounds[0];
+        }
+        else
+        {
+            bounds->left = min(bounds->left, input_bounds[i].left);
+            bounds->top = min(bounds->top, input_bounds[i].top);
+            bounds->right = max(bounds->right, input_bounds[i].right);
+            bounds->bottom = max(bounds->bottom, input_bounds[i].bottom);
+        }
+    }
+    return S_OK;
+}
+
+/* An effect with a pixel shader of its own, such as Office's. */
+static HRESULT d2d_device_context_draw_custom(struct d2d_device_context *context, ID2D1Effect *effect,
+        const struct d2d_render_info *info, const D2D1_POINT_2F *offset, const D2D1_RECT_F *image_rect,
+        D2D1_INTERPOLATION_MODE interpolation_mode, const struct d2d_effect_frame *parent)
+{
+    ID2D1Bitmap *inputs[ARRAY_SIZE(info->input_descriptions)] = {NULL}, *output = NULL;
+    D2D1_RECT_F input_bounds[ARRAY_SIZE(info->input_descriptions)], bounds;
+    struct d2d_effect_frame frame = {effect, parent};
+    const struct d2d_effect_frame *ancestor;
+    BOOL pixels = context->drawing_state.unitMode == D2D1_UNIT_MODE_PIXELS;
+    float scale_x = pixels ? 1.0f : context->desc.dpiX / 96.0f;
+    float scale_y = pixels ? 1.0f : context->desc.dpiY / 96.0f;
+    UINT32 input_count = ID2D1Effect_GetInputCount(effect), i;
+    struct d2d_effect_pass pass = {0};
+    ID3D11PixelShader *ps = NULL;
+    D2D1_SIZE_U size;
+    HRESULT hr;
+
+    for (ancestor = parent; ancestor; ancestor = ancestor->parent)
+        if (ancestor->effect == effect) return D2DERR_CYCLIC_GRAPH;
+    if (!input_count || input_count > ARRAY_SIZE(inputs))
+        return D2DERR_UNSUPPORTED_OPERATION;
+    if (FAILED(hr = d2d_effect_get_pixel_shader(context, &info->pixel_shader, &ps)))
+        return hr;
+
+    /* The effect sets its shader's constants here, from its current properties. */
+    if (FAILED(hr = d2d_effect_prepare_for_render(effect)))
+        goto done;
+    if (FAILED(hr = d2d_effect_get_inputs(context, effect, &frame, inputs, input_bounds, input_count, &bounds)))
+        goto done;
+    if (bounds.right <= bounds.left || bounds.bottom <= bounds.top)
+        goto done;
+    if (FAILED(hr = d2d_effect_create_output(context, &bounds, scale_x, scale_y, &size, &output)))
+        goto done;
+
+    pass.ps = ps;
+    pass.constants = info->ps_constants;
+    pass.constants_size = info->ps_constants_size;
+    pass.filter = info->input_described[0] ? (D3D11_FILTER)info->input_descriptions[0].filter
+            : D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    pass.address = D3D11_TEXTURE_ADDRESS_BORDER;
+    pass.clear = TRUE;
+    pass.inputs = inputs;
+    pass.input_bounds = input_bounds;
+    pass.input_count = input_count;
+    if (SUCCEEDED(hr = d2d_effect_run_pass(context, &pass, unsafe_impl_from_ID2D1Bitmap(output), size,
+            &bounds, scale_x, scale_y)))
+        hr = d2d_effect_draw_output(context, output, &bounds, offset, image_rect, interpolation_mode);
+
+done:
+    if (output) ID2D1Bitmap_Release(output);
+    for (i = 0; i < ARRAY_SIZE(inputs); ++i)
+        if (inputs[i]) ID2D1Bitmap_Release(inputs[i]);
+    ID3D11PixelShader_Release(ps);
+    return hr;
+}
+
+static const char effect_blur_ps_code[] =
+    "Texture2D t : register(t0);\n"
+    "SamplerState s : register(s0);\n"
+    "cbuffer blur : register(b0)\n"
+    "{\n"
+    "    float2 direction;\n" /* a pixel, in texture coordinates */
+    "    float sigma;\n"
+    "    float radius;\n"
+    "    float stride;\n"
+    "};\n"
+    "\n"
+    "float4 main(float4 position : SV_POSITION, float4 scene : SCENE_POSITION,\n"
+    "        float4 uv : TEXCOORD0) : SV_TARGET\n"
+    "{\n"
+    "    float4 colour = float4(0.0, 0.0, 0.0, 0.0);\n"
+    "    float total = 0.0, i;\n"
+    "\n"
+    "    for (i = -radius; i <= radius; i += stride)\n"
+    "    {\n"
+    "        float weight = exp(-i * i / (2.0 * sigma * sigma));\n"
+    "        colour += t.SampleLevel(s, uv.xy + direction * i, 0.0) * weight;\n"
+    "        total += weight;\n"
+    "    }\n"
+    "    return colour / total;\n"
+    "}\n";
+
+static const char effect_copy_ps_code[] =
+    "Texture2D t : register(t0);\n"
+    "SamplerState s : register(s0);\n"
+    "\n"
+    "float4 main(float4 position : SV_POSITION, float4 scene : SCENE_POSITION,\n"
+    "        float4 uv : TEXCOORD0) : SV_TARGET\n"
+    "{\n"
+    "    return t.SampleLevel(s, uv.xy, 0.0);\n"
+    "}\n";
+
+/* {6f3a1f53-7a0e-4b6e-9d57-2a4c5d0e7b11} and {6f3a1f54-...}, keys of our own too. */
+static const GUID effect_blur_ps_id =
+        {0x6f3a1f53, 0x7a0e, 0x4b6e, {0x9d, 0x57, 0x2a, 0x4c, 0x5d, 0x0e, 0x7b, 0x11}};
+static const GUID effect_copy_ps_id =
+        {0x6f3a1f54, 0x7a0e, 0x4b6e, {0x9d, 0x57, 0x2a, 0x4c, 0x5d, 0x0e, 0x7b, 0x11}};
+
+/* (x, y) is the blur's direction, of unit length, in the output's pixels. */
+static HRESULT d2d_effect_blur_pass(struct d2d_device_context *context, ID3D11PixelShader *ps, ID2D1Bitmap *input,
+        const D2D1_RECT_F *input_bounds, const D2D1_RECT_F *bounds, float scale_x, float scale_y, float sigma,
+        float x, float y, D3D11_TEXTURE_ADDRESS_MODE address, ID2D1Bitmap **output)
+{
+    D2D1_SIZE_U input_size = ID2D1Bitmap_GetPixelSize(input), size;
+    struct
+    {
+        float direction[2];
+        float sigma;
+        float radius;
+        float stride;
+    } constants;
+    struct d2d_effect_pass pass = {0};
+    HRESULT hr;
+
+    if (FAILED(hr = d2d_effect_create_output(context, bounds, scale_x, scale_y, &size, output)))
+        return hr;
+
+    constants.direction[0] = x / input_size.width;
+    constants.direction[1] = y / input_size.height;
+    constants.sigma = sigma;
+    constants.radius = ceilf(3.0f * sigma);
+    /* Linear filtering averages between the pixels skipped, so a large blur still
+     * looks smooth with a bounded number of samples. */
+    constants.stride = max(1.0f, ceilf(constants.radius / 32.0f));
+
+    pass.ps = ps;
+    pass.constants = &constants;
+    pass.constants_size = sizeof(constants);
+    pass.filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    pass.address = address;
+    pass.clear = TRUE;
+    pass.inputs = &input;
+    pass.input_bounds = input_bounds;
+    pass.input_count = 1;
+    return d2d_effect_run_pass(context, &pass, unsafe_impl_from_ID2D1Bitmap(*output), size, bounds, scale_x, scale_y);
+}
+
+static HRESULT d2d_device_context_draw_blur(struct d2d_device_context *context, ID2D1Effect *effect,
+        const D2D1_POINT_2F *offset, const D2D1_RECT_F *image_rect, D2D1_INTERPOLATION_MODE interpolation_mode,
+        const struct d2d_effect_frame *parent)
+{
+    ID2D1Bitmap *input = NULL, *horizontal = NULL, *vertical = NULL;
+    struct d2d_effect_frame frame = {effect, parent};
+    const struct d2d_effect_frame *ancestor;
+    BOOL pixels = context->drawing_state.unitMode == D2D1_UNIT_MODE_PIXELS;
+    float scale_x = pixels ? 1.0f : context->desc.dpiX / 96.0f;
+    float scale_y = pixels ? 1.0f : context->desc.dpiY / 96.0f;
+    D2D1_RECT_F input_bounds, bounds;
+    D3D11_TEXTURE_ADDRESS_MODE address;
+    ID3D11PixelShader *ps = NULL;
+    D2D1_BORDER_MODE border;
+    float sigma, sigma_x, sigma_y;
+    HRESULT hr;
+
+    for (ancestor = parent; ancestor; ancestor = ancestor->parent)
+        if (ancestor->effect == effect) return D2DERR_CYCLIC_GRAPH;
+    if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION,
+            D2D1_PROPERTY_TYPE_FLOAT, (BYTE *)&sigma, sizeof(sigma))))
+        return hr;
+    if (!isfinite(sigma) || sigma < 0.0f)
+        return E_INVALIDARG;
+    if (FAILED(ID2D1Effect_GetValue(effect, D2D1_GAUSSIANBLUR_PROP_BORDER_MODE,
+            D2D1_PROPERTY_TYPE_ENUM, (BYTE *)&border, sizeof(border))))
+        border = D2D1_BORDER_MODE_SOFT;
+    if (FAILED(hr = d2d_effect_get_inputs(context, effect, &frame, &input, &input_bounds, 1, &bounds)))
+        goto done;
+    if (bounds.right <= bounds.left || bounds.bottom <= bounds.top)
+        goto done;
+
+    /* The deviation is in DIPs whatever the unit mode. */
+    sigma_x = sigma * context->desc.dpiX / 96.0f;
+    sigma_y = sigma * context->desc.dpiY / 96.0f;
+    if (sigma_x < 0.01f && sigma_y < 0.01f)
+    {
+        hr = d2d_effect_draw_output(context, input, &bounds, offset, image_rect, interpolation_mode);
+        goto done;
+    }
+
+    if (border == D2D1_BORDER_MODE_HARD)
+    {
+        address = D3D11_TEXTURE_ADDRESS_CLAMP;
+    }
+    else
+    {
+        /* Outside the input is transparent, and the blur spreads out into it. */
+        address = D3D11_TEXTURE_ADDRESS_BORDER;
+        bounds.left = floorf(bounds.left * scale_x - 3.0f * sigma_x) / scale_x;
+        bounds.top = floorf(bounds.top * scale_y - 3.0f * sigma_y) / scale_y;
+        bounds.right = ceilf(bounds.right * scale_x + 3.0f * sigma_x) / scale_x;
+        bounds.bottom = ceilf(bounds.bottom * scale_y + 3.0f * sigma_y) / scale_y;
+    }
+
+    if (FAILED(hr = d2d_effect_get_ps(context, &effect_blur_ps_id, effect_blur_ps_code,
+            sizeof(effect_blur_ps_code) - 1, &ps)))
+        goto done;
+    if (FAILED(hr = d2d_effect_blur_pass(context, ps, input, &input_bounds, &bounds, scale_x, scale_y,
+            max(sigma_x, 0.01f), 1.0f, 0.0f, address, &horizontal)))
+        goto done;
+    if (FAILED(hr = d2d_effect_blur_pass(context, ps, horizontal, &bounds, &bounds, scale_x, scale_y,
+            max(sigma_y, 0.01f), 0.0f, 1.0f, address, &vertical)))
+        goto done;
+    hr = d2d_effect_draw_output(context, vertical, &bounds, offset, image_rect, interpolation_mode);
+
+done:
+    if (ps) ID3D11PixelShader_Release(ps);
+    if (vertical) ID2D1Bitmap_Release(vertical);
+    if (horizontal) ID2D1Bitmap_Release(horizontal);
+    if (input) ID2D1Bitmap_Release(input);
+    return hr;
+}
+
+/* A blur along one line, at an angle counterclockwise from the x axis. */
+static HRESULT d2d_device_context_draw_directional_blur(struct d2d_device_context *context, ID2D1Effect *effect,
+        const D2D1_POINT_2F *offset, const D2D1_RECT_F *image_rect, D2D1_INTERPOLATION_MODE interpolation_mode,
+        const struct d2d_effect_frame *parent)
+{
+    ID2D1Bitmap *input = NULL, *output = NULL;
+    struct d2d_effect_frame frame = {effect, parent};
+    const struct d2d_effect_frame *ancestor;
+    BOOL pixels = context->drawing_state.unitMode == D2D1_UNIT_MODE_PIXELS;
+    float scale_x = pixels ? 1.0f : context->desc.dpiX / 96.0f;
+    float scale_y = pixels ? 1.0f : context->desc.dpiY / 96.0f;
+    D2D1_RECT_F input_bounds, bounds;
+    D3D11_TEXTURE_ADDRESS_MODE address;
+    ID3D11PixelShader *ps = NULL;
+    D2D1_BORDER_MODE border;
+    float sigma, angle, pixel_sigma, x, y;
+    HRESULT hr;
+
+    for (ancestor = parent; ancestor; ancestor = ancestor->parent)
+        if (ancestor->effect == effect) return D2DERR_CYCLIC_GRAPH;
+    if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_DIRECTIONALBLUR_PROP_STANDARD_DEVIATION,
+            D2D1_PROPERTY_TYPE_FLOAT, (BYTE *)&sigma, sizeof(sigma))))
+        return hr;
+    if (!isfinite(sigma) || sigma < 0.0f)
+        return E_INVALIDARG;
+    if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_DIRECTIONALBLUR_PROP_ANGLE,
+            D2D1_PROPERTY_TYPE_FLOAT, (BYTE *)&angle, sizeof(angle))))
+        return hr;
+    if (FAILED(ID2D1Effect_GetValue(effect, D2D1_DIRECTIONALBLUR_PROP_BORDER_MODE,
+            D2D1_PROPERTY_TYPE_ENUM, (BYTE *)&border, sizeof(border))))
+        border = D2D1_BORDER_MODE_SOFT;
+    if (FAILED(hr = d2d_effect_get_inputs(context, effect, &frame, &input, &input_bounds, 1, &bounds)))
+        goto done;
+    if (bounds.right <= bounds.left || bounds.bottom <= bounds.top)
+        goto done;
+
+    pixel_sigma = sigma * context->desc.dpiX / 96.0f;
+    if (pixel_sigma < 0.01f)
+    {
+        hr = d2d_effect_draw_output(context, input, &bounds, offset, image_rect, interpolation_mode);
+        goto done;
+    }
+    /* y grows downwards in the image. */
+    x = cosf(angle * M_PI / 180.0f);
+    y = -sinf(angle * M_PI / 180.0f);
+
+    if (border == D2D1_BORDER_MODE_HARD)
+    {
+        address = D3D11_TEXTURE_ADDRESS_CLAMP;
+    }
+    else
+    {
+        float reach_x = fabsf(x) * 3.0f * pixel_sigma, reach_y = fabsf(y) * 3.0f * pixel_sigma;
+
+        address = D3D11_TEXTURE_ADDRESS_BORDER;
+        bounds.left = floorf(bounds.left * scale_x - reach_x) / scale_x;
+        bounds.top = floorf(bounds.top * scale_y - reach_y) / scale_y;
+        bounds.right = ceilf(bounds.right * scale_x + reach_x) / scale_x;
+        bounds.bottom = ceilf(bounds.bottom * scale_y + reach_y) / scale_y;
+    }
+
+    if (FAILED(hr = d2d_effect_get_ps(context, &effect_blur_ps_id, effect_blur_ps_code,
+            sizeof(effect_blur_ps_code) - 1, &ps)))
+        goto done;
+    if (FAILED(hr = d2d_effect_blur_pass(context, ps, input, &input_bounds, &bounds, scale_x, scale_y,
+            pixel_sigma, x, y, address, &output)))
+        goto done;
+    hr = d2d_effect_draw_output(context, output, &bounds, offset, image_rect, interpolation_mode);
+
+done:
+    if (ps) ID3D11PixelShader_Release(ps);
+    if (output) ID2D1Bitmap_Release(output);
+    if (input) ID2D1Bitmap_Release(input);
+    return hr;
+}
+
+static const char effect_tint_ps_code[] =
+    "Texture2D t : register(t0);\n"
+    "SamplerState s : register(s0);\n"
+    "cbuffer tint : register(b0)\n"
+    "{\n"
+    "    float4 colour;\n"
+    "};\n"
+    "\n"
+    "float4 main(float4 position : SV_POSITION, float4 scene : SCENE_POSITION,\n"
+    "        float4 uv : TEXCOORD0) : SV_TARGET\n"
+    "{\n"
+    "    return float4(colour.rgb * colour.a, colour.a) * t.SampleLevel(s, uv.xy, 0.0).a;\n"
+    "}\n";
+
+/* {6f3a1f55-7a0e-4b6e-9d57-2a4c5d0e7b11} */
+static const GUID effect_tint_ps_id =
+        {0x6f3a1f55, 0x7a0e, 0x4b6e, {0x9d, 0x57, 0x2a, 0x4c, 0x5d, 0x0e, 0x7b, 0x11}};
+
+/* The input's alpha, blurred and in one colour. The colour is not premultiplied. */
+static HRESULT d2d_device_context_draw_shadow(struct d2d_device_context *context, ID2D1Effect *effect,
+        const D2D1_POINT_2F *offset, const D2D1_RECT_F *image_rect, D2D1_INTERPOLATION_MODE interpolation_mode,
+        const struct d2d_effect_frame *parent)
+{
+    ID2D1Bitmap *input = NULL, *horizontal = NULL, *vertical = NULL, *shadow = NULL;
+    struct d2d_effect_frame frame = {effect, parent};
+    const struct d2d_effect_frame *ancestor;
+    BOOL pixels = context->drawing_state.unitMode == D2D1_UNIT_MODE_PIXELS;
+    float scale_x = pixels ? 1.0f : context->desc.dpiX / 96.0f;
+    float scale_y = pixels ? 1.0f : context->desc.dpiY / 96.0f;
+    ID3D11PixelShader *blur_ps = NULL, *tint_ps = NULL;
+    struct d2d_effect_pass pass = {0};
+    D2D1_RECT_F input_bounds, bounds;
+    D2D1_VECTOR_4F colour;
+    float sigma, sigma_x, sigma_y;
+    D2D1_SIZE_U size;
+    HRESULT hr;
+
+    for (ancestor = parent; ancestor; ancestor = ancestor->parent)
+        if (ancestor->effect == effect) return D2DERR_CYCLIC_GRAPH;
+    if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION,
+            D2D1_PROPERTY_TYPE_FLOAT, (BYTE *)&sigma, sizeof(sigma))))
+        return hr;
+    if (!isfinite(sigma) || sigma < 0.0f)
+        return E_INVALIDARG;
+    if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_SHADOW_PROP_COLOR,
+            D2D1_PROPERTY_TYPE_VECTOR4, (BYTE *)&colour, sizeof(colour))))
+        return hr;
+    if (FAILED(hr = d2d_effect_get_inputs(context, effect, &frame, &input, &input_bounds, 1, &bounds)))
+        goto done;
+    if (bounds.right <= bounds.left || bounds.bottom <= bounds.top)
+        goto done;
+
+    /* The deviation is in DIPs whatever the unit mode. */
+    sigma_x = sigma * context->desc.dpiX / 96.0f;
+    sigma_y = sigma * context->desc.dpiY / 96.0f;
+    bounds.left = floorf(bounds.left * scale_x - 3.0f * sigma_x) / scale_x;
+    bounds.top = floorf(bounds.top * scale_y - 3.0f * sigma_y) / scale_y;
+    bounds.right = ceilf(bounds.right * scale_x + 3.0f * sigma_x) / scale_x;
+    bounds.bottom = ceilf(bounds.bottom * scale_y + 3.0f * sigma_y) / scale_y;
+
+    if (FAILED(hr = d2d_effect_get_ps(context, &effect_blur_ps_id, effect_blur_ps_code,
+            sizeof(effect_blur_ps_code) - 1, &blur_ps)))
+        goto done;
+    if (FAILED(hr = d2d_effect_get_ps(context, &effect_tint_ps_id, effect_tint_ps_code,
+            sizeof(effect_tint_ps_code) - 1, &tint_ps)))
+        goto done;
+    if (FAILED(hr = d2d_effect_blur_pass(context, blur_ps, input, &input_bounds, &bounds, scale_x, scale_y,
+            max(sigma_x, 0.01f), 1.0f, 0.0f, D3D11_TEXTURE_ADDRESS_BORDER, &horizontal)))
+        goto done;
+    if (FAILED(hr = d2d_effect_blur_pass(context, blur_ps, horizontal, &bounds, &bounds, scale_x, scale_y,
+            max(sigma_y, 0.01f), 0.0f, 1.0f, D3D11_TEXTURE_ADDRESS_BORDER, &vertical)))
+        goto done;
+    if (FAILED(hr = d2d_effect_create_output(context, &bounds, scale_x, scale_y, &size, &shadow)))
+        goto done;
+
+    pass.ps = tint_ps;
+    pass.constants = &colour;
+    pass.constants_size = sizeof(colour);
+    pass.filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    pass.address = D3D11_TEXTURE_ADDRESS_BORDER;
+    pass.clear = TRUE;
+    pass.inputs = &vertical;
+    pass.input_bounds = &bounds;
+    pass.input_count = 1;
+    if (SUCCEEDED(hr = d2d_effect_run_pass(context, &pass, unsafe_impl_from_ID2D1Bitmap(shadow), size,
+            &bounds, scale_x, scale_y)))
+        hr = d2d_effect_draw_output(context, shadow, &bounds, offset, image_rect, interpolation_mode);
+
+done:
+    if (tint_ps) ID3D11PixelShader_Release(tint_ps);
+    if (blur_ps) ID3D11PixelShader_Release(blur_ps);
+    if (shadow) ID2D1Bitmap_Release(shadow);
+    if (vertical) ID2D1Bitmap_Release(vertical);
+    if (horizontal) ID2D1Bitmap_Release(horizontal);
+    if (input) ID2D1Bitmap_Release(input);
+    return hr;
+}
+
+/* The source is the later input and the destination what came before it. */
+static void d2d_composite_mode_blend(D2D1_COMPOSITE_MODE mode, D3D11_BLEND *source, D3D11_BLEND *destination)
+{
+    switch (mode)
+    {
+        case D2D1_COMPOSITE_MODE_DESTINATION_OVER:
+            *source = D3D11_BLEND_INV_DEST_ALPHA; *destination = D3D11_BLEND_ONE; break;
+        case D2D1_COMPOSITE_MODE_SOURCE_IN:
+            *source = D3D11_BLEND_DEST_ALPHA; *destination = D3D11_BLEND_ZERO; break;
+        case D2D1_COMPOSITE_MODE_DESTINATION_IN:
+            *source = D3D11_BLEND_ZERO; *destination = D3D11_BLEND_SRC_ALPHA; break;
+        case D2D1_COMPOSITE_MODE_SOURCE_OUT:
+            *source = D3D11_BLEND_INV_DEST_ALPHA; *destination = D3D11_BLEND_ZERO; break;
+        case D2D1_COMPOSITE_MODE_DESTINATION_OUT:
+            *source = D3D11_BLEND_ZERO; *destination = D3D11_BLEND_INV_SRC_ALPHA; break;
+        case D2D1_COMPOSITE_MODE_SOURCE_ATOP:
+            *source = D3D11_BLEND_DEST_ALPHA; *destination = D3D11_BLEND_INV_SRC_ALPHA; break;
+        case D2D1_COMPOSITE_MODE_DESTINATION_ATOP:
+            *source = D3D11_BLEND_INV_DEST_ALPHA; *destination = D3D11_BLEND_SRC_ALPHA; break;
+        case D2D1_COMPOSITE_MODE_XOR:
+            *source = D3D11_BLEND_INV_DEST_ALPHA; *destination = D3D11_BLEND_INV_SRC_ALPHA; break;
+        case D2D1_COMPOSITE_MODE_PLUS:
+            *source = D3D11_BLEND_ONE; *destination = D3D11_BLEND_ONE; break;
+        case D2D1_COMPOSITE_MODE_BOUNDED_SOURCE_COPY:
+            *source = D3D11_BLEND_ONE; *destination = D3D11_BLEND_ZERO; break;
+        case D2D1_COMPOSITE_MODE_SOURCE_COPY:
+            *source = D3D11_BLEND_ONE; *destination = D3D11_BLEND_ZERO; break;
+        case D2D1_COMPOSITE_MODE_MASK_INVERT:
+            *source = D3D11_BLEND_INV_DEST_COLOR; *destination = D3D11_BLEND_INV_SRC_ALPHA; break;
+        default:
+            *source = D3D11_BLEND_ONE; *destination = D3D11_BLEND_INV_SRC_ALPHA; break;
+    }
+}
+
+static HRESULT d2d_device_context_draw_composite(struct d2d_device_context *context, ID2D1Effect *effect,
+        const D2D1_POINT_2F *offset, const D2D1_RECT_F *image_rect, D2D1_INTERPOLATION_MODE interpolation_mode,
+        const struct d2d_effect_frame *parent)
+{
+    ID2D1Bitmap *inputs[8] = {NULL}, *output = NULL;
+    D2D1_RECT_F input_bounds[ARRAY_SIZE(inputs)], bounds;
+    struct d2d_effect_frame frame = {effect, parent};
+    const struct d2d_effect_frame *ancestor;
+    BOOL pixels = context->drawing_state.unitMode == D2D1_UNIT_MODE_PIXELS;
+    float scale_x = pixels ? 1.0f : context->desc.dpiX / 96.0f;
+    float scale_y = pixels ? 1.0f : context->desc.dpiY / 96.0f;
+    UINT32 input_count = ID2D1Effect_GetInputCount(effect), i;
+    D3D11_BLEND_DESC blend_desc = {0};
+    ID3D11BlendState *blend = NULL;
+    ID3D11PixelShader *ps = NULL;
+    D2D1_COMPOSITE_MODE mode;
+    D2D1_SIZE_U size;
+    HRESULT hr;
+
+    for (ancestor = parent; ancestor; ancestor = ancestor->parent)
+        if (ancestor->effect == effect) return D2DERR_CYCLIC_GRAPH;
+    if (!input_count)
+        return S_OK;
+    if (input_count > ARRAY_SIZE(inputs))
+        return D2DERR_UNSUPPORTED_OPERATION;
+    if (FAILED(ID2D1Effect_GetValue(effect, D2D1_COMPOSITE_PROP_MODE, D2D1_PROPERTY_TYPE_ENUM,
+            (BYTE *)&mode, sizeof(mode))))
+        mode = D2D1_COMPOSITE_MODE_SOURCE_OVER;
+    if (FAILED(hr = d2d_effect_get_inputs(context, effect, &frame, inputs, input_bounds, input_count, &bounds)))
+        goto done;
+    if (bounds.right <= bounds.left || bounds.bottom <= bounds.top)
+        goto done;
+    if (FAILED(hr = d2d_effect_get_ps(context, &effect_copy_ps_id, effect_copy_ps_code,
+            sizeof(effect_copy_ps_code) - 1, &ps)))
+        goto done;
+    if (FAILED(hr = d2d_effect_create_output(context, &bounds, scale_x, scale_y, &size, &output)))
+        goto done;
+
+    blend_desc.RenderTarget[0].BlendEnable = TRUE;
+    d2d_composite_mode_blend(mode, &blend_desc.RenderTarget[0].SrcBlend, &blend_desc.RenderTarget[0].DestBlend);
+    blend_desc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    blend_desc.RenderTarget[0].SrcBlendAlpha = blend_desc.RenderTarget[0].SrcBlend;
+    blend_desc.RenderTarget[0].DestBlendAlpha = blend_desc.RenderTarget[0].DestBlend;
+    blend_desc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    blend_desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    if (FAILED(hr = ID3D11Device1_CreateBlendState(context->d3d_device, &blend_desc, &blend)))
+        goto done;
+
+    for (i = 0; i < input_count; ++i)
+    {
+        struct d2d_effect_pass pass = {0};
+
+        pass.ps = ps;
+        pass.filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        pass.address = D3D11_TEXTURE_ADDRESS_BORDER;
+        /* The first input is what the others composite with. */
+        pass.blend = i ? blend : NULL;
+        pass.clear = !i;
+        pass.inputs = &inputs[i];
+        pass.input_bounds = &input_bounds[i];
+        pass.input_count = 1;
+        if (FAILED(hr = d2d_effect_run_pass(context, &pass, unsafe_impl_from_ID2D1Bitmap(output), size,
+                &bounds, scale_x, scale_y)))
+            goto done;
+    }
+    hr = d2d_effect_draw_output(context, output, &bounds, offset, image_rect, interpolation_mode);
+
+done:
+    if (blend) ID3D11BlendState_Release(blend);
+    if (ps) ID3D11PixelShader_Release(ps);
+    if (output) ID2D1Bitmap_Release(output);
+    for (i = 0; i < ARRAY_SIZE(inputs); ++i)
+        if (inputs[i]) ID2D1Bitmap_Release(inputs[i]);
+    return hr;
+}
+
 static HRESULT d2d_device_context_draw_effect(struct d2d_device_context *context, ID2D1Effect *effect,
         const D2D1_POINT_2F *offset, const D2D1_RECT_F *image_rect, D2D1_INTERPOLATION_MODE interpolation_mode,
         const struct d2d_effect_frame *parent)
 {
+    const struct d2d_render_info *custom;
     CLSID clsid;
     HRESULT hr;
 
     if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_PROPERTY_CLSID, D2D1_PROPERTY_TYPE_CLSID,
             (BYTE *)&clsid, sizeof(clsid)))) return hr;
+    if ((custom = d2d_effect_get_custom_render_info(effect)))
+        return d2d_device_context_draw_custom(context, effect, custom, offset, image_rect, interpolation_mode, parent);
     if (IsEqualGUID(&clsid, &CLSID_D2D12DAffineTransform))
         return d2d_device_context_draw_affine(context, effect, offset, image_rect, parent);
     if (IsEqualGUID(&clsid, &CLSID_D2D1Shadow))
         return d2d_device_context_draw_shadow(context, effect, offset, image_rect, interpolation_mode, parent);
     if (IsEqualGUID(&clsid, &CLSID_D2D1ColorMatrix))
         return d2d_device_context_draw_color_matrix(context, effect, offset, image_rect, interpolation_mode, parent);
-    return d2d_device_context_draw_arithmetic(context, effect, offset, image_rect, interpolation_mode, parent);
+    if (IsEqualGUID(&clsid, &CLSID_D2D1GaussianBlur))
+        return d2d_device_context_draw_blur(context, effect, offset, image_rect, interpolation_mode, parent);
+    if (IsEqualGUID(&clsid, &CLSID_D2D1DirectionalBlur))
+        return d2d_device_context_draw_directional_blur(context, effect, offset, image_rect, interpolation_mode, parent);
+    if (IsEqualGUID(&clsid, &CLSID_D2D1Composite))
+        return d2d_device_context_draw_composite(context, effect, offset, image_rect, interpolation_mode, parent);
+    if (IsEqualGUID(&clsid, &CLSID_D2D1ArithmeticComposite))
+        return d2d_device_context_draw_arithmetic(context, effect, offset, image_rect, interpolation_mode, parent);
+
+    /* Failing here would lose everything in the caller's drawing, so show the input as it
+     * is. That is much closer than a blank slide. */
+    FIXME("Effect %s is not implemented, drawing its input.\n", debugstr_guid(&clsid));
+    if (ID2D1Effect_GetInputCount(effect))
+    {
+        ID2D1Image *input;
+
+        ID2D1Effect_GetInput(effect, 0, &input);
+        if (input)
+        {
+            ID2D1DeviceContext6_DrawImage(&context->ID2D1DeviceContext6_iface, input, offset, image_rect,
+                    interpolation_mode, D2D1_COMPOSITE_MODE_SOURCE_OVER);
+            ID2D1Image_Release(input);
+            return context->error.code;
+        }
+    }
+    return S_OK;
 }
 
 static void STDMETHODCALLTYPE d2d_device_context_DrawImage(ID2D1DeviceContext6 *iface, ID2D1Image *image,
@@ -4250,9 +5108,10 @@ static void STDMETHODCALLTYPE d2d_device_context_DrawImage(ID2D1DeviceContext6 *
 
     if (SUCCEEDED(ID2D1Image_QueryInterface(image, &IID_ID2D1Effect, (void **)&effect)))
     {
-        HRESULT hr = composite_mode == D2D1_COMPOSITE_MODE_SOURCE_OVER
-                ? d2d_device_context_draw_effect(context, effect, target_offset, image_rect, interpolation_mode, NULL)
-                : D2DERR_UNSUPPORTED_OPERATION;
+        /* Other modes were reported above. Source over is the closest thing to them, and
+         * failing would lose everything in the caller's drawing. */
+        HRESULT hr = d2d_device_context_draw_effect(context, effect, target_offset, image_rect,
+                interpolation_mode, NULL);
         ID2D1Effect_Release(effect);
         if (FAILED(hr)) d2d_device_context_set_error(context, hr);
         return;
@@ -4584,7 +5443,43 @@ static void STDMETHODCALLTYPE d2d_device_context_DrawSpriteBatch(ID2D1DeviceCont
     }
     else
     {
-        FIXME("Unimplemented for bitmap render target.\n");
+        const D2D1_MATRIX_3X2_F world = context->drawing_state.transform;
+        D2D1_MATRIX_5X4_F tint = {{{0}}};
+        float dpi_x, dpi_y;
+        UINT32 i;
+
+        ID2D1Bitmap_GetDpi(bitmap, &dpi_x, &dpi_y);
+        for (i = 0; i < sprite_count && SUCCEEDED(context->error.code); ++i)
+        {
+            const struct d2d_sprite *sprite = &batch->sprites[start_index + i];
+            D2D1_MATRIX_3X2_F transform = sprite->transform;
+            D2D1_RECT_F source;
+            BOOL plain = sprite->color.r == 1.0f && sprite->color.g == 1.0f
+                    && sprite->color.b == 1.0f && sprite->color.a == 1.0f;
+
+            /* Sources are in the bitmap's pixels. */
+            source.left = sprite->source.left * 96.0f / dpi_x;
+            source.top = sprite->source.top * 96.0f / dpi_y;
+            source.right = sprite->source.right * 96.0f / dpi_x;
+            source.bottom = sprite->source.bottom * 96.0f / dpi_y;
+
+            d2d_matrix_multiply(&transform, &world);
+            context->drawing_state.transform = transform;
+            if (!plain)
+            {
+                tint._11 = sprite->color.r;
+                tint._22 = sprite->color.g;
+                tint._33 = sprite->color.b;
+                tint._44 = sprite->color.a;
+                context->color_matrix = &tint;
+                context->color_matrix_mode = D2D1_COLORMATRIX_ALPHA_MODE_PREMULTIPLIED;
+                context->color_matrix_clamp = FALSE;
+            }
+            d2d_device_context_draw_bitmap(context, bitmap, &sprite->dest, 1.0f,
+                    (D2D1_INTERPOLATION_MODE)interpolation_mode, &source, NULL, NULL);
+            context->color_matrix = NULL;
+        }
+        context->drawing_state.transform = world;
     }
 }
 
@@ -5746,8 +6641,6 @@ static const char shape_ps_code[] =
     "float4 coefficients;\n"
     "float4 color_matrix[5];\n"
     "uint color_matrix_mode;\n"
-    "uint shadow_mode;\n"
-    "float4 shadow_kernel, shadow_color;\n"
     "\n"
     "SamplerState s0, s1;\n"
     "Texture2D t0, t1;\n"
@@ -5876,20 +6769,6 @@ static const char shape_ps_code[] =
     "\n"
     "    texcoord.x = dot(position.xy, transform[0].xy) + transform[0].z;\n"
     "    texcoord.y = dot(position.xy, transform[1].xy) + transform[1].z;\n"
-    "    if (shadow_mode)\n"
-    "    {\n"
-    "        float alpha = 0.0, total = 0.0;\n"
-    "        for (int k = -(int)shadow_kernel.w; k <= (int)shadow_kernel.w; ++k)\n"
-    "        {\n"
-    "            float weight = shadow_kernel.z > 0.0 ? exp(-0.5 * k * k / (shadow_kernel.z * shadow_kernel.z)) : 1.0;\n"
-    "            float2 uv = texcoord + k * shadow_kernel.xy;\n"
-    "            if (all(uv >= 0.0) && all(uv < 1.0))\n"
-    "                alpha += (ignore_alpha ? 1.0 : t.SampleLevel(s, uv, 0).a) * weight;\n"
-    "            total += weight;\n"
-    "        }\n"
-    "        alpha = alpha / total * shadow_color.a;\n"
-    "        return float4(shadow_color.rgb * alpha, alpha);\n"
-    "    }\n"
     "    if ((arithmetic || color_matrix_mode) && (any(texcoord < 0.0) || any(texcoord >= 1.0)))\n"
     "        return float4(0.0, 0.0, 0.0, 0.0);\n"
     "    colour = t.Sample(s, texcoord);\n"

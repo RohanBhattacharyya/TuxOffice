@@ -85,6 +85,10 @@ static ULONG STDMETHODCALLTYPE d2d_bitmap_Release(ID2D1Bitmap1 *iface)
 
     if (!refcount)
     {
+        if (bitmap->mip_srv)
+            ID3D11ShaderResourceView_Release(bitmap->mip_srv);
+        if (bitmap->mip_texture)
+            ID3D11Texture2D_Release(bitmap->mip_texture);
         if (bitmap->srv)
             ID3D11ShaderResourceView_Release(bitmap->srv);
         if (bitmap->rtv)
@@ -158,6 +162,8 @@ static HRESULT STDMETHODCALLTYPE d2d_bitmap_CopyFromBitmap(ID2D1Bitmap1 *iface,
     ID3D11Device *device;
     D3D11_BOX box;
 
+    impl_from_ID2D1Bitmap1(iface)->mips_stale = TRUE;
+
     TRACE("iface %p, dst_point %s, bitmap %p, src_rect %s.\n", iface,
             debug_d2d_point_2u(dst_point), bitmap, debug_d2d_rect_u(src_rect));
 
@@ -189,6 +195,8 @@ static HRESULT STDMETHODCALLTYPE d2d_bitmap_CopyFromRenderTarget(ID2D1Bitmap1 *i
     ID2D1Bitmap *target_bitmap = NULL;
     ID2D1Image *target = NULL;
     HRESULT hr;
+
+    impl_from_ID2D1Bitmap1(iface)->mips_stale = TRUE;
 
     TRACE("iface %p, dst_point %s, render_target %p, src_rect %s.\n", iface,
             debug_d2d_point_2u(dst_point), render_target, debug_d2d_rect_u(src_rect));
@@ -224,6 +232,8 @@ static HRESULT STDMETHODCALLTYPE d2d_bitmap_CopyFromMemory(ID2D1Bitmap1 *iface,
     ID3D11DeviceContext *context;
     ID3D11Device *device;
     D3D11_BOX box;
+
+    bitmap->mips_stale = TRUE;
 
     TRACE("iface %p, dst_rect %s, src_data %p, pitch %u.\n", iface, debug_d2d_rect_u(dst_rect),
             src_data, pitch);
@@ -430,6 +440,63 @@ static void d2d_bitmap_init(struct d2d_bitmap *bitmap, struct d2d_device_context
         bitmap->dpi_x = 96.0f;
         bitmap->dpi_y = 96.0f;
     }
+}
+
+/* Sampling a bitmap much larger than it is drawn skips over most of its pixels, turning
+ * fine detail into false patterns. The mip chain lets the sampler read from a smaller
+ * version. Target bitmaps change with every draw into them, so they keep the old way. */
+ID3D11ShaderResourceView *d2d_bitmap_get_mip_srv(struct d2d_bitmap *bitmap,
+        ID3D11Device *device, ID3D11DeviceContext *context)
+{
+    D3D11_TEXTURE2D_DESC desc;
+    ID3D11Texture2D *texture;
+    UINT support = 0;
+    HRESULT hr;
+
+    if (bitmap->options & (D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW))
+        return bitmap->srv;
+
+    if (!bitmap->mip_srv)
+    {
+        if (FAILED(ID3D11Resource_QueryInterface(bitmap->resource, &IID_ID3D11Texture2D, (void **)&texture)))
+            return bitmap->srv;
+        ID3D11Texture2D_GetDesc(texture, &desc);
+        ID3D11Texture2D_Release(texture);
+
+        if (desc.SampleDesc.Count > 1 || (desc.Width <= 1 && desc.Height <= 1)
+                || FAILED(ID3D11Device_CheckFormatSupport(device, desc.Format, &support))
+                || !(support & D3D11_FORMAT_SUPPORT_MIP_AUTOGEN))
+            return bitmap->srv;
+
+        desc.MipLevels = 0;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        desc.CPUAccessFlags = 0;
+        desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+        if (FAILED(hr = ID3D11Device_CreateTexture2D(device, &desc, NULL, &bitmap->mip_texture)))
+        {
+            WARN("Failed to create mip texture, hr %#lx.\n", hr);
+            return bitmap->srv;
+        }
+        if (FAILED(hr = ID3D11Device_CreateShaderResourceView(device, (ID3D11Resource *)bitmap->mip_texture,
+                NULL, &bitmap->mip_srv)))
+        {
+            WARN("Failed to create mip SRV, hr %#lx.\n", hr);
+            ID3D11Texture2D_Release(bitmap->mip_texture);
+            bitmap->mip_texture = NULL;
+            return bitmap->srv;
+        }
+        bitmap->mips_stale = TRUE;
+    }
+
+    if (bitmap->mips_stale)
+    {
+        ID3D11DeviceContext_CopySubresourceRegion(context, (ID3D11Resource *)bitmap->mip_texture, 0, 0, 0, 0,
+                bitmap->resource, 0, NULL);
+        ID3D11DeviceContext_GenerateMips(context, bitmap->mip_srv);
+        bitmap->mips_stale = FALSE;
+    }
+    return bitmap->mip_srv;
 }
 
 static BOOL check_bitmap_options(unsigned int options)

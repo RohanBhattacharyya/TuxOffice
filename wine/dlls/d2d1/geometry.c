@@ -17,6 +17,7 @@
  */
 
 #include "d2d1_private.h"
+#include <stdlib.h>
 #include <float.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(d2d);
@@ -2267,6 +2268,9 @@ static BOOL d2d_geometry_intersect_self(struct d2d_geometry *geometry)
     for (idx_p.figure_idx = 0; idx_p.figure_idx < geometry->u.path.figure_count; ++idx_p.figure_idx)
     {
         figure_p = &geometry->u.path.figures[idx_p.figure_idx];
+        /* Crossings only matter to fills, and hollow figures are not filled. */
+        if (figure_p->flags & D2D_FIGURE_FLAG_HOLLOW)
+            continue;
         idx_p.control_idx = 0;
         for (idx_p.vertex_idx = 0; idx_p.vertex_idx < figure_p->vertex_count; ++idx_p.vertex_idx)
         {
@@ -2276,6 +2280,8 @@ static BOOL d2d_geometry_intersect_self(struct d2d_geometry *geometry)
             for (idx_q.figure_idx = 0; idx_q.figure_idx <= idx_p.figure_idx; ++idx_q.figure_idx)
             {
                 figure_q = &geometry->u.path.figures[idx_q.figure_idx];
+                if (figure_q->flags & D2D_FIGURE_FLAG_HOLLOW)
+                    continue;
                 if (idx_q.figure_idx != idx_p.figure_idx)
                 {
                     if (!d2d_rect_check_overlap(&figure_p->bounds, &figure_q->bounds))
@@ -3362,8 +3368,12 @@ static void STDMETHODCALLTYPE d2d_geometry_sink_AddQuadraticBeziers(ID2D1Geometr
 static void STDMETHODCALLTYPE d2d_geometry_sink_AddArc(ID2D1GeometrySink *iface, const D2D1_ARC_SEGMENT *arc)
 {
     struct d2d_geometry *geometry = impl_from_ID2D1GeometrySink(iface);
+    double rx, ry, phi, cos_phi, sin_phi, x1, y1, scale, cx, cy, theta, delta, x1p, y1p, numerator, denominator, factor;
+    const struct d2d_figure *figure;
+    D2D1_POINT_2F start;
+    unsigned int i, segments;
 
-    FIXME("iface %p, arc %p stub!\n", iface, arc);
+    TRACE("iface %p, arc %p.\n", iface, arc);
 
     if (geometry->u.path.state != D2D_GEOMETRY_STATE_FIGURE)
     {
@@ -3371,13 +3381,79 @@ static void STDMETHODCALLTYPE d2d_geometry_sink_AddArc(ID2D1GeometrySink *iface,
         return;
     }
 
-    if (!d2d_figure_add_vertex(&geometry->u.path.figures[geometry->u.path.figure_count - 1], arc->point))
+    figure = &geometry->u.path.figures[geometry->u.path.figure_count - 1];
+    start = figure->vertices[figure->vertex_count - 1];
+    if (start.x == arc->point.x && start.y == arc->point.y) return;
+
+    /* The endpoint to centre conversion from the SVG specification, appendix F.6. */
+    rx = fabs(arc->size.width);
+    ry = fabs(arc->size.height);
+    if (rx == 0.0 || ry == 0.0)
     {
-        ERR("Failed to add vertex.\n");
+        ID2D1GeometrySink_AddLine(iface, arc->point);
         return;
     }
+    phi = arc->rotationAngle * M_PI / 180.0;
+    cos_phi = cos(phi);
+    sin_phi = sin(phi);
+    x1 = (start.x - arc->point.x) / 2.0;
+    y1 = (start.y - arc->point.y) / 2.0;
+    x1p = cos_phi * x1 + sin_phi * y1;
+    y1p = -sin_phi * x1 + cos_phi * y1;
 
-    ++geometry->u.path.segment_count;
+    /* Radii too small to reach the end point are scaled up to just reach it. */
+    scale = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
+    if (scale > 1.0)
+    {
+        rx *= sqrt(scale);
+        ry *= sqrt(scale);
+    }
+
+    denominator = rx * rx * y1p * y1p + ry * ry * x1p * x1p;
+    numerator = rx * rx * ry * ry - denominator;
+    factor = denominator > 0.0 && numerator > 0.0 ? sqrt(numerator / denominator) : 0.0;
+    if ((arc->arcSize == D2D1_ARC_SIZE_LARGE) == (arc->sweepDirection == D2D1_SWEEP_DIRECTION_CLOCKWISE))
+        factor = -factor;
+    cx = factor * rx * y1p / ry;
+    cy = -factor * ry * x1p / rx;
+
+    theta = atan2((y1p - cy) / ry, (x1p - cx) / rx);
+    delta = atan2((-y1p - cy) / ry, (-x1p - cx) / rx) - theta;
+    if (arc->sweepDirection == D2D1_SWEEP_DIRECTION_CLOCKWISE)
+    {
+        if (delta < 0.0) delta += 2.0 * M_PI;
+    }
+    else if (delta > 0.0) delta -= 2.0 * M_PI;
+
+    cx = cos_phi * cx - sin_phi * cy + (start.x + arc->point.x) / 2.0;
+    cy = sin_phi * (factor * rx * y1p / ry) + cos_phi * cy + (start.y + arc->point.y) / 2.0;
+
+    /* A Bezier follows up to a quarter of an ellipse closely. */
+    segments = max(1, (unsigned int)ceil(fabs(delta) / (M_PI / 2.0) - 1e-9));
+    for (i = 0; i < segments; ++i)
+    {
+        double a0 = theta + delta * i / segments, a1 = theta + delta * (i + 1) / segments;
+        double k = 4.0 / 3.0 * tan((a1 - a0) / 4.0);
+        double px[3] = {cos(a0) - k * sin(a0), cos(a1) + k * sin(a1), cos(a1)};
+        double py[3] = {sin(a0) + k * cos(a0), sin(a1) - k * cos(a1), sin(a1)};
+        D2D1_POINT_2F points[3];
+        D2D1_BEZIER_SEGMENT bezier;
+        unsigned int j;
+
+        for (j = 0; j < 3; ++j)
+        {
+            double ex = rx * px[j], ey = ry * py[j];
+
+            points[j].x = cx + cos_phi * ex - sin_phi * ey;
+            points[j].y = cy + sin_phi * ex + cos_phi * ey;
+        }
+        /* The last point is the requested one exactly. */
+        if (i + 1 == segments) points[2] = arc->point;
+        bezier.point1 = points[0];
+        bezier.point2 = points[1];
+        bezier.point3 = points[2];
+        ID2D1GeometrySink_AddBezier(iface, &bezier);
+    }
 }
 
 static const struct ID2D1GeometrySinkVtbl d2d_geometry_sink_vtbl =
@@ -3829,6 +3905,1002 @@ static void d2d_figure_simplify(const struct d2d_figure *figure,
     ID2D1SimplifiedGeometrySink_EndFigure(sink, end);
 }
 
+/* Boolean operations: both geometries are flattened to closed loops, every edge is split
+ * where it crosses another, and a piece of edge is kept when one side of it is in the
+ * result and the other is not. The pieces, directed with the result on their left, are
+ * then linked back into loops. Quadratic in the number of edges, which is small for the
+ * shapes applications combine. */
+struct combine_point { double x, y; };
+struct combine_edge { struct combine_point a, b; };
+
+struct combine_shape
+{
+    ID2D1SimplifiedGeometrySink ID2D1SimplifiedGeometrySink_iface;
+    D2D1_FILL_MODE fill_mode;
+    struct combine_edge *edges;
+    size_t edge_count, edge_size;
+    struct combine_point first, last;
+    BOOL in_figure;
+    HRESULT hr;
+};
+
+static inline struct combine_shape *combine_shape_from_sink(ID2D1SimplifiedGeometrySink *iface)
+{
+    return CONTAINING_RECORD(iface, struct combine_shape, ID2D1SimplifiedGeometrySink_iface);
+}
+
+static void combine_shape_add_edge(struct combine_shape *shape, struct combine_point a, struct combine_point b)
+{
+    if (a.x == b.x && a.y == b.y) return;
+    if (!d2d_array_reserve((void **)&shape->edges, &shape->edge_size, shape->edge_count + 1, sizeof(*shape->edges)))
+    {
+        shape->hr = E_OUTOFMEMORY;
+        return;
+    }
+    shape->edges[shape->edge_count].a = a;
+    shape->edges[shape->edge_count++].b = b;
+}
+
+static HRESULT STDMETHODCALLTYPE combine_sink_QueryInterface(ID2D1SimplifiedGeometrySink *iface, REFIID iid, void **out)
+{
+    if (IsEqualGUID(iid, &IID_ID2D1SimplifiedGeometrySink) || IsEqualGUID(iid, &IID_IUnknown))
+    {
+        *out = iface;
+        return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG STDMETHODCALLTYPE combine_sink_AddRef(ID2D1SimplifiedGeometrySink *iface)
+{
+    return 2;
+}
+
+static ULONG STDMETHODCALLTYPE combine_sink_Release(ID2D1SimplifiedGeometrySink *iface)
+{
+    return 1;
+}
+
+static void STDMETHODCALLTYPE combine_sink_SetFillMode(ID2D1SimplifiedGeometrySink *iface, D2D1_FILL_MODE mode)
+{
+    combine_shape_from_sink(iface)->fill_mode = mode;
+}
+
+static void STDMETHODCALLTYPE combine_sink_SetSegmentFlags(ID2D1SimplifiedGeometrySink *iface, D2D1_PATH_SEGMENT flags)
+{
+}
+
+static void STDMETHODCALLTYPE combine_sink_BeginFigure(ID2D1SimplifiedGeometrySink *iface,
+        D2D1_POINT_2F start, D2D1_FIGURE_BEGIN begin)
+{
+    struct combine_shape *shape = combine_shape_from_sink(iface);
+
+    shape->first.x = shape->last.x = start.x;
+    shape->first.y = shape->last.y = start.y;
+    shape->in_figure = TRUE;
+}
+
+static void STDMETHODCALLTYPE combine_sink_AddLines(ID2D1SimplifiedGeometrySink *iface,
+        const D2D1_POINT_2F *points, UINT32 count)
+{
+    struct combine_shape *shape = combine_shape_from_sink(iface);
+    UINT32 i;
+
+    for (i = 0; i < count; ++i)
+    {
+        struct combine_point next = {points[i].x, points[i].y};
+
+        combine_shape_add_edge(shape, shape->last, next);
+        shape->last = next;
+    }
+}
+
+static void STDMETHODCALLTYPE combine_sink_AddBeziers(ID2D1SimplifiedGeometrySink *iface,
+        const D2D1_BEZIER_SEGMENT *beziers, UINT32 count)
+{
+    struct combine_shape *shape = combine_shape_from_sink(iface);
+    UINT32 i;
+
+    /* Geometries were asked for lines; keep the outline usable regardless. */
+    for (i = 0; i < count; ++i)
+    {
+        struct combine_point next = {beziers[i].point3.x, beziers[i].point3.y};
+
+        combine_shape_add_edge(shape, shape->last, next);
+        shape->last = next;
+    }
+}
+
+static void STDMETHODCALLTYPE combine_sink_EndFigure(ID2D1SimplifiedGeometrySink *iface, D2D1_FIGURE_END end)
+{
+    struct combine_shape *shape = combine_shape_from_sink(iface);
+
+    /* Filling closes open figures, and a boolean operation works on the fill. */
+    if (shape->in_figure) combine_shape_add_edge(shape, shape->last, shape->first);
+    shape->in_figure = FALSE;
+}
+
+static HRESULT STDMETHODCALLTYPE combine_sink_Close(ID2D1SimplifiedGeometrySink *iface)
+{
+    return S_OK;
+}
+
+static const struct ID2D1SimplifiedGeometrySinkVtbl combine_sink_vtbl =
+{
+    combine_sink_QueryInterface,
+    combine_sink_AddRef,
+    combine_sink_Release,
+    combine_sink_SetFillMode,
+    combine_sink_SetSegmentFlags,
+    combine_sink_BeginFigure,
+    combine_sink_AddLines,
+    combine_sink_AddBeziers,
+    combine_sink_EndFigure,
+    combine_sink_Close,
+};
+
+static BOOL combine_shape_contains(const struct combine_shape *shape, struct combine_point p)
+{
+    int winding = 0;
+    size_t i;
+
+    for (i = 0; i < shape->edge_count; ++i)
+    {
+        const struct combine_edge *e = &shape->edges[i];
+        double side = (e->b.x - e->a.x) * (p.y - e->a.y) - (p.x - e->a.x) * (e->b.y - e->a.y);
+
+        if (e->a.y <= p.y)
+        {
+            if (e->b.y > p.y && side > 0.0) ++winding;
+        }
+        else if (e->b.y <= p.y && side < 0.0) --winding;
+    }
+
+    return shape->fill_mode == D2D1_FILL_MODE_WINDING ? winding != 0 : (winding & 1);
+}
+
+static BOOL combine_result_contains(const struct combine_shape *first, const struct combine_shape *second,
+        D2D1_COMBINE_MODE mode, struct combine_point p)
+{
+    BOOL in_first = combine_shape_contains(first, p), in_second = combine_shape_contains(second, p);
+
+    switch (mode)
+    {
+        case D2D1_COMBINE_MODE_UNION: return in_first || in_second;
+        case D2D1_COMBINE_MODE_INTERSECT: return in_first && in_second;
+        case D2D1_COMBINE_MODE_XOR: return in_first != in_second;
+        case D2D1_COMBINE_MODE_EXCLUDE: return in_first && !in_second;
+        default: return FALSE;
+    }
+}
+
+static int __cdecl combine_compare_double(const void *a, const void *b)
+{
+    double x = *(const double *)a, y = *(const double *)b;
+
+    return x < y ? -1 : x > y;
+}
+
+static inline struct combine_point combine_snap(struct combine_point p)
+{
+    /* Pieces meet exactly once their ends are on a grid far finer than a pixel. */
+    p.x = floor(p.x * 4096.0 + 0.5) / 4096.0;
+    p.y = floor(p.y * 4096.0 + 0.5) / 4096.0;
+    return p;
+}
+
+/* Add the pieces of "edge" that bound the result, cut at its crossings with "all". */
+static HRESULT combine_add_pieces(const struct combine_edge *edge, const struct combine_edge *all, size_t all_count,
+        const struct combine_shape *first, const struct combine_shape *second, D2D1_COMBINE_MODE mode,
+        struct combine_edge **pieces, size_t *piece_count, size_t *piece_size)
+{
+    double dx = edge->b.x - edge->a.x, dy = edge->b.y - edge->a.y, length = sqrt(dx * dx + dy * dy);
+    size_t i, cut_count = 0, cut_size = 0;
+    double *cuts = NULL;
+    HRESULT hr = S_OK;
+
+    if (length == 0.0) return S_OK;
+    if (!d2d_array_reserve((void **)&cuts, &cut_size, 2, sizeof(*cuts))) return E_OUTOFMEMORY;
+    cuts[cut_count++] = 0.0;
+    cuts[cut_count++] = 1.0;
+
+    for (i = 0; i < all_count; ++i)
+    {
+        const struct combine_edge *other = &all[i];
+        double ox = other->b.x - other->a.x, oy = other->b.y - other->a.y;
+        double denominator = dx * oy - dy * ox, t[2];
+        unsigned int j, n = 0;
+
+        if (other == edge) continue;
+        if (max(edge->a.x, edge->b.x) < min(other->a.x, other->b.x) ||
+                min(edge->a.x, edge->b.x) > max(other->a.x, other->b.x) ||
+                max(edge->a.y, edge->b.y) < min(other->a.y, other->b.y) ||
+                min(edge->a.y, edge->b.y) > max(other->a.y, other->b.y))
+            continue;
+
+        if (fabs(denominator) > 1e-12 * length * sqrt(ox * ox + oy * oy))
+        {
+            double wx = other->a.x - edge->a.x, wy = other->a.y - edge->a.y;
+            double s = (wx * oy - wy * ox) / denominator, u = (wx * dy - wy * dx) / denominator;
+
+            if (u >= -1e-9 && u <= 1.0 + 1e-9) t[n++] = s;
+        }
+        else
+        {
+            /* Parallel: an overlapping edge cuts this one at its ends. */
+            t[n++] = ((other->a.x - edge->a.x) * dx + (other->a.y - edge->a.y) * dy) / (length * length);
+            t[n++] = ((other->b.x - edge->a.x) * dx + (other->b.y - edge->a.y) * dy) / (length * length);
+        }
+        for (j = 0; j < n; ++j)
+        {
+            if (t[j] <= 0.0 || t[j] >= 1.0) continue;
+            if (!d2d_array_reserve((void **)&cuts, &cut_size, cut_count + 1, sizeof(*cuts)))
+            {
+                free(cuts);
+                return E_OUTOFMEMORY;
+            }
+            cuts[cut_count++] = t[j];
+        }
+    }
+
+    qsort(cuts, cut_count, sizeof(*cuts), combine_compare_double);
+
+    for (i = 0; i + 1 < cut_count && SUCCEEDED(hr); ++i)
+    {
+        struct combine_point a = {edge->a.x + dx * cuts[i], edge->a.y + dy * cuts[i]};
+        struct combine_point b = {edge->a.x + dx * cuts[i + 1], edge->a.y + dy * cuts[i + 1]};
+        struct combine_point mid = {(a.x + b.x) / 2.0, (a.y + b.y) / 2.0}, left, right;
+        double offset = 1.0 / 2048.0, nx = -dy / length, ny = dx / length;
+        BOOL in_left, in_right;
+
+        a = combine_snap(a);
+        b = combine_snap(b);
+        if (a.x == b.x && a.y == b.y) continue;
+
+        left.x = mid.x + nx * offset;
+        left.y = mid.y + ny * offset;
+        right.x = mid.x - nx * offset;
+        right.y = mid.y - ny * offset;
+        in_left = combine_result_contains(first, second, mode, left);
+        in_right = combine_result_contains(first, second, mode, right);
+        if (in_left == in_right) continue;
+
+        if (!d2d_array_reserve((void **)pieces, piece_size, *piece_count + 1, sizeof(**pieces)))
+        {
+            hr = E_OUTOFMEMORY;
+            break;
+        }
+        (*pieces)[*piece_count].a = in_left ? a : b;
+        (*pieces)[(*piece_count)++].b = in_left ? b : a;
+    }
+
+    free(cuts);
+    return hr;
+}
+
+/* Strokes with more to them than the outline shader's plain lines and mitred corners.
+ * The geometry is flattened, and each figure is cut along the dash pattern into runs.
+ * Runs become hollow figures, split at the corners that need a join of their own, and
+ * what the shader cannot draw (round and triangular caps, joins) becomes filled pieces.
+ * A translucent stroke must not cover anything twice, so for those whole runs turn into
+ * pieces of one fill, whose winding rule merges them. */
+struct stroker
+{
+    ID2D1SimplifiedGeometrySink ID2D1SimplifiedGeometrySink_iface;
+    ID2D1GeometrySink *lines, *fill;
+    const struct d2d_stroke_style *style;
+    double width, radius, pixel, total, offset;
+    BOOL merge, in_figure;
+    struct combine_point *points, *span, *rotated;
+    size_t point_count, points_size, span_count, span_size, rotated_size;
+    unsigned int pieces, fill_pieces;
+    HRESULT hr;
+};
+
+static inline struct stroker *stroker_from_sink(ID2D1SimplifiedGeometrySink *iface)
+{
+    return CONTAINING_RECORD(iface, struct stroker, ID2D1SimplifiedGeometrySink_iface);
+}
+
+static inline D2D1_POINT_2F stroker_point(double x, double y)
+{
+    D2D1_POINT_2F p = {x, y};
+    return p;
+}
+
+static void stroker_count_piece(struct stroker *s)
+{
+    /* Past these counts the pattern is too fine to see, and too slow to build each frame.
+     * Merging is the costlier of the two, because the fill looks for every crossing. */
+    if (++s->pieces > 20000 || (s->merge && s->fill_pieces > 2000))
+        s->hr = E_OUTOFMEMORY;
+}
+
+/* Every piece turns the same way, or the winding rule would cancel their overlaps. */
+static void stroker_polygon(struct stroker *s, const struct combine_point *p, unsigned int count)
+{
+    double area = 0.0;
+    unsigned int i;
+
+    for (i = 0; i < count; ++i)
+    {
+        const struct combine_point *q = &p[(i + 1) % count];
+        area += p[i].x * q->y - q->x * p[i].y;
+    }
+    if (area == 0.0)
+        return;
+
+    if (area > 0.0)
+    {
+        ID2D1GeometrySink_BeginFigure(s->fill, stroker_point(p[0].x, p[0].y), D2D1_FIGURE_BEGIN_FILLED);
+        for (i = 1; i < count; ++i)
+            ID2D1GeometrySink_AddLine(s->fill, stroker_point(p[i].x, p[i].y));
+    }
+    else
+    {
+        ID2D1GeometrySink_BeginFigure(s->fill, stroker_point(p[count - 1].x, p[count - 1].y), D2D1_FIGURE_BEGIN_FILLED);
+        for (i = count - 1; i-- > 0;)
+            ID2D1GeometrySink_AddLine(s->fill, stroker_point(p[i].x, p[i].y));
+    }
+    ID2D1GeometrySink_EndFigure(s->fill, D2D1_FIGURE_END_CLOSED);
+    ++s->fill_pieces;
+    stroker_count_piece(s);
+}
+
+static void stroker_circle(struct stroker *s, struct combine_point at)
+{
+    struct combine_point p[128];
+    double error = 0.1 * s->pixel / s->radius;
+    unsigned int count = 8, i;
+
+    /* Sides short enough to stay within a tenth of a pixel of the true circle. */
+    if (error < 1.0)
+        count = min(128, max(8, (unsigned int)ceil(M_PI / acos(1.0 - error))));
+    for (i = 0; i < count; ++i)
+    {
+        p[i].x = at.x + s->radius * cos(2.0 * M_PI * i / count);
+        p[i].y = at.y + s->radius * sin(2.0 * M_PI * i / count);
+    }
+    stroker_polygon(s, p, count);
+}
+
+/* (dx, dy) points away from the stroke. */
+static void stroker_cap(struct stroker *s, D2D1_CAP_STYLE cap, struct combine_point at, double dx, double dy)
+{
+    double r = s->radius, back = min(r, s->pixel);
+    struct combine_point p[4];
+
+    switch (cap)
+    {
+        case D2D1_CAP_STYLE_ROUND:
+            stroker_circle(s, at);
+            break;
+        case D2D1_CAP_STYLE_TRIANGLE:
+            p[0].x = at.x - dy * r;           p[0].y = at.y + dx * r;
+            p[1].x = at.x + dx * r;           p[1].y = at.y + dy * r;
+            p[2].x = at.x + dy * r;           p[2].y = at.y - dx * r;
+            p[3].x = at.x - dx * back;        p[3].y = at.y - dy * back;
+            stroker_polygon(s, p, 4);
+            break;
+        case D2D1_CAP_STYLE_SQUARE:
+            p[0].x = at.x - dy * r - dx * back; p[0].y = at.y + dx * r - dy * back;
+            p[1].x = at.x - dy * r + dx * r;    p[1].y = at.y + dx * r + dy * r;
+            p[2].x = at.x + dy * r + dx * r;    p[2].y = at.y - dx * r + dy * r;
+            p[3].x = at.x + dy * r - dx * back; p[3].y = at.y - dx * r - dy * back;
+            stroker_polygon(s, p, 4);
+            break;
+        default:
+            break;
+    }
+}
+
+static void stroker_join(struct stroker *s, D2D1_LINE_JOIN join, struct combine_point at,
+        double in_x, double in_y, double out_x, double out_y)
+{
+    double cross = in_x * out_y - in_y * out_x, dot = in_x * out_x + in_y * out_y;
+    double side = cross > 0.0 ? 1.0 : -1.0, r = s->radius;
+    /* Normals on the outside of the turn. */
+    double n1x = in_y * side, n1y = -in_x * side, n2x = out_y * side, n2y = -out_x * side;
+    double mx = n1x + n2x, my = n1y + n2y, length = sqrt(mx * mx + my * my);
+    struct combine_point p[4];
+    unsigned int count = 0;
+
+    if (join == D2D1_LINE_JOIN_ROUND)
+    {
+        stroker_circle(s, at);
+        return;
+    }
+    /* A line that doubles back has no outside to fill. */
+    if (length < 1e-6)
+        return;
+
+    p[count].x = at.x + n1x * r;  p[count++].y = at.y + n1y * r;
+    if (join != D2D1_LINE_JOIN_BEVEL && 1.0 + dot > 0.0
+            && sqrt(2.0 / (1.0 + dot)) <= s->style->desc.miterLimit)
+    {
+        p[count].x = at.x + (n1x + n2x) * r / (1.0 + dot);
+        p[count++].y = at.y + (n1y + n2y) * r / (1.0 + dot);
+    }
+    p[count].x = at.x + n2x * r;  p[count++].y = at.y + n2y * r;
+    /* Reach back past the corner, so that no seam shows against the lines. */
+    p[count].x = at.x - mx / length * s->pixel;
+    p[count++].y = at.y - my / length * s->pixel;
+    stroker_polygon(s, p, count);
+}
+
+static inline BOOL stroker_direction(const struct combine_point *a, const struct combine_point *b,
+        double *dx, double *dy)
+{
+    double x = b->x - a->x, y = b->y - a->y, length = sqrt(x * x + y * y);
+
+    if (length == 0.0)
+        return FALSE;
+    *dx = x / length;
+    *dy = y / length;
+    return TRUE;
+}
+
+static BOOL stroker_is_corner(const struct stroker *s, double in_x, double in_y, double out_x, double out_y)
+{
+    D2D1_LINE_JOIN join = s->style->desc.lineJoin;
+
+    return (join == D2D1_LINE_JOIN_ROUND || join == D2D1_LINE_JOIN_BEVEL)
+            && in_x * out_x + in_y * out_y < 0.985;
+}
+
+static void stroker_hollow(struct stroker *s, const struct combine_point *p, size_t count, double before_x,
+        double before_y, double after_x, double after_y, D2D1_FIGURE_END end)
+{
+    size_t i;
+
+    ID2D1GeometrySink_BeginFigure(s->lines, stroker_point(p[0].x - before_x, p[0].y - before_y),
+            D2D1_FIGURE_BEGIN_HOLLOW);
+    for (i = 1; i < count; ++i)
+    {
+        if (i == count - 1)
+            ID2D1GeometrySink_AddLine(s->lines, stroker_point(p[i].x + after_x, p[i].y + after_y));
+        else
+            ID2D1GeometrySink_AddLine(s->lines, stroker_point(p[i].x, p[i].y));
+    }
+    ID2D1GeometrySink_EndFigure(s->lines, end);
+    stroker_count_piece(s);
+}
+
+/* Fill the whole of a run, for translucent strokes. */
+static void stroker_merged_run(struct stroker *s, const struct combine_point *p, size_t count, BOOL closed,
+        D2D1_CAP_STYLE start, D2D1_CAP_STYLE end)
+{
+    double r = s->radius, in_x = 0.0, in_y = 0.0, dx, dy, first_x = 0.0, first_y = 0.0;
+    struct combine_point q[4];
+    BOOL have_in = FALSE;
+    size_t i;
+
+    for (i = 0; i + 1 < count && SUCCEEDED(s->hr); ++i)
+    {
+        if (!stroker_direction(&p[i], &p[i + 1], &dx, &dy))
+            continue;
+
+        q[0].x = p[i].x + dy * r;      q[0].y = p[i].y - dx * r;
+        q[1].x = p[i + 1].x + dy * r;  q[1].y = p[i + 1].y - dx * r;
+        q[2].x = p[i + 1].x - dy * r;  q[2].y = p[i + 1].y + dx * r;
+        q[3].x = p[i].x - dy * r;      q[3].y = p[i].y + dx * r;
+        stroker_polygon(s, q, 4);
+
+        if (have_in)
+            stroker_join(s, s->style->desc.lineJoin, p[i], in_x, in_y, dx, dy);
+        else
+        {
+            first_x = dx;
+            first_y = dy;
+        }
+        in_x = dx;
+        in_y = dy;
+        have_in = TRUE;
+    }
+    if (!have_in)
+        return;
+    if (closed)
+    {
+        stroker_join(s, s->style->desc.lineJoin, p[0], in_x, in_y, first_x, first_y);
+    }
+    else
+    {
+        stroker_cap(s, start, p[0], -first_x, -first_y);
+        stroker_cap(s, end, p[count - 1], in_x, in_y);
+    }
+}
+
+/* A run of at least two different points. */
+static void stroker_run(struct stroker *s, const struct combine_point *p, size_t count, BOOL closed,
+        D2D1_CAP_STYLE start, D2D1_CAP_STYLE end)
+{
+    double in_x, in_y, out_x, out_y, first_x, first_y, r = s->radius;
+    double before_x = 0.0, before_y = 0.0, after_x = 0.0, after_y = 0.0;
+    size_t from = 0, i;
+
+    /* A straight line with plain ends never overlaps itself. */
+    if (s->merge && (count > 2 || closed || start != D2D1_CAP_STYLE_FLAT || end != D2D1_CAP_STYLE_FLAT))
+    {
+        stroker_merged_run(s, p, count, closed, start, end);
+        return;
+    }
+
+    if (closed)
+    {
+        /* Start at a corner if there is one, leaving a mitred seam out of it. */
+        size_t corner = count, n = count - 1;
+
+        for (i = 0; i < n && corner == count; ++i)
+        {
+            stroker_direction(&p[(i + n - 1) % n], &p[i], &in_x, &in_y);
+            stroker_direction(&p[i], &p[(i + 1) % n], &out_x, &out_y);
+            if (stroker_is_corner(s, in_x, in_y, out_x, out_y))
+                corner = i;
+        }
+        if (corner == count)
+        {
+            stroker_hollow(s, p, n, 0.0, 0.0, 0.0, 0.0, D2D1_FIGURE_END_CLOSED);
+            return;
+        }
+        if (!d2d_array_reserve((void **)&s->rotated, &s->rotated_size, count, sizeof(*s->rotated)))
+        {
+            s->hr = E_OUTOFMEMORY;
+            return;
+        }
+        for (i = 0; i < n; ++i)
+            s->rotated[i] = p[(corner + i) % n];
+        s->rotated[n] = s->rotated[0];
+        p = s->rotated;
+
+        stroker_direction(&p[n - 1], &p[n], &in_x, &in_y);
+        stroker_direction(&p[0], &p[1], &out_x, &out_y);
+        stroker_join(s, s->style->desc.lineJoin, p[0], in_x, in_y, out_x, out_y);
+        start = end = D2D1_CAP_STYLE_FLAT;
+    }
+
+    stroker_direction(&p[0], &p[1], &first_x, &first_y);
+    in_x = first_x;
+    in_y = first_y;
+    if (start == D2D1_CAP_STYLE_SQUARE)
+    {
+        before_x = first_x * r;
+        before_y = first_y * r;
+    }
+    else
+    {
+        stroker_cap(s, start, p[0], -first_x, -first_y);
+    }
+
+    for (i = 1; i + 1 < count && SUCCEEDED(s->hr); ++i)
+    {
+        stroker_direction(&p[i], &p[i + 1], &out_x, &out_y);
+        if (stroker_is_corner(s, in_x, in_y, out_x, out_y))
+        {
+            stroker_hollow(s, &p[from], i - from + 1, before_x, before_y, 0.0, 0.0, D2D1_FIGURE_END_OPEN);
+            stroker_join(s, s->style->desc.lineJoin, p[i], in_x, in_y, out_x, out_y);
+            before_x = before_y = 0.0;
+            from = i;
+        }
+        in_x = out_x;
+        in_y = out_y;
+    }
+
+    if (end == D2D1_CAP_STYLE_SQUARE)
+    {
+        after_x = in_x * r;
+        after_y = in_y * r;
+    }
+    else
+    {
+        stroker_cap(s, end, p[count - 1], in_x, in_y);
+    }
+    stroker_hollow(s, &p[from], count - from, before_x, before_y, after_x, after_y, D2D1_FIGURE_END_OPEN);
+}
+
+/* A run with no length is just its caps. */
+static void stroker_dot(struct stroker *s, struct combine_point at, double dx, double dy,
+        D2D1_CAP_STYLE start, D2D1_CAP_STYLE end)
+{
+    stroker_cap(s, start, at, -dx, -dy);
+    /* Two identical circles would be the worst case for finding a fill's crossings. */
+    if (start != D2D1_CAP_STYLE_ROUND || end != D2D1_CAP_STYLE_ROUND)
+        stroker_cap(s, end, at, dx, dy);
+}
+
+static void stroker_span_add(struct stroker *s, struct combine_point at)
+{
+    if (s->span_count && s->span[s->span_count - 1].x == at.x && s->span[s->span_count - 1].y == at.y)
+        return;
+    if (!d2d_array_reserve((void **)&s->span, &s->span_size, s->span_count + 1, sizeof(*s->span)))
+    {
+        s->hr = E_OUTOFMEMORY;
+        return;
+    }
+    s->span[s->span_count++] = at;
+}
+
+static void stroker_span_end(struct stroker *s, double dx, double dy, D2D1_CAP_STYLE start, D2D1_CAP_STYLE end)
+{
+    if (s->span_count > 1)
+        stroker_run(s, s->span, s->span_count, FALSE, start, end);
+    else if (s->span_count)
+        stroker_dot(s, s->span[0], dx, dy, start, end);
+    s->span_count = 0;
+}
+
+static void stroker_dash_figure(struct stroker *s, const struct combine_point *p, size_t count, BOOL closed)
+{
+    const struct d2d_stroke_style *style = s->style;
+    D2D1_CAP_STYLE dash_cap = style->desc.dashCap;
+    D2D1_CAP_STYLE first_cap = closed ? dash_cap : style->desc.startCap;
+    D2D1_CAP_STYLE last_cap = closed ? dash_cap : style->desc.endCap;
+    double position = fmod(s->offset, s->total), remaining, dx = 1.0, dy = 0.0;
+    D2D1_CAP_STYLE span_start = first_cap;
+    unsigned int index = 0;
+    size_t i;
+
+    if (position < 0.0)
+        position += s->total;
+    for (;;)
+    {
+        remaining = style->dashes[index] * s->width;
+        if (position < remaining)
+            break;
+        position -= remaining;
+        index = (index + 1) % style->dash_count;
+    }
+    remaining -= position;
+
+    s->span_count = 0;
+    if (!(index & 1))
+        stroker_span_add(s, p[0]);
+
+    for (i = 0; i + 1 < count && SUCCEEDED(s->hr); ++i)
+    {
+        struct combine_point from = p[i];
+        double left = sqrt((p[i + 1].x - from.x) * (p[i + 1].x - from.x) + (p[i + 1].y - from.y) * (p[i + 1].y - from.y));
+
+        if (!stroker_direction(&from, &p[i + 1], &dx, &dy))
+            continue;
+
+        while (left > remaining && SUCCEEDED(s->hr))
+        {
+            struct combine_point at = {from.x + dx * remaining, from.y + dy * remaining};
+
+            if (!(index & 1))
+            {
+                stroker_span_add(s, at);
+                stroker_span_end(s, dx, dy, span_start, dash_cap);
+            }
+            left -= remaining;
+            from = at;
+            /* Move on to the next entry that has a length, drawing the empty dashes on the way. */
+            for (;;)
+            {
+                index = (index + 1) % style->dash_count;
+                remaining = style->dashes[index] * s->width;
+                if (!(index & 1))
+                {
+                    span_start = dash_cap;
+                    stroker_span_add(s, at);
+                    if (remaining > 0.0)
+                        break;
+                    stroker_span_end(s, dx, dy, dash_cap, dash_cap);
+                }
+                else if (remaining > 0.0)
+                {
+                    break;
+                }
+                if (FAILED(s->hr))
+                    return;
+            }
+        }
+        remaining -= left;
+        if (!(index & 1))
+            stroker_span_add(s, p[i + 1]);
+    }
+    if (!(index & 1))
+        stroker_span_end(s, dx, dy, span_start, last_cap);
+}
+
+static HRESULT STDMETHODCALLTYPE stroker_QueryInterface(ID2D1SimplifiedGeometrySink *iface, REFIID iid, void **out)
+{
+    if (IsEqualGUID(iid, &IID_ID2D1SimplifiedGeometrySink) || IsEqualGUID(iid, &IID_IUnknown))
+    {
+        *out = iface;
+        return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG STDMETHODCALLTYPE stroker_AddRef(ID2D1SimplifiedGeometrySink *iface)
+{
+    return 2;
+}
+
+static ULONG STDMETHODCALLTYPE stroker_Release(ID2D1SimplifiedGeometrySink *iface)
+{
+    return 1;
+}
+
+static void STDMETHODCALLTYPE stroker_SetFillMode(ID2D1SimplifiedGeometrySink *iface, D2D1_FILL_MODE mode)
+{
+}
+
+static void STDMETHODCALLTYPE stroker_SetSegmentFlags(ID2D1SimplifiedGeometrySink *iface, D2D1_PATH_SEGMENT flags)
+{
+}
+
+static void stroker_add_point(struct stroker *s, double x, double y)
+{
+    if (s->point_count && s->points[s->point_count - 1].x == x && s->points[s->point_count - 1].y == y)
+        return;
+    if (s->point_count >= 200000
+            || !d2d_array_reserve((void **)&s->points, &s->points_size, s->point_count + 1, sizeof(*s->points)))
+    {
+        s->hr = E_OUTOFMEMORY;
+        return;
+    }
+    s->points[s->point_count].x = x;
+    s->points[s->point_count++].y = y;
+}
+
+static void STDMETHODCALLTYPE stroker_BeginFigure(ID2D1SimplifiedGeometrySink *iface,
+        D2D1_POINT_2F start, D2D1_FIGURE_BEGIN begin)
+{
+    struct stroker *s = stroker_from_sink(iface);
+
+    s->point_count = 0;
+    s->in_figure = TRUE;
+    stroker_add_point(s, start.x, start.y);
+}
+
+static void STDMETHODCALLTYPE stroker_AddLines(ID2D1SimplifiedGeometrySink *iface,
+        const D2D1_POINT_2F *points, UINT32 count)
+{
+    struct stroker *s = stroker_from_sink(iface);
+    UINT32 i;
+
+    for (i = 0; i < count && SUCCEEDED(s->hr); ++i)
+        stroker_add_point(s, points[i].x, points[i].y);
+}
+
+static void STDMETHODCALLTYPE stroker_AddBeziers(ID2D1SimplifiedGeometrySink *iface,
+        const D2D1_BEZIER_SEGMENT *beziers, UINT32 count)
+{
+    struct stroker *s = stroker_from_sink(iface);
+    UINT32 i;
+
+    /* Simplification was asked for lines, so this should not be reached. */
+    for (i = 0; i < count && SUCCEEDED(s->hr); ++i)
+        stroker_add_point(s, beziers[i].point3.x, beziers[i].point3.y);
+}
+
+static void STDMETHODCALLTYPE stroker_EndFigure(ID2D1SimplifiedGeometrySink *iface, D2D1_FIGURE_END end)
+{
+    struct stroker *s = stroker_from_sink(iface);
+    const D2D1_STROKE_STYLE_PROPERTIES1 *desc = &s->style->desc;
+    BOOL closed = end == D2D1_FIGURE_END_CLOSED;
+
+    if (!s->in_figure || FAILED(s->hr))
+        return;
+    s->in_figure = FALSE;
+
+    if (closed && s->point_count > 1)
+        stroker_add_point(s, s->points[0].x, s->points[0].y);
+
+    if (s->point_count < 2)
+    {
+        if (!closed && s->point_count)
+            stroker_dot(s, s->points[0], 1.0, 0.0, desc->startCap, desc->endCap);
+    }
+    else if (s->style->dash_count)
+    {
+        stroker_dash_figure(s, s->points, s->point_count, closed);
+    }
+    else
+    {
+        stroker_run(s, s->points, s->point_count, closed, desc->startCap, desc->endCap);
+    }
+}
+
+static HRESULT STDMETHODCALLTYPE stroker_Close(ID2D1SimplifiedGeometrySink *iface)
+{
+    return S_OK;
+}
+
+static const struct ID2D1SimplifiedGeometrySinkVtbl stroker_vtbl =
+{
+    stroker_QueryInterface,
+    stroker_AddRef,
+    stroker_Release,
+    stroker_SetFillMode,
+    stroker_SetSegmentFlags,
+    stroker_BeginFigure,
+    stroker_AddLines,
+    stroker_AddBeziers,
+    stroker_EndFigure,
+    stroker_Close,
+};
+
+/* On success lines holds the hollow figures to stroke and fill, which may be NULL, the
+ * filled pieces. A style of NULL means the defaults, for merging a translucent stroke. */
+HRESULT d2d_geometry_create_stroke(ID2D1Factory *factory, ID2D1Geometry *geometry,
+        const struct d2d_stroke_style *style, float stroke_width, float scale, BOOL merge,
+        ID2D1Geometry **lines, ID2D1Geometry **fill)
+{
+    static const struct d2d_stroke_style default_style =
+    {
+        .desc.lineJoin = D2D1_LINE_JOIN_MITER,
+        .desc.miterLimit = 10.0f,
+    };
+    struct stroker s = {{&stroker_vtbl}};
+    ID2D1PathGeometry *line_path = NULL, *fill_path = NULL;
+    UINT32 i;
+    HRESULT hr;
+
+    *lines = *fill = NULL;
+    s.style = style ? style : &default_style;
+    s.width = stroke_width;
+    s.radius = stroke_width / 2.0;
+    s.pixel = scale > 0.0f ? 1.0 / scale : 1.0;
+    s.offset = s.style->desc.dashOffset * s.width;
+    s.merge = merge;
+    for (i = 0; i < s.style->dash_count; ++i)
+        s.total += s.style->dashes[i] * s.width;
+    if (!(s.width > 0.0) || !isfinite(s.width) || !isfinite(s.total) || !isfinite(s.offset) || !isfinite(s.pixel))
+        return E_INVALIDARG;
+    /* An odd count repeats with on and off swapped, which this walk does not do. */
+    if (s.style->dash_count && (!(s.total > 0.0) || (s.style->dash_count & 1)))
+        return E_INVALIDARG;
+
+    if (FAILED(hr = ID2D1Factory_CreatePathGeometry(factory, &line_path))) goto done;
+    if (FAILED(hr = ID2D1Factory_CreatePathGeometry(factory, &fill_path))) goto done;
+    if (FAILED(hr = ID2D1PathGeometry_Open(line_path, &s.lines))) goto done;
+    if (FAILED(hr = ID2D1PathGeometry_Open(fill_path, &s.fill))) goto done;
+    ID2D1GeometrySink_SetFillMode(s.fill, D2D1_FILL_MODE_WINDING);
+
+    /* A quarter of a pixel, whatever units the transform maps from. */
+    hr = ID2D1Geometry_Simplify(geometry, D2D1_GEOMETRY_SIMPLIFICATION_OPTION_LINES, NULL,
+            D2D1_DEFAULT_FLATTENING_TOLERANCE * s.pixel, &s.ID2D1SimplifiedGeometrySink_iface);
+    if (SUCCEEDED(hr)) hr = s.hr;
+    if (SUCCEEDED(hr)) hr = ID2D1GeometrySink_Close(s.lines);
+    if (SUCCEEDED(hr))
+    {
+        /* Without the pieces the stroke is plainer, but the dashes are still right. */
+        if (s.fill_pieces && SUCCEEDED(ID2D1GeometrySink_Close(s.fill)))
+        {
+            *fill = (ID2D1Geometry *)fill_path;
+            fill_path = NULL;
+        }
+        *lines = (ID2D1Geometry *)line_path;
+        line_path = NULL;
+    }
+
+done:
+    free(s.points);
+    free(s.span);
+    free(s.rotated);
+    if (s.lines) ID2D1GeometrySink_Release(s.lines);
+    if (s.fill) ID2D1GeometrySink_Release(s.fill);
+    if (line_path) ID2D1PathGeometry_Release(line_path);
+    if (fill_path) ID2D1PathGeometry_Release(fill_path);
+    if (FAILED(hr) && merge)
+        return d2d_geometry_create_stroke(factory, geometry, style, stroke_width, scale, FALSE, lines, fill);
+    return hr;
+}
+
+static HRESULT d2d_geometry_combine(ID2D1Geometry *geometry, ID2D1Geometry *input, D2D1_COMBINE_MODE mode,
+        const D2D1_MATRIX_3X2_F *transform, float tolerance, ID2D1SimplifiedGeometrySink *sink)
+{
+    struct combine_shape first = {{&combine_sink_vtbl}}, second = {{&combine_sink_vtbl}};
+    struct combine_edge *all = NULL, *pieces = NULL;
+    size_t i, all_count, piece_count = 0, piece_size = 0;
+    D2D1_POINT_2F *points = NULL;
+    BOOL *used = NULL;
+    HRESULT hr;
+
+    if (!input || !sink) return E_INVALIDARG;
+    if (tolerance <= 0.0f) tolerance = D2D1_DEFAULT_FLATTENING_TOLERANCE;
+
+    if (FAILED(hr = ID2D1Geometry_Simplify(geometry, D2D1_GEOMETRY_SIMPLIFICATION_OPTION_LINES, NULL, tolerance,
+            &first.ID2D1SimplifiedGeometrySink_iface)))
+        goto done;
+    if (FAILED(hr = ID2D1Geometry_Simplify(input, D2D1_GEOMETRY_SIMPLIFICATION_OPTION_LINES, transform, tolerance,
+            &second.ID2D1SimplifiedGeometrySink_iface)))
+        goto done;
+    if (FAILED(hr = first.hr) || FAILED(hr = second.hr)) goto done;
+
+    all_count = first.edge_count + second.edge_count;
+    if (!all_count || !(all = calloc(all_count, sizeof(*all))))
+    {
+        hr = all_count ? E_OUTOFMEMORY : S_OK;
+        goto done;
+    }
+    if (first.edge_count) memcpy(all, first.edges, first.edge_count * sizeof(*all));
+    if (second.edge_count) memcpy(all + first.edge_count, second.edges, second.edge_count * sizeof(*all));
+
+    for (i = 0; i < all_count && SUCCEEDED(hr); ++i)
+        hr = combine_add_pieces(&all[i], all, all_count, &first, &second, mode, &pieces, &piece_count, &piece_size);
+    if (FAILED(hr)) goto done;
+
+    /* Edges that coincide give the same piece twice. */
+    for (i = 0; i < piece_count; ++i)
+    {
+        size_t j;
+
+        for (j = i + 1; j < piece_count; )
+        {
+            if (pieces[i].a.x == pieces[j].a.x && pieces[i].a.y == pieces[j].a.y &&
+                    pieces[i].b.x == pieces[j].b.x && pieces[i].b.y == pieces[j].b.y)
+                pieces[j] = pieces[--piece_count];
+            else
+                ++j;
+        }
+    }
+
+    ID2D1SimplifiedGeometrySink_SetFillMode(sink, D2D1_FILL_MODE_WINDING);
+    if (!piece_count)
+    {
+        hr = S_OK;
+        goto done;
+    }
+    used = calloc(piece_count, sizeof(*used));
+    points = calloc(piece_count + 1, sizeof(*points));
+    if (!used || !points)
+    {
+        hr = E_OUTOFMEMORY;
+        goto done;
+    }
+
+    for (i = 0; i < piece_count; ++i)
+    {
+        struct combine_point start, at;
+        D2D1_POINT_2F begin;
+        UINT32 count = 0;
+        size_t current = i;
+
+        if (used[i]) continue;
+        used[i] = TRUE;
+        start = pieces[i].a;
+        at = pieces[i].b;
+        for (;;)
+        {
+            size_t j;
+
+            points[count].x = at.x;
+            points[count++].y = at.y;
+            if (at.x == start.x && at.y == start.y) break;
+            for (j = 0; j < piece_count; ++j)
+            {
+                if (!used[j] && pieces[j].a.x == at.x && pieces[j].a.y == at.y) break;
+            }
+            if (j == piece_count) break;
+            used[j] = TRUE;
+            current = j;
+            at = pieces[current].b;
+        }
+        if (count < 2) continue;
+        begin.x = start.x;
+        begin.y = start.y;
+        ID2D1SimplifiedGeometrySink_BeginFigure(sink, begin, D2D1_FIGURE_BEGIN_FILLED);
+        ID2D1SimplifiedGeometrySink_AddLines(sink, points, count);
+        ID2D1SimplifiedGeometrySink_EndFigure(sink, D2D1_FIGURE_END_CLOSED);
+    }
+    hr = S_OK;
+
+done:
+    free(points);
+    free(used);
+    free(pieces);
+    free(all);
+    free(first.edges);
+    free(second.edges);
+    return hr;
+}
+
 static HRESULT STDMETHODCALLTYPE d2d_path_geometry_Simplify(ID2D1PathGeometry1 *iface,
         D2D1_GEOMETRY_SIMPLIFICATION_OPTION option, const D2D1_MATRIX_3X2_F *transform, float tolerance,
         ID2D1SimplifiedGeometrySink *sink)
@@ -3972,10 +5044,10 @@ static HRESULT STDMETHODCALLTYPE d2d_path_geometry_CombineWithGeometry(ID2D1Path
         ID2D1Geometry *geometry, D2D1_COMBINE_MODE combine_mode, const D2D1_MATRIX_3X2_F *transform,
         float tolerance, ID2D1SimplifiedGeometrySink *sink)
 {
-    FIXME("iface %p, geometry %p, combine_mode %#x, transform %p, tolerance %.8e, sink %p stub!\n",
+    TRACE("iface %p, geometry %p, combine_mode %#x, transform %p, tolerance %.8e, sink %p.\n",
             iface, geometry, combine_mode, transform, tolerance, sink);
 
-    return E_NOTIMPL;
+    return d2d_geometry_combine((ID2D1Geometry *)iface, geometry, combine_mode, transform, tolerance, sink);
 }
 
 static HRESULT STDMETHODCALLTYPE d2d_path_geometry_Outline(ID2D1PathGeometry1 *iface,
@@ -4316,10 +5388,10 @@ static HRESULT STDMETHODCALLTYPE d2d_ellipse_geometry_CombineWithGeometry(ID2D1E
         ID2D1Geometry *geometry, D2D1_COMBINE_MODE combine_mode, const D2D1_MATRIX_3X2_F *transform,
         float tolerance, ID2D1SimplifiedGeometrySink *sink)
 {
-    FIXME("iface %p, geometry %p, combine_mode %#x, transform %p, tolerance %.8e, sink %p stub!\n",
+    TRACE("iface %p, geometry %p, combine_mode %#x, transform %p, tolerance %.8e, sink %p.\n",
             iface, geometry, combine_mode, transform, tolerance, sink);
 
-    return E_NOTIMPL;
+    return d2d_geometry_combine((ID2D1Geometry *)iface, geometry, combine_mode, transform, tolerance, sink);
 }
 
 static HRESULT STDMETHODCALLTYPE d2d_ellipse_geometry_Outline(ID2D1EllipseGeometry *iface,
@@ -4726,10 +5798,10 @@ static HRESULT STDMETHODCALLTYPE d2d_rectangle_geometry_CombineWithGeometry(ID2D
         ID2D1Geometry *geometry, D2D1_COMBINE_MODE combine_mode, const D2D1_MATRIX_3X2_F *transform,
         float tolerance, ID2D1SimplifiedGeometrySink *sink)
 {
-    FIXME("iface %p, geometry %p, combine_mode %#x, transform %p, tolerance %.8e, sink %p stub!\n",
+    TRACE("iface %p, geometry %p, combine_mode %#x, transform %p, tolerance %.8e, sink %p.\n",
             iface, geometry, combine_mode, transform, tolerance, sink);
 
-    return E_NOTIMPL;
+    return d2d_geometry_combine((ID2D1Geometry *)iface, geometry, combine_mode, transform, tolerance, sink);
 }
 
 static HRESULT STDMETHODCALLTYPE d2d_rectangle_geometry_Outline(ID2D1RectangleGeometry *iface,
@@ -5092,10 +6164,10 @@ static HRESULT STDMETHODCALLTYPE d2d_rounded_rectangle_geometry_CombineWithGeome
         ID2D1RoundedRectangleGeometry *iface, ID2D1Geometry *geometry, D2D1_COMBINE_MODE combine_mode,
         const D2D1_MATRIX_3X2_F *transform, float tolerance, ID2D1SimplifiedGeometrySink *sink)
 {
-    FIXME("iface %p, geometry %p, combine_mode %#x, transform %p, tolerance %.8e, sink %p stub!\n",
+    TRACE("iface %p, geometry %p, combine_mode %#x, transform %p, tolerance %.8e, sink %p.\n",
             iface, geometry, combine_mode, transform, tolerance, sink);
 
-    return E_NOTIMPL;
+    return d2d_geometry_combine((ID2D1Geometry *)iface, geometry, combine_mode, transform, tolerance, sink);
 }
 
 static HRESULT STDMETHODCALLTYPE d2d_rounded_rectangle_geometry_Outline(ID2D1RoundedRectangleGeometry *iface,
@@ -5440,10 +6512,10 @@ static HRESULT STDMETHODCALLTYPE d2d_transformed_geometry_CombineWithGeometry(ID
         ID2D1Geometry *geometry, D2D1_COMBINE_MODE combine_mode, const D2D1_MATRIX_3X2_F *transform,
         float tolerance, ID2D1SimplifiedGeometrySink *sink)
 {
-    FIXME("iface %p, geometry %p, combine_mode %#x, transform %p, tolerance %.8e, sink %p stub!\n",
+    TRACE("iface %p, geometry %p, combine_mode %#x, transform %p, tolerance %.8e, sink %p.\n",
             iface, geometry, combine_mode, transform, tolerance, sink);
 
-    return E_NOTIMPL;
+    return d2d_geometry_combine((ID2D1Geometry *)iface, geometry, combine_mode, transform, tolerance, sink);
 }
 
 static HRESULT STDMETHODCALLTYPE d2d_transformed_geometry_Outline(ID2D1TransformedGeometry *iface,
@@ -5706,10 +6778,10 @@ static HRESULT STDMETHODCALLTYPE d2d_geometry_group_CombineWithGeometry(ID2D1Geo
         ID2D1Geometry *geometry, D2D1_COMBINE_MODE combine_mode, const D2D1_MATRIX_3X2_F *transform,
         float tolerance, ID2D1SimplifiedGeometrySink *sink)
 {
-    FIXME("iface %p, geometry %p, combine_mode %#x, transform %p, tolerance %.8e, sink %p stub!\n",
+    TRACE("iface %p, geometry %p, combine_mode %#x, transform %p, tolerance %.8e, sink %p.\n",
             iface, geometry, combine_mode, transform, tolerance, sink);
 
-    return E_NOTIMPL;
+    return d2d_geometry_combine((ID2D1Geometry *)iface, geometry, combine_mode, transform, tolerance, sink);
 }
 
 static HRESULT STDMETHODCALLTYPE d2d_geometry_group_Outline(ID2D1GeometryGroup *iface,

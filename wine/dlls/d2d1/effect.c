@@ -2364,6 +2364,75 @@ static HRESULT STDMETHODCALLTYPE d2d_effect_context_CreateBoundsAdjustmentTransf
     return d2d_bounds_adjustment_transform_create(output_rect, transform);
 }
 
+/* A shader object belongs to one Direct3D device, and an effect can be drawn on a device
+ * other than the one that loaded its shader: it may be in a command list that is played
+ * back on another thread, with its own device. So the code is kept for making it again. */
+struct d2d_pixel_shader_code
+{
+    struct list entry;
+    GUID id;
+    UINT32 size;
+    BYTE code[];
+};
+
+static struct list d2d_pixel_shader_codes = LIST_INIT(d2d_pixel_shader_codes);
+static CRITICAL_SECTION d2d_pixel_shader_codes_cs;
+static CRITICAL_SECTION_DEBUG d2d_pixel_shader_codes_cs_debug =
+{
+    0, 0, &d2d_pixel_shader_codes_cs,
+    {&d2d_pixel_shader_codes_cs_debug.ProcessLocksList, &d2d_pixel_shader_codes_cs_debug.ProcessLocksList},
+    0, 0, {(DWORD_PTR)(__FILE__ ": d2d_pixel_shader_codes_cs")}
+};
+static CRITICAL_SECTION d2d_pixel_shader_codes_cs = {&d2d_pixel_shader_codes_cs_debug, -1, 0, 0, 0, 0};
+
+static void d2d_pixel_shader_code_store(const GUID *id, const BYTE *code, UINT32 size)
+{
+    struct d2d_pixel_shader_code *entry;
+
+    EnterCriticalSection(&d2d_pixel_shader_codes_cs);
+    LIST_FOR_EACH_ENTRY(entry, &d2d_pixel_shader_codes, struct d2d_pixel_shader_code, entry)
+    {
+        if (IsEqualGUID(&entry->id, id))
+        {
+            LeaveCriticalSection(&d2d_pixel_shader_codes_cs);
+            return;
+        }
+    }
+    if ((entry = malloc(offsetof(struct d2d_pixel_shader_code, code[size]))))
+    {
+        entry->id = *id;
+        entry->size = size;
+        memcpy(entry->code, code, size);
+        list_add_tail(&d2d_pixel_shader_codes, &entry->entry);
+    }
+    LeaveCriticalSection(&d2d_pixel_shader_codes_cs);
+}
+
+/* The effect's pixel shader on this context's device, with a reference. */
+HRESULT d2d_effect_get_pixel_shader(struct d2d_device_context *context, const GUID *id, ID3D11PixelShader **shader)
+{
+    struct d2d_device *device = context->device;
+    struct d2d_pixel_shader_code *entry;
+    IUnknown *object;
+    HRESULT hr = D2DERR_SHADER_COMPILE_FAILED;
+
+    if (d2d_device_get_indexed_object(&device->shaders, id, &object))
+        return IUnknown_QueryInterface(object, &IID_ID3D11PixelShader, (void **)shader);
+
+    EnterCriticalSection(&d2d_pixel_shader_codes_cs);
+    LIST_FOR_EACH_ENTRY(entry, &d2d_pixel_shader_codes, struct d2d_pixel_shader_code, entry)
+    {
+        if (!IsEqualGUID(&entry->id, id))
+            continue;
+        hr = ID3D11Device1_CreatePixelShader(context->d3d_device, entry->code, entry->size, NULL, shader);
+        break;
+    }
+    LeaveCriticalSection(&d2d_pixel_shader_codes_cs);
+    if (SUCCEEDED(hr))
+        hr = d2d_device_add_indexed_object(&device->shaders, id, (IUnknown *)*shader);
+    return hr;
+}
+
 static HRESULT STDMETHODCALLTYPE d2d_effect_context_LoadPixelShader(ID2D1EffectContext *iface,
         REFGUID shader_id, const BYTE *buffer, UINT32 buffer_size)
 {
@@ -2374,6 +2443,8 @@ static HRESULT STDMETHODCALLTYPE d2d_effect_context_LoadPixelShader(ID2D1EffectC
 
     TRACE("iface %p, shader_id %s, buffer %p, buffer_size %u.\n",
             iface, debugstr_guid(shader_id), buffer, buffer_size);
+
+    d2d_pixel_shader_code_store(shader_id, buffer, buffer_size);
 
     if (d2d_device_get_indexed_object(&device->shaders, shader_id, NULL))
         return S_OK;
@@ -3261,7 +3332,10 @@ static ULONG STDMETHODCALLTYPE d2d_draw_info_Release(ID2D1DrawInfo *iface)
     TRACE("iface %p refcount %lu.\n", iface, refcount);
 
     if (!refcount)
+    {
+        free(render_info->ps_constants);
         free(render_info);
+    }
 
     return refcount;
 }
@@ -3269,9 +3343,16 @@ static ULONG STDMETHODCALLTYPE d2d_draw_info_Release(ID2D1DrawInfo *iface)
 static HRESULT STDMETHODCALLTYPE d2d_draw_info_SetInputDescription(ID2D1DrawInfo *iface,
         UINT32 index, D2D1_INPUT_DESCRIPTION description)
 {
-    FIXME("iface %p, index %u stub.\n", iface, index);
+    struct d2d_render_info *render_info = impl_from_ID2D1DrawInfo(iface);
 
-    return E_NOTIMPL;
+    TRACE("iface %p, index %u, filter %#x, level %u.\n", iface, index, description.filter,
+            description.levelOfDetailCount);
+
+    if (index >= ARRAY_SIZE(render_info->input_descriptions))
+        return E_INVALIDARG;
+    render_info->input_descriptions[index] = description;
+    render_info->input_described[index] = TRUE;
+    return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE d2d_draw_info_SetOutputBuffer(ID2D1DrawInfo *iface,
@@ -3296,9 +3377,19 @@ static void STDMETHODCALLTYPE d2d_draw_info_SetInstructionCountHint(ID2D1DrawInf
 static HRESULT STDMETHODCALLTYPE d2d_draw_info_SetPixelShaderConstantBuffer(ID2D1DrawInfo *iface,
         const BYTE *buffer, UINT32 size)
 {
-    FIXME("iface %p, buffer %p, size %u stub.\n", iface, buffer, size);
+    struct d2d_render_info *render_info = impl_from_ID2D1DrawInfo(iface);
+    BYTE *constants;
 
-    return E_NOTIMPL;
+    TRACE("iface %p, buffer %p, size %u.\n", iface, buffer, size);
+
+    if (!(constants = malloc(size ? size : 1)))
+        return E_OUTOFMEMORY;
+    if (size)
+        memcpy(constants, buffer, size);
+    free(render_info->ps_constants);
+    render_info->ps_constants = constants;
+    render_info->ps_constants_size = size;
+    return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE d2d_draw_info_SetResourceTexture(ID2D1DrawInfo *iface,
@@ -3411,6 +3502,32 @@ static HRESULT d2d_transform_node_initialize_render_info(struct d2d_transform_no
     }
     FIXME("Unsupported node %p.\n", node);
     return E_NOTIMPL;
+}
+
+/* The render info of an effect drawn by a pixel shader of its own, or NULL. Only one
+ * transform per effect is supported, which covers per-pixel effects such as Office's. */
+struct d2d_render_info *d2d_effect_get_custom_render_info(ID2D1Effect *iface)
+{
+    struct d2d_effect *effect = CONTAINING_RECORD(iface, struct d2d_effect, ID2D1Effect_iface);
+    struct d2d_transform_node *node;
+
+    if (iface->lpVtbl != &d2d_effect_vtbl || !effect->graph || !(node = effect->graph->output))
+        return NULL;
+    if (!node->render_info)
+        return NULL;
+    /* An effect with several shaders only chooses one when it is about to be drawn. */
+    if (!(node->render_info->mask & D2D_RENDER_INFO_PIXEL_SHADER))
+        ID2D1EffectImpl_PrepareForRender(effect->impl, D2D1_CHANGE_TYPE_PROPERTIES);
+    if (!(node->render_info->mask & D2D_RENDER_INFO_PIXEL_SHADER))
+        return NULL;
+    return node->render_info;
+}
+
+HRESULT d2d_effect_prepare_for_render(ID2D1Effect *iface)
+{
+    struct d2d_effect *effect = CONTAINING_RECORD(iface, struct d2d_effect, ID2D1Effect_iface);
+
+    return ID2D1EffectImpl_PrepareForRender(effect->impl, D2D1_CHANGE_TYPE_PROPERTIES);
 }
 
 HRESULT d2d_effect_create(struct d2d_device_context *context, const CLSID *effect_id,

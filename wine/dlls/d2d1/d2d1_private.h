@@ -130,8 +130,7 @@ struct d2d_ps_cb
     struct d2d_brush_cb opacity_brush;
     D2D1_VECTOR_4F coefficients;
     D2D1_MATRIX_5X4_F color_matrix;
-    unsigned int color_matrix_mode, shadow_mode, padding[2];
-    D2D1_VECTOR_4F shadow_kernel, shadow_color;
+    unsigned int color_matrix_mode, padding[3];
 };
 
 struct d2d_vec4
@@ -226,7 +225,6 @@ struct d2d_device_context
     const D2D1_MATRIX_5X4_F *color_matrix;
     D2D1_COLORMATRIX_ALPHA_MODE color_matrix_mode;
     BOOL color_matrix_clamp;
-    const D2D1_VECTOR_4F *shadow_kernel, *shadow_color;
 
     struct d2d_error_state error;
     D2D1_DRAWING_STATE_DESCRIPTION1 drawing_state;
@@ -463,6 +461,10 @@ struct d2d_bitmap
     ID3D11RenderTargetView *rtv;
     IDXGISurface *surface;
     ID3D11Resource *resource;
+    /* A copy with a full mip chain, made once the bitmap is drawn at a reduced size. */
+    ID3D11Texture2D *mip_texture;
+    ID3D11ShaderResourceView *mip_srv;
+    BOOL mips_stale;
     D3D11_MAPPED_SUBRESOURCE mapped_resource;
     D2D1_SIZE_U pixel_size;
     D2D1_PIXEL_FORMAT format;
@@ -471,6 +473,8 @@ struct d2d_bitmap
     D2D1_BITMAP_OPTIONS options;
 };
 
+ID3D11ShaderResourceView *d2d_bitmap_get_mip_srv(struct d2d_bitmap *bitmap,
+        ID3D11Device *device, ID3D11DeviceContext *context);
 HRESULT d2d_bitmap_create(struct d2d_device_context *context, D2D1_SIZE_U size, const void *src_data,
         UINT32 pitch, const D2D1_BITMAP_PROPERTIES1 *desc, struct d2d_bitmap **bitmap);
 HRESULT d2d_bitmap_create_shared(struct d2d_device_context *context, REFIID iid, void *data,
@@ -662,6 +666,9 @@ void d2d_transformed_geometry_init(struct d2d_geometry *geometry, ID2D1Factory *
 HRESULT d2d_geometry_group_init(struct d2d_geometry *geometry, ID2D1Factory *factory,
         D2D1_FILL_MODE fill_mode, ID2D1Geometry **src_geometries, unsigned int geometry_count);
 struct d2d_geometry *unsafe_impl_from_ID2D1Geometry(ID2D1Geometry *iface);
+HRESULT d2d_geometry_create_stroke(ID2D1Factory *factory, ID2D1Geometry *geometry,
+        const struct d2d_stroke_style *style, float stroke_width, float scale, BOOL merge,
+        ID2D1Geometry **lines, ID2D1Geometry **fill);
 
 struct d2d_geometry_realization
 {
@@ -826,6 +833,11 @@ struct d2d_render_info
 
     unsigned int mask;
     GUID pixel_shader;
+    /* What a custom effect's pixel shader asked for, for drawing it. */
+    BYTE *ps_constants;
+    UINT32 ps_constants_size;
+    D2D1_INPUT_DESCRIPTION input_descriptions[8];
+    BOOL input_described[8];
 };
 
 struct d2d_transform_node
@@ -877,6 +889,9 @@ struct d2d_effect
 
 HRESULT d2d_effect_create(struct d2d_device_context *context, const CLSID *effect_id,
         ID2D1Effect **effect);
+struct d2d_render_info *d2d_effect_get_custom_render_info(ID2D1Effect *effect);
+HRESULT d2d_effect_prepare_for_render(ID2D1Effect *effect);
+HRESULT d2d_effect_get_pixel_shader(struct d2d_device_context *context, const GUID *id, ID3D11PixelShader **shader);
 void d2d_effect_init_properties(struct d2d_effect *effect, struct d2d_effect_properties *properties);
 HRESULT d2d_effect_properties_add(struct d2d_effect_properties *props, const WCHAR *name,
         UINT32 index, D2D1_PROPERTY_TYPE type, const WCHAR *value);
