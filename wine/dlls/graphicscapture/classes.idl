@@ -24,5 +24,6 @@
 import "windows.graphics.capture.idl";
 
 namespace Windows.Graphics.Capture {
+    runtimeclass GraphicsCaptureItem;
     runtimeclass GraphicsCaptureSession;
 }

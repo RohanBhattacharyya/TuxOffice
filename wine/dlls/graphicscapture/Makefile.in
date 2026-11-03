@@ -3,5 +3,6 @@ IMPORTS = combase
 
 SOURCES = \
 	classes.idl \
+	item.c \
 	main.c \
 	session.c

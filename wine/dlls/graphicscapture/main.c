@@ -35,6 +35,9 @@ HRESULT WINAPI DllGetActivationFactory( HSTRING classid, IActivationFactory **fa
     if (!wcscmp( buffer, RuntimeClass_Windows_Graphics_Capture_GraphicsCaptureSession ))
         IActivationFactory_QueryInterface( session_factory, &IID_IActivationFactory, (void **)factory );
 
+    if (!wcscmp( buffer, RuntimeClass_Windows_Graphics_Capture_GraphicsCaptureItem ))
+        IActivationFactory_QueryInterface( item_factory, &IID_IActivationFactory, (void **)factory );
+
     if (*factory) return S_OK;
     return CLASS_E_CLASSNOTAVAILABLE;
 }

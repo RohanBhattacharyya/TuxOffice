@@ -236,6 +236,8 @@ configure_shell() {
   # TuxOffice's runner introduced to prefixes made by an earlier version.
   local key='HKLM\Software\Microsoft\WindowsRuntime\ActivatableClassId\Windows.UI.Composition.Interactions.InteractionTrackerInertiaRestingValue'
   wreg "$key" /v DllPath /t REG_SZ /d 'C:\windows\system32\windows.ui.dll' /reg:64
+  key='HKLM\Software\Microsoft\WindowsRuntime\ActivatableClassId\Windows.Graphics.Capture.GraphicsCaptureItem'
+  wreg "$key" /v DllPath /t REG_SZ /d 'C:\windows\system32\graphicscapture.dll' /reg:64
 }
 
 configure_installer_components() {
