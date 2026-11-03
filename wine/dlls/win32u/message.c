@@ -3215,9 +3215,13 @@ static int peek_message( MSG *msg, const struct peek_message_filter *filter )
                 }
                 else
                 {
+                    /* Match on the message alone: it can outlive its window, when the
+                     * window is destroyed just as the message is posted. Asking for a
+                     * dead window fails without removing the message, so this loop
+                     * would find the same message again for ever. */
                     struct peek_message_filter new_filter =
                     {
-                        .hwnd = info.msg.hwnd,
+                        .hwnd = 0,
                         .flags = flags | PM_REMOVE,
                         .first = info.msg.message,
                         .last = info.msg.message,
