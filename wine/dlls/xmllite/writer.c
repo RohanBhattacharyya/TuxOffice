@@ -1091,7 +1091,8 @@ static HRESULT WINAPI xmlwriter_WriteAttributeString(IXmlWriter *iface, LPCWSTR 
 
     if (is_xmlns_prefix || (prefix_len == 0 && uri && !wcscmp(uri, xmlnsuriW)))
     {
-        if (prefix_len && !is_empty_string(uri))
+        /* Giving the prefix its own reserved URI is fine, any other is not. */
+        if (prefix_len && !is_empty_string(uri) && wcscmp(uri, xmlnsuriW))
             return WR_E_XMLNSPREFIXDECLARATION;
 
         /* Look for exact match defined in current element, and write it out. */
