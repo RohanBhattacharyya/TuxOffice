@@ -2237,6 +2237,8 @@ static BOOL window_clip_client_surfaces( HWND hwnd )
     return ret;
 }
 
+static void init_fullscreen_surface( struct window_surface *surface, HWND hwnd, DWORD style, const RECT *rect );
+
 static struct window_surface *get_window_surface( HWND hwnd, UINT swp_flags, BOOL create_layered,
                                                   struct window_rects *rects, RECT *surface_rect )
 {
@@ -2293,7 +2295,13 @@ static struct window_surface *get_window_surface( HWND hwnd, UINT swp_flags, BOO
         new_surface = NULL;
     }
     else if (needs_surface)
+    {
+        struct window_surface *previous = new_surface;
+
         create_window_surface( hwnd, create_layered, surface_rect, raw_dpi, &new_surface );
+        if (new_surface && new_surface != previous && new_surface != &dummy_surface && !create_layered)
+            init_fullscreen_surface( new_surface, hwnd, style, &rects->window );
+    }
     else if (new_surface && new_surface != &dummy_surface)
     {
         window_surface_release( new_surface );
@@ -2337,6 +2345,27 @@ static BOOL is_fullscreen( const MONITORINFO *info, const RECT *rect )
 {
     return rect->left <= info->rcMonitor.left && rect->right >= info->rcMonitor.right &&
            rect->top <= info->rcMonitor.top && rect->bottom >= info->rcMonitor.bottom;
+}
+
+/* A full screen popup draws itself after a moment, as with a slide show. White in the
+ * meantime flashes across the screen: start with the colour it will erase to. */
+static void init_fullscreen_surface( struct window_surface *surface, HWND hwnd, DWORD style, const RECT *rect )
+{
+    MONITORINFO info = monitor_info_from_rect( *rect, get_thread_dpi() );
+    HBRUSH brush = (HBRUSH)get_class_long_ptr( hwnd, GCLP_HBRBACKGROUND, FALSE );
+    COLORREF color = RGB( 0, 0, 0 );
+    LOGBRUSH logbrush;
+
+    if (!(style & WS_POPUP) || (style & WS_CAPTION) == WS_CAPTION || !is_fullscreen( &info, rect )) return;
+    if ((ULONG_PTR)brush > COLOR_MENUBAR + 1)
+    {
+        if (NtGdiExtGetObjectW( brush, sizeof(logbrush), &logbrush ) && logbrush.lbStyle == BS_SOLID)
+            color = logbrush.lbColor;
+    }
+    else if (brush) color = get_sys_color( (ULONG_PTR)brush - 1 );
+
+    TRACE( "hwnd %p brush %p colour %06x\n", hwnd, brush, (int)color );
+    window_surface_fill( surface, color );
 }
 
 /***********************************************************************

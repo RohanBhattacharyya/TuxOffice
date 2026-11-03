@@ -625,6 +625,22 @@ void *window_surface_get_color( struct window_surface *surface, BITMAPINFO *info
     return gdi_bits.ptr;
 }
 
+/* Fill a new 32-bit surface with a colour instead of its default white. */
+void window_surface_fill( struct window_surface *surface, COLORREF color )
+{
+    char buffer[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
+    BITMAPINFO *info = (BITMAPINFO *)buffer;
+    UINT32 *bits, pixel = (GetRValue( color ) << 16) | (GetGValue( color ) << 8) | GetBValue( color );
+
+    window_surface_lock( surface );
+    if ((bits = window_surface_get_color( surface, info )) && info->bmiHeader.biBitCount == 32)
+    {
+        DWORD i, count = info->bmiHeader.biSizeImage / sizeof(*bits);
+        for (i = 0; i < count; i++) bits[i] = pixel;
+    }
+    window_surface_unlock( surface );
+}
+
 W32KAPI void window_surface_flush( struct window_surface *surface )
 {
     char color_buf[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
