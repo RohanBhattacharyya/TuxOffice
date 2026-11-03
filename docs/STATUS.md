@@ -161,6 +161,101 @@ data file and a local notebook, so no real mailbox or notebook was touched.
   a `BS_PUSHBOX`, a button with no face or frame, only text. Wine's button classes had
   no painter for that type and drew nothing. Both `user32` and `comctl32_v6` now draw
   it. Checked by screenshot and `BM_CLICK`; a physical pointer click was not tested.
+- **PowerPoint flashed white on entering a slide show.** Wine fills a new window
+  surface with white, and the slide show window shows that first, faded in by KWin, for
+  about 150 ms at 56 fps capture. A full screen captionless popup now starts in its class
+  brush's colour, which is black here, or black with no brush. Other windows keep the
+  white default. Peak brightness on entry went from 240 to 58, the editor's own level.
+- **Outlook crashed on opening People, every time after visiting Calendar.** Two causes,
+  both reported as fatal: `Windows.Graphics.Capture.GraphicsCaptureItem` did not exist
+  (Office takes a missing class for a lost device, while a failed `CreateFromVisual` only
+  makes it go without), and `CombineWithGeometry` was a stub, needed for round avatars.
+  The class now exists and reports capture as not implemented. Geometries now combine by
+  flattening, splitting edges at crossings and keeping those that bound the result, as
+  polylines. 39 switches across Calendar views, People and Mail ran without a fault.
+- **Direct2D drew arcs as straight lines.** `AddArc` now makes Bezier curves.
+- **Every composition target had its own Direct3D device,** each with DXVK's worker
+  threads. They now share one per rendering thread. Five rounds of switching in Outlook:
+  4 devices instead of about 49 for eight rounds, 283 threads after round one instead of
+  395, and growth of about 11 threads a round instead of 86.
+- **PowerPoint slide thumbnails stayed blank in any deck without a chart.** Each new
+  thumbnail is faded in through an arithmetic composite effect, and Office animates its
+  amounts with `StartAnimation` on the effect brush, which returned `E_NOTIMPL`. The fade
+  stayed on its first source, a blank surface, with the rendered slide unseen behind it.
+  A chart hid this by causing a second rendering pass that does not fade. Scalar
+  animations now store their final value, and expressions are evaluated when drawing.
+- **Office could freeze for good on a message for a dead window.** Another thread looks up
+  a window's owner and posts `WM_WINE_UPDATEWINDOWSTATE` just as the window is destroyed, so
+  the message outlives it. Under `PeekMessage` with `PM_NOREMOVE`, win32u handles an internal
+  message through a nested peek filtered on that window. The server rejects the dead handle
+  without removing the message, and the outer loop finds the same message again. The UI
+  thread never returned from `PeekMessage`, using about 44% of a core with no window showing.
+  It was seen as Excel never exiting after `Quit`, but nothing ties it to `Quit`. Read from
+  the stuck process: nested peek returning -1, window `IsWindow` false, no handler or post
+  reached in 60 s. The nested peek now matches on the message alone. Excel lingered in 2 of
+  4 rounds before, 0 of 70 after.
+- **Long sessions leaked memory and threads.** Two separate leaks, seen while switching between
+  Mail, Calendar and People in Outlook. Over ten rounds, before: threads 284 to 376, and about
+  24 MB a round. After: threads flat, and about 5 MB a round, falling.
+  - `wayland_restack_client_surfaces` never freed two buffers. A tracking `malloc` shim put
+    175 MB over 12 rounds on those two lines. Restacking happens in every app, so this was
+    not particular to Outlook. Native memory is now flat, 39 MB to 41 MB over 12 rounds.
+  - The compositor's target list kept its own reference to every composition target for as long
+    as the compositor lived, so one Office had released, or whose window was gone, kept its
+    swapchain and was still visited by every commit. Each swapchain brings a `dxvk-frame` thread,
+    and these grew by 9 a round. Commits now drop such targets.
+- **A workbook with a modern chart could not be saved.** Adding a Waterfall, Treemap, Sunburst,
+  Histogram, Funnel or Box chart made every later save fail with "Document not saved". These
+  charts are written by `chart.dll` through XmlLite, which calls
+  `WriteAttributeString("xmlns", "a", "http://www.w3.org/2000/xmlns/", ...)`. Wine rejected any
+  URI on that prefix, where only one other than its own reserved URI is wrong. Six such charts
+  now save and reopen looking the same, in Excel; PowerPoint saves a Waterfall chart. Word's
+  object model refused to create one in the test, so Word's save of them is untested, though
+  it uses the same `chart.dll`.
+- **Scatter charts drew no points.** Excel draws their markers with `DrawSpriteBatch`, which did
+  nothing on bitmap targets. It now draws each sprite, one at a time, so a chart with a very
+  large number of points may be slow; that has not been measured.
+- **Shape effects blanked whole slides.** On screen, any slide with a glow, soft edge or
+  reflection drew blank in the editor and thumbnails, and a slide show stayed on the previous
+  slide while reporting that it had moved on. PDF export was fine. Shadows came out hard and
+  black. There were several causes, in order of discovery:
+  - Office's custom Direct2D effect ("Alpha Threshold", in `GFX.DLL`) calls
+    `ID2D1DrawInfo::SetInputDescription`, a stub returning `E_NOTIMPL`, so creating the effect
+    failed and Office dropped the drawing.
+  - Nothing could run a custom effect's own pixel shader. A generic pass now does it, giving
+    the shader Direct2D's standard inputs. This covers single-transform per-pixel effects.
+    Alpha Threshold, BiLevel (black and white) and Find And Replace (Set Transparent Color) have
+    been seen to run. Find And Replace only chooses between its two shaders when about to draw,
+    so effects now get to do that before being classified.
+  - Any effect not otherwise handled was treated as `ArithmeticComposite`, which failed and
+    put the context in error, losing everything drawn. Gaussian blur, directional blur and
+    composite are now implemented, and an unknown effect draws its input with a `FIXME`.
+    `Shadow` was rebuilt on the same passes.
+  - A shader loaded on one device could be drawn on another, because a command list can be
+    played back on another thread with its own device. The bytecode is now kept for this.
+  - `d2d_affine_matrix` scaled translations by DPI/96 in pixel mode, moving effects by about
+    a quarter of their offset. The logged offsets add up to the shape's true position only
+    without the scaling. This is inferred from Office's behaviour, not from Windows.
+- **On-screen strokes ignored their style.** `DrawGeometry` drew every dashed and dotted
+  line solid, with flat ends and mitred corners, while PDF export was right. It affected
+  shapes in Word, Excel and PowerPoint, thumbnails and slide shows. Dashes, start, end and
+  dash caps, and round and bevel joins are now built from the flattened geometry. A
+  translucent stroke at least 2 px wide merges into one fill, which also removes the dark
+  blobs where it used to cover itself at corners. Hollow figures no longer go through the
+  fill's quadratic crossing search, which hung PowerPoint once a figure was made per dash.
+  `FIXED` strokes divided by `m11`, which is zero for a quarter turn; they now use the
+  transform's scale, and `HAIRLINE` is honoured. Cost: 49.5 ms per slide switch against
+  36.7 ms on a slide of 200 shapes, about 64 microseconds a shape.
+- **Shrunken pictures showed false patterns.** WIC's `BitmapScaler` implemented only nearest
+  neighbour and fell back to it for every other mode. Linear, Cubic, Fant and
+  HighQualityCubic are now filtered, widening the filter when shrinking, and premultiplying
+  straight alpha so that transparent edges do not darken. This drew the slide thumbnails.
+  The main canvas samples through Direct2D with no mip chain and `MaxLOD` 0, so static
+  bitmaps drawn below 80% now get a mip chain, made when first needed. The sampler cache was
+  indexed by the mode modulo 2, so cubic and anisotropic shared a slot with nearest
+  neighbour and whichever came first set the filter for both. A zone plate now fades to grey
+  as it should, with only very faint rings left. Bitmaps used as render targets keep the
+  old sampling, because they change with every draw into them.
 - **A result nobody asked for leaked across processes.** `IDispatch_Invoke_Proxy`
   never released its local result when the caller passed none, keeping server objects
   alive. Calling `db.CreateQueryDef "Q", "..."` as a statement held the database open.
@@ -180,7 +275,20 @@ data file and a local notebook, so no real mailbox or notebook was touched.
 
 | Test | Result |
 | --- | --- |
-| Office suite (Word, Excel, PowerPoint), 24 runs | 18 clean; the other 6 are the Excel crash below, with all checks passing |
+| Office suite (Word, Excel, PowerPoint), latest 10 runs | 10 clean; 21 of 174 earlier runs hit the Excel crash below, with all checks passing |
+| Excel functional test with network, `Quit` then exit, after the peek fix | 70 of 70 exited; 69 within 2 s, one in 11 s |
+| Dashes, caps and joins compared with PDF export, PowerPoint | match, as do thumbnails and a slide show |
+| Dashed shapes and shrunken pictures, Word and Excel | draw correctly |
+| Effects deck (fills, shadow, glow, soft edge, reflection, bevel, 3D, WordArt, text effects, table, SmartArt, chart) in a slide show, compared with PDF export | match by eye, apart from the items under Direct2D below |
+| Shadow, glow, soft edge and reflection in Word and Excel | draw correctly |
+| Effects, dashed outlines and pictures in Publisher, compared with its PDF export | match; a bevel set by script did not take in either |
+| JPEG, BMP, GIF, TIFF, PNG with alpha and SVG pictures, compared with PDF export | match by eye |
+| Excel: data bars, colour scales, icon sets, sparklines, cell patterns and borders, 16 chart types | draw correctly by eye |
+| Word: text formatting, lists, table styles and borders, rotated cell text, equation, pictures, shapes, WordArt, compared with PDF export | match by eye |
+| 41 slide transitions with entrance animations in a live slide show | no fault or hang, show reached the end |
+| 7 of those transitions sampled at about 49 fps, including Cube, Origami, Vortex and Morph | 30 to 60 distinct in-between frames each, so they animate |
+| Picture formatting in a slide show compared with PDF export: grayscale, black and white, washout, brightness, contrast, crop, and 16 artistic effects; Set Transparent Color on a coloured background | match by eye, no faults |
+| Ribbon tabs clicked, Word and Excel | 8 tabs seen drawn correctly in each, no faults; Help was not reached in either. The ribbon first changes about 0.12 s after the click |
 | VBA macro in Excel and Word | runs and returns the right value |
 | Outlook object model (`tests/functional/outlook.vbs`) | 27 of 27 |
 | OneNote API (`tests/onenote-api.c`) | 9 of 10; `FindPages` fails, though search in the app finds and highlights text |
@@ -188,6 +296,7 @@ data file and a local notebook, so no real mailbox or notebook was touched.
 | Access object model (`tests/functional/access.vbs`) | 41 of 43; XML export and compact after the full run fail, see below |
 | Access Create: Form, Report, Blank Form, Blank Report, Form Design, Report Design, Table, Query Design, Macro, Module | all open |
 | Outlook Calendar: Week, Month with scrolling, Schedule View | draw correctly |
+| Slide show entry and exit, 56 fps capture on a dark deck | no white frame |
 | Start to a responsive window, warm, isolated session | 3.4 s for each app tried; 3.7-4.9 s before |
 
 Not run: Wine's `oleaut32` conformance tests (they need generated test libraries
@@ -209,14 +318,42 @@ parity with Windows remains unmeasured.
   - `DBEngine.CompactDatabase` reports the file in use once `CurrentProject.Connection`
     has been used in that session, even after closing the connection and the database
     and waiting 20 s. `RunCommand acCmdCompactDatabase` reports no error either way, but
-    the file did not shrink, so it is not shown to work. The hold predates the ADO
-    wrapper working and survives replacing the thread's error object, so it comes from
-    the data source Access creates. Whether Windows behaves the same is unknown.
+    the file did not shrink, so it is not shown to work. Merely reading
+    `CurrentProject.Connection` is enough to cause it; without that, compact works. `MSACCESS.EXE`
+    still has the database open after `CloseCurrentDatabase`. The wrapper is not the holder: the
+    ADO connection reaches a reference count of zero and is destroyed, and having it uninitialize
+    the data source too made no difference. So the hold is inside the database engine Access
+    created. Whether Windows behaves the same is unknown.
   - Split Form, Multiple Items and Labels have not been opened: they are in menus
     the test helper did not open.
-- **Outlook:** one intermittent abort on switching modules, not reproduced in 8
-  more switches. Scripted access shows security prompts because no antivirus is
-  reported. A real account has not been tried, by choice.
+- **Direct2D:** shadows are missing from PowerPoint's slide thumbnails, though the canvas and
+  slide shows draw them, and Publisher's thumbnails show them. Office issues no Shadow effect
+  for thumbnail content, so it is Office's own choice, and whether Windows does the same is
+  not known. A gradient with transparency looks lighter on screen than in PDF export, and
+  which is right has not been established. Effects were only tried in PowerPoint, Word and
+  Excel. Office's Recolor, Tint, HLS, RGBtoHLS and LegacyOverlayBlend effects have not been
+  seen to run. `GFX.DLL` also refers to built-in effects not implemented here, including Blend,
+  Border, Crop, Flood, Morphology, Tile, Turbulence and the transfer and lighting effects. None
+  was reached in these tests; one that is would draw its input unchanged with a `FIXME`.
+  Cubic modes on the main canvas are trilinear over box filtered mips, which
+  is softer than Windows's high quality cubic and has not been compared with it. A closed
+  dashed figure does not join its last dash to its first. `DrawSpriteBatch` is unimplemented
+  for bitmap targets, and `CreateSvgDocument` does not parse streams; the effect of neither
+  has been seen.
+- **Excel stuck in `user_lock` at exit, seen once:** in one of the 4 rounds before the peek
+  fix, Excel's main thread was blocked on win32u's user mutex in `user_destroy_window`, under
+  the loader lock, with its other Wine threads gone. Wine ends other threads before
+  `DllMain` detach, so a thread ended while holding that mutex would explain it, but its
+  owner was not read and this is unproven. It did not recur in 70 rounds, which does not
+  show it is fixed.
+- **Outlook:** memory still grows by about 5 MB a round while switching modules, in Wine's own
+  heap and slowing over time, which may be caching. File descriptors grow by about 9 a round,
+  mostly `ntsync` handles; what holds them was not traced. Its `iterate` time in the functional
+  test rose from 8.7 s to 15.5 s across recent runs, probably because each run adds 200 items
+  to the same test mailbox, though that was not checked separately. The People peek card opens at the top of the
+  window, over the ribbon, which may or may not match Windows. Scripted access shows
+  security prompts because no antivirus is reported. A real account has not been tried,
+  by choice.
 - **Sign-in:** the code for personal accounts (`login.live.com`) is written but has
   never run end to end: it needs a personal account. The embedded page runs on
   Gecko 2.47 and draws its placeholder twice. Installing WebView2 (works, 69 s) did
@@ -229,9 +366,13 @@ parity with Windows remains unmeasured.
   365 subscribers lose Publisher after October 2026, which fits, though nothing
   here proves it is the cause. It still created, edited and saved in the tests. It
   is not worked around. After `Quit` by automation `MSPUB.EXE` never exits: its main
-  thread waits on a lock while a worker sits in an infinite wait inside `mso98`, and
-  the client waits for both. Closing its window exits in about 5 s.
-- **OneNote:** the offline first-run dialog's "Continue Anyway" button exists and
+  thread waits on a lock while a worker sits in an infinite wait on an event inside `mso98`,
+  and the client waits for both. Nothing shows what should set that event, so the cause is not
+  known. Closing its window exits in about 5 s.
+- **OneNote:** `{9e175b8b-f52a-11d8-b9a5-505054503030}`, the class `FindPages` fails to create,
+  is from memory the OLE DB provider of Windows Search, which Wine does not have. That is not
+  confirmed here. If so, fixing it means implementing a search index, not a small stub. The
+  offline first-run dialog's "Continue Anyway" button exists and
   works when activated, but did not appear in one screenshot; not checked further.
   `FindPages` returns `hrInvalidQuery` (0x80042019) after failing to create the
   unregistered class `{9e175b8b-f52a-11d8-b9a5-505054503030}`. That looks like Windows
@@ -239,14 +380,24 @@ parity with Windows remains unmeasured.
   Killing OneNote can make its next start show "We couldn't start OneNote", and
   `tests/functional/run.py` ends with a kill, so it may need "Start Normally" first.
 - **Word, Excel and PowerPoint:** `Quit` left a process running past 15 s in 2 of 60
-  runs before the hang fix and 0 of 24 after, with no lock waits logged. Whether the
-  fix cured it is not established.
+  runs before the shared object fix and 0 of 24 after, then in 1 of the 10 suite runs before
+  the peek fix and 0 of the 10 after. The peek fix has a proven mechanism for Excel. Whether
+  it accounts for all of these is not established: the earlier stuck processes were not
+  inspected, and one other cause is listed above under `user_lock`.
+- **Chart editing through the UI:** 1 of 44 rounds failed after Alt+F4, with Excel's save prompt
+  up and the input helper reporting that Excel was not in the foreground. The edit itself was
+  right. Whether a modal dialog can really fail to come forward, or only the helper's check
+  raced, is not known.
 - Bulk cross-process COM is slow: about 2.5 ms per call (14,000 calls in 35 s).
   In-process VBA is not affected.
 - Wine's VBScript releases temporaries mid-expression, which invalidates chains
   like `db.OpenRecordset(q).Fields(0).Value`. Office's VBA does not use it.
 
 ## Open: Excel crash after an embedded chart's workbook closes
+
+**Later on 2 November:** not seen in the last 60 scripted suite runs, whose logs record exceptions
+from the chart step. At the old rate of 12%, 60 clean runs would happen by chance about 0.05% of
+the time, so the rate has dropped. What changed it is not known, so it is not shown to be cured.
 
 **2 November:** now the most frequent failure: 21 of 174 scripted suite runs (12%).
 Whether the day's fixes changed the rate was not measured. The chart edit through the
