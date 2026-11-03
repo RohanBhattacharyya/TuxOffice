@@ -92,7 +92,9 @@ static inline struct connection_point *impl_from_IConnectionPoint( IConnectionPo
 static ULONG WINAPI connection_AddRef( _Connection *iface )
 {
     struct connection *connection = impl_from_Connection( iface );
-    return InterlockedIncrement( &connection->refs );
+    LONG refs = InterlockedIncrement( &connection->refs );
+    TRACE( "%p new refcount %ld\n", connection, refs );
+    return refs;
 }
 
 static ULONG WINAPI connection_Release( _Connection *iface )
@@ -100,6 +102,7 @@ static ULONG WINAPI connection_Release( _Connection *iface )
     struct connection *connection = impl_from_Connection( iface );
     LONG refs = InterlockedDecrement( &connection->refs );
     ULONG i;
+    TRACE( "%p new refcount %ld\n", connection, refs );
     if (!refs)
     {
         TRACE( "destroying %p\n", connection );
