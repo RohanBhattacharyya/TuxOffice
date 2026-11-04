@@ -46,3 +46,4 @@
 46 stub LocalEnrollNoDS
 47 stub RetrievePKCS7FromCA
 48 stub WizardFree
+@ stdcall CertSelectionGetSerializedBlob(ptr ptr ptr)

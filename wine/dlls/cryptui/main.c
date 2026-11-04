@@ -7473,3 +7473,12 @@ BOOL WINAPI CryptUIWizDigitalSign(DWORD flags, HWND parent, LPCWSTR title, PCCRY
     FIXME("%ld %p %s %p %p: stub\n", flags, parent, debugstr_w(title), info, context);
     return FALSE;
 }
+
+
+HRESULT WINAPI CertSelectionGetSerializedBlob(void *input, void **buffer, ULONG *size)
+{
+    FIXME("%p, %p, %p: not implemented.\n", input, buffer, size);
+    if (buffer) *buffer = NULL;
+    if (size) *size = 0;
+    return E_NOTIMPL;
+}

@@ -2854,3 +2854,18 @@ void NET_API_FUNCTION NetFreeAadJoinInformation(DSREG_JOIN_INFO *join_info)
 {
     FIXME("%p): stub\n", join_info);
 }
+
+
+/* WebDAV files are not distinguished from others here, so there is nothing to flush and no
+ * extended error to report. */
+DWORD WINAPI DavFlushFile(HANDLE file)
+{
+    FIXME("%p: not supported.\n", file);
+    return ERROR_NOT_SUPPORTED;
+}
+
+DWORD WINAPI DavGetExtendedError(HANDLE file, DWORD *error, WCHAR *message, DWORD *size)
+{
+    FIXME("%p, %p, %p, %p: not supported.\n", file, error, message, size);
+    return ERROR_NOT_SUPPORTED;
+}

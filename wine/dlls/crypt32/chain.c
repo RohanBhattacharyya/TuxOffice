@@ -3880,3 +3880,29 @@ BOOL WINAPI CertVerifyCertificateChainPolicy(LPCSTR szPolicyOID,
     TRACE("returning %d (%08lx)\n", ret, pPolicyStatus->dwError);
     return ret;
 }
+
+
+/* Selecting certificates by criteria is not implemented: none is found. Office asks when
+ * offering certificates for signing, and copes with an empty list; without the export it
+ * ended the process. */
+BOOL WINAPI CertSelectCertificateChains(LPCGUID context, DWORD flags, const void *chain_para, DWORD count,
+        const void *criteria, HCERTSTORE store, DWORD *selection_count, PCCERT_CHAIN_CONTEXT **selection)
+{
+    FIXME("%s, %#lx, %p, %lu, %p, %p, %p, %p: returning no chains.\n", debugstr_guid(context), flags,
+            chain_para, count, criteria, store, selection_count, selection);
+
+    if (!selection_count || !selection)
+    {
+        SetLastError(E_INVALIDARG);
+        return FALSE;
+    }
+    *selection_count = 0;
+    *selection = NULL;
+    return TRUE;
+}
+
+void WINAPI CertFreeCertificateChainList(PCCERT_CHAIN_CONTEXT *list)
+{
+    TRACE("%p.\n", list);
+    LocalFree(list);
+}

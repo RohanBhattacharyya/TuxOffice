@@ -3558,3 +3558,16 @@ HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, void **obj)
 
     return CLASS_E_CLASSNOTAVAILABLE;
 }
+
+
+/***********************************************************************
+ *           CoCancelCall    (combase.@)
+ *
+ * Calls cannot be cancelled here. This is what Windows says for a thread that has not
+ * enabled cancelling, which callers must handle anyway.
+ */
+HRESULT WINAPI CoCancelCall(DWORD thread_id, ULONG timeout)
+{
+    FIXME("%#lx, %lu: cancelling is not supported.\n", thread_id, timeout);
+    return CO_E_CANCEL_DISABLED;
+}

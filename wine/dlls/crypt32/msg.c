@@ -4075,3 +4075,31 @@ BOOL WINAPI CryptMsgSignCTL(DWORD dwMsgEncodingType, BYTE *pbCtlContent,
         ret = FALSE;
     return ret;
 }
+
+
+/* Time stamps from a server are not supported. Failing is what Windows does when one cannot
+ * be had, and callers then go without; the missing exports ended the process instead. */
+BOOL WINAPI CryptRetrieveTimeStamp(LPCWSTR url, DWORD flags, DWORD timeout, LPCSTR hash_oid, const void *para,
+        const BYTE *data, DWORD size, void **context, PCCERT_CONTEXT *signer, HCERTSTORE *store)
+{
+    FIXME("%s, %#lx, %lu, %s, %p, %p, %lu: not supported.\n", debugstr_w(url), flags, timeout,
+            debugstr_a(hash_oid), para, data, size);
+
+    if (context) *context = NULL;
+    if (signer) *signer = NULL;
+    if (store) *store = NULL;
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return FALSE;
+}
+
+BOOL WINAPI CryptVerifyTimeStampSignature(const BYTE *token, DWORD token_size, const BYTE *data, DWORD size,
+        HCERTSTORE extra, void **context, PCCERT_CONTEXT *signer, HCERTSTORE *store)
+{
+    FIXME("%p, %lu, %p, %lu, %p: not supported.\n", token, token_size, data, size, extra);
+
+    if (context) *context = NULL;
+    if (signer) *signer = NULL;
+    if (store) *store = NULL;
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return FALSE;
+}

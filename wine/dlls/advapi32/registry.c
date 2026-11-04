@@ -649,6 +649,17 @@ LSTATUS WINAPI RegDisablePredefinedCache(void)
     return RtlNtStatusToDosError( DisablePredefinedHandleTableInternal( HKEY_CURRENT_USER ));
 }
 
+/******************************************************************************
+ * RegDisablePredefinedCacheEx [ADVAPI32.@]
+ *
+ * Predefined keys are not cached here, so like RegDisablePredefinedCache there is nothing
+ * to turn off.
+ */
+LSTATUS WINAPI RegDisablePredefinedCacheEx(void)
+{
+    return RegDisablePredefinedCache();
+}
+
 
 /******************************************************************************
  * RegCopyTreeA [ADVAPI32.@]

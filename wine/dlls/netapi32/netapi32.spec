@@ -298,3 +298,5 @@
 @ stub RxNetServerEnum
 @ stub RxNetUserPasswordSet
 @ stub RxRemoteApi
+@ stdcall DavFlushFile(ptr)
+@ stdcall DavGetExtendedError(ptr ptr ptr ptr)

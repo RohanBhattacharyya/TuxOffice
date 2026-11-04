@@ -45,12 +45,14 @@
 @ stdcall CertFindCertificateInCRL(ptr ptr long ptr ptr)
 @ stdcall CertFindCertificateInStore(ptr long long long ptr ptr)
 @ stdcall CertFindChainInStore(ptr long long long ptr ptr)
+@ stdcall CertSelectCertificateChains(ptr long ptr long ptr ptr ptr ptr)
 @ stdcall CertFindExtension(str long ptr)
 @ stdcall CertFindRDNAttr(str ptr)
 @ stub CertFindSubjectInCTL
 @ stdcall CertFreeCRLContext(ptr)
 @ stdcall CertFreeCTLContext(ptr)
 @ stdcall CertFreeCertificateChain(ptr)
+@ stdcall CertFreeCertificateChainList(ptr)
 @ stdcall CertFreeCertificateChainEngine(ptr)
 @ stdcall CertFreeCertificateContext(ptr)
 @ stdcall CertGetCRLContextProperty(ptr long ptr ptr)
@@ -204,6 +206,8 @@
 @ stdcall CryptVerifyDetachedMessageSignature(ptr long ptr long long ptr ptr ptr)
 @ stdcall CryptVerifyMessageHash(ptr ptr long ptr ptr ptr ptr)
 @ stdcall CryptVerifyMessageSignature(ptr long ptr long ptr ptr ptr)
+@ stdcall CryptVerifyTimeStampSignature(ptr long ptr long ptr ptr ptr ptr)
+@ stdcall CryptRetrieveTimeStamp(wstr long long str ptr ptr long ptr ptr ptr)
 @ stub CryptVerifyMessageSignatureWithKey
 @ stub CryptVerifySignatureU
 @ stdcall I_CertUpdateStore(ptr ptr long long)
