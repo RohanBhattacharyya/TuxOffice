@@ -35,6 +35,7 @@ enum writer_state
 {
     SINK_WRITER_STATE_INITIAL = 0,
     SINK_WRITER_STATE_WRITING,
+    SINK_WRITER_STATE_FINALIZING,
 };
 
 struct marker_context
@@ -59,6 +60,7 @@ struct stream
 {
     IMFStreamSink *stream_sink;
     IMFTransform *converter, *encoder;
+    LONGLONG next_time; /* where the last sample out of the transforms ended */
     MF_SINK_WRITER_STATISTICS stats;
     struct list queue; /* struct pending_item. */
 };
@@ -85,8 +87,10 @@ struct sink_writer
 
     IMFAttributes *attributes;
     IMFSinkWriterCallback *callback;
+    IMFAsyncCallback finalize_callback;
 
     CRITICAL_SECTION cs;
+    CONDITION_VARIABLE sample_taken;
 };
 
 static struct sink_writer *impl_from_IMFSinkWriterEx(IMFSinkWriterEx *iface)
@@ -97,6 +101,11 @@ static struct sink_writer *impl_from_IMFSinkWriterEx(IMFSinkWriterEx *iface)
 static struct sink_writer *impl_from_events_callback_IMFAsyncCallback(IMFAsyncCallback *iface)
 {
     return CONTAINING_RECORD(iface, struct sink_writer, events_callback);
+}
+
+static struct sink_writer *impl_from_finalize_callback_IMFAsyncCallback(IMFAsyncCallback *iface)
+{
+    return CONTAINING_RECORD(iface, struct sink_writer, finalize_callback);
 }
 
 static struct marker_context *impl_from_marker_context_IUnknown(IUnknown *iface)
@@ -175,6 +184,237 @@ static void stream_release_transforms(struct stream *stream)
     if (stream->encoder)
         IMFTransform_Release(stream->encoder);
     stream->encoder = NULL;
+}
+
+static IMFTransform *stream_get_transform(const struct stream *stream, unsigned int level)
+{
+    if (stream->converter && !level--) return stream->converter;
+    if (stream->encoder && !level) return stream->encoder;
+    return NULL;
+}
+
+/* Find a transform of the category between the two subtypes that accepts both types. Encoders
+ * take their output type first. */
+static HRESULT create_transform(const GUID *category, const GUID *major, const GUID *input_subtype,
+        const GUID *output_subtype, IMFMediaType *input_type, IMFMediaType *output_type, IMFTransform **ret)
+{
+    MFT_REGISTER_TYPE_INFO input_info = {*major, *input_subtype}, output_info = {*major, *output_subtype};
+    BOOL output_first = IsEqualGUID(category, &MFT_CATEGORY_VIDEO_ENCODER)
+            || IsEqualGUID(category, &MFT_CATEGORY_AUDIO_ENCODER);
+    IMFActivate **activates;
+    IMFTransform *transform;
+    UINT32 count = 0, i;
+    HRESULT hr;
+
+    *ret = NULL;
+    if (FAILED(hr = MFTEnumEx(*category, MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_LOCALMFT | MFT_ENUM_FLAG_SORTANDFILTER,
+            &input_info, &output_info, &activates, &count)))
+        return hr;
+
+    for (i = 0; i < count; ++i)
+    {
+        if (!*ret && SUCCEEDED(IMFActivate_ActivateObject(activates[i], &IID_IMFTransform, (void **)&transform)))
+        {
+            if (output_first)
+                hr = IMFTransform_SetOutputType(transform, 0, output_type, 0);
+            else
+                hr = IMFTransform_SetInputType(transform, 0, input_type, 0);
+            if (SUCCEEDED(hr))
+            {
+                if (output_first)
+                    hr = IMFTransform_SetInputType(transform, 0, input_type, 0);
+                else
+                    hr = IMFTransform_SetOutputType(transform, 0, output_type, 0);
+            }
+            if (SUCCEEDED(hr))
+                *ret = transform;
+            else
+                IMFTransform_Release(transform);
+        }
+        IMFActivate_Release(activates[i]);
+    }
+    CoTaskMemFree(activates);
+
+    return *ret ? S_OK : MF_E_TOPO_CODEC_NOT_FOUND;
+}
+
+/* A format an encoder takes, given the frame or sample format of what it encodes to: an encoder
+ * does not scale or resample, so those come from its output type, or else from the input. */
+static HRESULT complete_encoder_input_type(IMFMediaType *available, IMFMediaType *output_type,
+        IMFMediaType *input_type, IMFMediaType **ret)
+{
+    static const GUID *const format[] =
+    {
+        &MF_MT_FRAME_SIZE, &MF_MT_FRAME_RATE, &MF_MT_PIXEL_ASPECT_RATIO, &MF_MT_INTERLACE_MODE,
+        &MF_MT_AUDIO_SAMPLES_PER_SECOND, &MF_MT_AUDIO_NUM_CHANNELS,
+    };
+    /* Derived from the frame size the available type had. */
+    static const GUID *const derived[] =
+    {
+        &MF_MT_DEFAULT_STRIDE, &MF_MT_SAMPLE_SIZE, &MF_MT_MINIMUM_DISPLAY_APERTURE,
+        &MF_MT_GEOMETRIC_APERTURE, &MF_MT_PAN_SCAN_APERTURE,
+    };
+    PROPVARIANT value;
+    unsigned int i;
+    HRESULT hr;
+
+    if (FAILED(hr = MFCreateMediaType(ret))) return hr;
+    if (FAILED(hr = IMFMediaType_CopyAllItems(available, (IMFAttributes *)*ret)))
+    {
+        IMFMediaType_Release(*ret);
+        return hr;
+    }
+    for (i = 0; i < ARRAY_SIZE(derived); ++i)
+        IMFMediaType_DeleteItem(*ret, derived[i]);
+    for (i = 0; i < ARRAY_SIZE(format); ++i)
+    {
+        PropVariantInit(&value);
+        if (SUCCEEDED(IMFMediaType_GetItem(output_type, format[i], &value))
+                || (FAILED(IMFMediaType_GetItem(*ret, format[i], NULL))
+                && SUCCEEDED(IMFMediaType_GetItem(input_type, format[i], &value))))
+            IMFMediaType_SetItem(*ret, format[i], &value);
+        PropVariantClear(&value);
+    }
+    return S_OK;
+}
+
+/* Insert a converter, an encoder, or both, so that samples of the input type become samples of the
+ * stream's type. */
+static HRESULT stream_create_transforms(struct stream *stream, IMFMediaType *input_type, IMFMediaType *output_type)
+{
+    MFT_REGISTER_TYPE_INFO output_info;
+    const GUID *encoder_category, *converter_category;
+    GUID major, input_subtype, output_subtype, subtype;
+    IMFTransform *encoder, *converter = NULL;
+    IMFMediaType *available, *encoder_input;
+    IMFActivate **activates;
+    UINT32 count = 0, i, j, pass;
+    HRESULT hr;
+
+    if (FAILED(hr = IMFMediaType_GetMajorType(input_type, &major))
+            || FAILED(hr = IMFMediaType_GetGUID(input_type, &MF_MT_SUBTYPE, &input_subtype))
+            || FAILED(hr = IMFMediaType_GetGUID(output_type, &MF_MT_SUBTYPE, &output_subtype)))
+        return hr;
+
+    if (IsEqualGUID(&major, &MFMediaType_Video))
+    {
+        encoder_category = &MFT_CATEGORY_VIDEO_ENCODER;
+        converter_category = &MFT_CATEGORY_VIDEO_PROCESSOR;
+    }
+    else if (IsEqualGUID(&major, &MFMediaType_Audio))
+    {
+        encoder_category = &MFT_CATEGORY_AUDIO_ENCODER;
+        converter_category = &MFT_CATEGORY_AUDIO_EFFECT;
+    }
+    else
+        return MF_E_INVALIDMEDIATYPE;
+
+    /* An uncompressed output only needs a converter. */
+    if (SUCCEEDED(create_transform(converter_category, &major, &input_subtype, &output_subtype,
+            input_type, output_type, &stream->converter)))
+        return S_OK;
+
+    /* An encoder that takes the input as it is. */
+    if (SUCCEEDED(create_transform(encoder_category, &major, &input_subtype, &output_subtype,
+            input_type, output_type, &stream->encoder)))
+        return S_OK;
+
+    /* An encoder behind a converter to one of the formats it takes. */
+    output_info.guidMajorType = major;
+    output_info.guidSubtype = output_subtype;
+    if (FAILED(hr = MFTEnumEx(*encoder_category, MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_LOCALMFT
+            | MFT_ENUM_FLAG_SORTANDFILTER, NULL, &output_info, &activates, &count)))
+        return hr;
+
+    for (i = 0; i < count; ++i)
+    {
+        if (!converter && SUCCEEDED(IMFActivate_ActivateObject(activates[i], &IID_IMFTransform, (void **)&encoder)))
+        {
+            /* NV12 first: it is what encoders take natively, and its layout is the same in Media
+             * Foundation and GStreamer at any even width, which is not so for the planar formats. */
+            for (pass = 0; pass < 2 && !converter; ++pass)
+            {
+                if (FAILED(IMFTransform_SetOutputType(encoder, 0, output_type, 0))) break;
+                for (j = 0; !converter && SUCCEEDED(IMFTransform_GetInputAvailableType(encoder, 0, j, &available)); ++j)
+                {
+                    if (SUCCEEDED(IMFMediaType_GetGUID(available, &MF_MT_SUBTYPE, &subtype))
+                            && IsEqualGUID(&subtype, &MFVideoFormat_NV12) == !pass
+                            && SUCCEEDED(complete_encoder_input_type(available, output_type, input_type, &encoder_input)))
+                    {
+                        if (SUCCEEDED(IMFTransform_SetInputType(encoder, 0, encoder_input, 0)))
+                            create_transform(converter_category, &major, &input_subtype, &subtype,
+                                    input_type, encoder_input, &converter);
+                        IMFMediaType_Release(encoder_input);
+                    }
+                    IMFMediaType_Release(available);
+                }
+            }
+            if (converter)
+            {
+                stream->converter = converter;
+                stream->encoder = encoder;
+            }
+            else
+                IMFTransform_Release(encoder);
+        }
+        IMFActivate_Release(activates[i]);
+    }
+    CoTaskMemFree(activates);
+
+    if (!converter)
+    {
+        WARN("No transform from %s to %s.\n", debugstr_guid(&input_subtype), debugstr_guid(&output_subtype));
+        return MF_E_TOPO_CODEC_NOT_FOUND;
+    }
+    return S_OK;
+}
+
+/* Get an output sample of a transform, allocating it when the transform does not. */
+static HRESULT transform_get_sample(IMFTransform *transform, IMFSample **ret)
+{
+    MFT_OUTPUT_DATA_BUFFER data = {0};
+    MFT_OUTPUT_STREAM_INFO info;
+    IMFMediaBuffer *buffer;
+    IMFMediaType *type;
+    DWORD status;
+    HRESULT hr;
+
+    *ret = NULL;
+    if (FAILED(hr = IMFTransform_GetOutputStreamInfo(transform, 0, &info))) return hr;
+    if (!(info.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES)))
+    {
+        if (FAILED(hr = MFCreateSample(&data.pSample))) return hr;
+        if (FAILED(hr = MFCreateAlignedMemoryBuffer(info.cbSize ? info.cbSize : 0x100000,
+                info.cbAlignment ? info.cbAlignment - 1 : 0, &buffer)))
+        {
+            IMFSample_Release(data.pSample);
+            return hr;
+        }
+        IMFSample_AddBuffer(data.pSample, buffer);
+        IMFMediaBuffer_Release(buffer);
+    }
+
+    hr = IMFTransform_ProcessOutput(transform, 0, 1, &data, &status);
+    if (data.pEvents)
+        IMFCollection_Release(data.pEvents);
+    if (hr == MF_E_TRANSFORM_STREAM_CHANGE && SUCCEEDED(IMFTransform_GetOutputAvailableType(transform, 0, 0, &type)))
+    {
+        /* Take the format the transform settled on, and ask again. */
+        hr = IMFTransform_SetOutputType(transform, 0, type, 0);
+        IMFMediaType_Release(type);
+        if (data.pSample)
+            IMFSample_Release(data.pSample);
+        return SUCCEEDED(hr) ? transform_get_sample(transform, ret) : hr;
+    }
+    if (FAILED(hr))
+    {
+        if (data.pSample)
+            IMFSample_Release(data.pSample);
+        return hr;
+    }
+
+    *ret = data.pSample;
+    return S_OK;
 }
 
 static HRESULT stream_get_type(struct stream *stream, IMFMediaType **out_type)
@@ -327,8 +567,10 @@ static HRESULT WINAPI sink_writer_AddStream(IMFSinkWriterEx *iface, IMFMediaType
         id = writer->streams.next_id + 1;
         if (SUCCEEDED(hr = IMFMediaSink_AddStreamSink(writer->sink, id, media_type, &stream_sink)))
         {
+            /* The stream keeps its own reference. */
             if (FAILED(hr = sink_writer_add_stream(writer, stream_sink, index)))
                 IMFMediaSink_RemoveStreamSink(writer->sink, id);
+            IMFStreamSink_Release(stream_sink);
         }
     }
 
@@ -369,13 +611,12 @@ static HRESULT WINAPI sink_writer_SetInputMediaType(IMFSinkWriterEx *iface, DWOR
         goto done;
     }
 
-    /* Types are not compatible, create transforms. */
+    stream_release_transforms(stream);
+    hr = S_OK;
+
+    /* Types are not compatible, create transforms: a converter, an encoder or both. */
     if (!(flags & MF_MEDIATYPE_EQUAL_FORMAT_DATA))
-    {
-        /* TODO: Try only using converter first, then try again with encoder. */
-        FIXME("Not implemented.\n");
-        hr = E_NOTIMPL;
-    }
+        hr = stream_create_transforms(stream, type, stream_type);
 
 done:
     if (stream_type)
@@ -542,6 +783,15 @@ static HRESULT sink_writer_flush(struct sink_writer *writer, unsigned int index)
     return sink_writer_place_marker(writer, stream, MFSTREAMSINK_MARKER_ENDOFSEGMENT, 0, NULL);
 }
 
+static BOOL stream_has_samples(const struct stream *stream)
+{
+    struct pending_item *item;
+
+    LIST_FOR_EACH_ENTRY(item, &stream->queue, struct pending_item, entry)
+        if (item->sample) return TRUE;
+    return FALSE;
+}
+
 static HRESULT sink_writer_process_sample(struct sink_writer *writer, struct stream *stream)
 {
     struct pending_item *item, *next;
@@ -583,11 +833,9 @@ static HRESULT sink_writer_process_sample(struct sink_writer *writer, struct str
     return hr;
 }
 
-static HRESULT sink_writer_encode_sample(struct sink_writer *writer, struct stream *stream, IMFSample *sample)
+static HRESULT stream_queue_sample(struct stream *stream, IMFSample *sample)
 {
     struct pending_item *item;
-
-    /* FIXME: call the encoder, queue its output */
 
     if (!(item = calloc(1, sizeof(*item))))
         return E_OUTOFMEMORY;
@@ -597,6 +845,86 @@ static HRESULT sink_writer_encode_sample(struct sink_writer *writer, struct stre
     list_add_tail(&stream->queue, &item->entry);
 
     return S_OK;
+}
+
+static HRESULT stream_push_sample(struct stream *stream, unsigned int level, IMFSample *sample);
+
+/* Pass everything a transform has ready on to the next one, or to the queue. */
+static HRESULT stream_pull_samples(struct stream *stream, unsigned int level)
+{
+    IMFTransform *transform = stream_get_transform(stream, level);
+    IMFSample *sample;
+    HRESULT hr;
+
+    while (SUCCEEDED(hr = transform_get_sample(transform, &sample)))
+    {
+        LONGLONG time, duration;
+
+        /* Muxers need a valid time on every sample; some encoders leave one out, or give the last
+         * one drained a negative time. */
+        if (FAILED(IMFSample_GetSampleTime(sample, &time)) || time < 0)
+        {
+            TRACE("Sample %p from transform %p has no time, using %s.\n", sample, transform,
+                    wine_dbgstr_longlong(stream->next_time));
+            IMFSample_SetSampleTime(sample, (time = stream->next_time));
+        }
+        if (SUCCEEDED(IMFSample_GetSampleDuration(sample, &duration)))
+            stream->next_time = time + duration;
+        else
+            stream->next_time = time;
+
+        hr = stream_push_sample(stream, level + 1, sample);
+        IMFSample_Release(sample);
+        if (FAILED(hr)) return hr;
+    }
+
+    return hr == MF_E_TRANSFORM_NEED_MORE_INPUT ? S_OK : hr;
+}
+
+static HRESULT stream_push_sample(struct stream *stream, unsigned int level, IMFSample *sample)
+{
+    IMFTransform *transform;
+    HRESULT hr;
+
+    if (!(transform = stream_get_transform(stream, level)))
+        return stream_queue_sample(stream, sample);
+
+    if ((hr = IMFTransform_ProcessInput(transform, 0, sample, 0)) == MF_E_NOTACCEPTING)
+    {
+        if (FAILED(hr = stream_pull_samples(stream, level))) return hr;
+        hr = IMFTransform_ProcessInput(transform, 0, sample, 0);
+    }
+    if (FAILED(hr))
+    {
+        WARN("Transform %p did not take the sample, hr %#lx.\n", transform, hr);
+        return hr;
+    }
+
+    return stream_pull_samples(stream, level);
+}
+
+/* Let each transform give up what it holds, in order, so that the last samples reach the queue. */
+static HRESULT stream_drain_transforms(struct stream *stream)
+{
+    IMFTransform *transform;
+    unsigned int level;
+    HRESULT hr;
+
+    for (level = 0; (transform = stream_get_transform(stream, level)); ++level)
+    {
+        IMFTransform_ProcessMessage(transform, MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0);
+        if (FAILED(hr = IMFTransform_ProcessMessage(transform, MFT_MESSAGE_COMMAND_DRAIN, 0)))
+            return hr;
+        if (FAILED(hr = stream_pull_samples(stream, level)))
+            return hr;
+    }
+
+    return S_OK;
+}
+
+static HRESULT sink_writer_encode_sample(struct sink_writer *writer, struct stream *stream, IMFSample *sample)
+{
+    return stream_push_sample(stream, 0, sample);
 }
 
 static HRESULT sink_writer_write_sample(struct sink_writer *writer, struct stream *stream, IMFSample *sample)
@@ -617,7 +945,8 @@ static HRESULT sink_writer_write_sample(struct sink_writer *writer, struct strea
 
     if (FAILED(hr = sink_writer_encode_sample(writer, stream, sample))) return hr;
 
-    if (stream->stats.dwNumOutstandingSinkSampleRequests)
+    /* An encoder may give no sample for this one, or several. */
+    while (SUCCEEDED(hr) && stream->stats.dwNumOutstandingSinkSampleRequests && stream_has_samples(stream))
         hr = sink_writer_process_sample(writer, stream);
 
     return hr;
@@ -767,11 +1096,183 @@ static HRESULT WINAPI sink_writer_Flush(IMFSinkWriterEx *iface, DWORD index)
     return hr;
 }
 
+struct sink_finalize
+{
+    IMFAsyncCallback IMFAsyncCallback_iface;
+    LONG refcount;
+    IMFFinalizableMediaSink *sink;
+    HANDLE done;
+    HRESULT hr;
+};
+
+static struct sink_finalize *impl_from_sink_finalize_IMFAsyncCallback(IMFAsyncCallback *iface)
+{
+    return CONTAINING_RECORD(iface, struct sink_finalize, IMFAsyncCallback_iface);
+}
+
+static HRESULT WINAPI sink_finalize_QueryInterface(IMFAsyncCallback *iface, REFIID riid, void **out)
+{
+    if (IsEqualIID(riid, &IID_IMFAsyncCallback) || IsEqualIID(riid, &IID_IUnknown))
+    {
+        *out = iface;
+        IMFAsyncCallback_AddRef(iface);
+        return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI sink_finalize_AddRef(IMFAsyncCallback *iface)
+{
+    return InterlockedIncrement(&impl_from_sink_finalize_IMFAsyncCallback(iface)->refcount);
+}
+
+static ULONG WINAPI sink_finalize_Release(IMFAsyncCallback *iface)
+{
+    struct sink_finalize *finalize = impl_from_sink_finalize_IMFAsyncCallback(iface);
+    LONG refcount = InterlockedDecrement(&finalize->refcount);
+
+    if (!refcount)
+    {
+        IMFFinalizableMediaSink_Release(finalize->sink);
+        CloseHandle(finalize->done);
+        free(finalize);
+    }
+    return refcount;
+}
+
+static HRESULT WINAPI sink_finalize_GetParameters(IMFAsyncCallback *iface, DWORD *flags, DWORD *queue)
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI sink_finalize_Invoke(IMFAsyncCallback *iface, IMFAsyncResult *result)
+{
+    struct sink_finalize *finalize = impl_from_sink_finalize_IMFAsyncCallback(iface);
+
+    finalize->hr = IMFFinalizableMediaSink_EndFinalize(finalize->sink, result);
+    SetEvent(finalize->done);
+    return S_OK;
+}
+
+static const IMFAsyncCallbackVtbl sink_finalize_vtbl =
+{
+    sink_finalize_QueryInterface,
+    sink_finalize_AddRef,
+    sink_finalize_Release,
+    sink_finalize_GetParameters,
+    sink_finalize_Invoke,
+};
+
+/* Finalize a sink that can be, and wait for it. */
+static HRESULT sink_writer_finalize_sink(struct sink_writer *writer)
+{
+    struct sink_finalize *finalize;
+    IMFFinalizableMediaSink *sink;
+    HRESULT hr;
+
+    if (FAILED(IMFMediaSink_QueryInterface(writer->sink, &IID_IMFFinalizableMediaSink, (void **)&sink)))
+        return S_OK;
+
+    if (!(finalize = calloc(1, sizeof(*finalize))))
+    {
+        IMFFinalizableMediaSink_Release(sink);
+        return E_OUTOFMEMORY;
+    }
+    finalize->IMFAsyncCallback_iface.lpVtbl = &sink_finalize_vtbl;
+    finalize->refcount = 1;
+    finalize->sink = sink;
+    finalize->done = CreateEventW(NULL, TRUE, FALSE, NULL);
+
+    if (SUCCEEDED(hr = IMFFinalizableMediaSink_BeginFinalize(sink, &finalize->IMFAsyncCallback_iface, NULL)))
+    {
+        WaitForSingleObject(finalize->done, INFINITE);
+        hr = finalize->hr;
+    }
+    IMFAsyncCallback_Release(&finalize->IMFAsyncCallback_iface);
+    return hr;
+}
+
+/* Run the remaining samples through the transforms, wait for the sink to take them all, and
+ * finalize the sink. Called without the lock held. */
+static HRESULT sink_writer_finalize(struct sink_writer *writer)
+{
+    ULONGLONG idle_since = GetTickCount64();
+    struct stream *stream;
+    HRESULT hr = S_OK;
+    unsigned int i;
+    BOOL pending;
+
+    EnterCriticalSection(&writer->cs);
+
+    for (i = 0; i < writer->streams.count && SUCCEEDED(hr); ++i)
+    {
+        stream = &writer->streams.items[i];
+        if (SUCCEEDED(hr = stream_drain_transforms(stream)))
+        {
+            while (SUCCEEDED(hr) && stream->stats.dwNumOutstandingSinkSampleRequests && stream_has_samples(stream))
+                hr = sink_writer_process_sample(writer, stream);
+        }
+    }
+
+    /* The sink asks for samples from its own thread; give up if it stops asking. */
+    for (;;)
+    {
+        for (i = 0, pending = FALSE; i < writer->streams.count; ++i)
+            pending |= stream_has_samples(&writer->streams.items[i]);
+        if (!pending || FAILED(hr) || FAILED(writer->status)) break;
+        if (SleepConditionVariableCS(&writer->sample_taken, &writer->cs, 1000))
+            idle_since = GetTickCount64();
+        else if (GetTickCount64() - idle_since > 30000)
+        {
+            WARN("The sink stopped taking samples.\n");
+            hr = MF_E_SINK_NO_SAMPLES_PROCESSED;
+            break;
+        }
+    }
+    if (SUCCEEDED(hr) && FAILED(writer->status))
+        hr = writer->status;
+
+    LeaveCriticalSection(&writer->cs);
+
+    if (SUCCEEDED(hr))
+        hr = sink_writer_finalize_sink(writer);
+    if (writer->clock)
+        IMFPresentationClock_Stop(writer->clock);
+    IMFMediaSink_Shutdown(writer->sink);
+
+    return hr;
+}
+
+static HRESULT WINAPI sink_writer_finalize_callback_Invoke(IMFAsyncCallback *iface, IMFAsyncResult *result)
+{
+    struct sink_writer *writer = impl_from_finalize_callback_IMFAsyncCallback(iface);
+    HRESULT hr = sink_writer_finalize(writer);
+
+    IMFSinkWriterCallback_OnFinalize(writer->callback, hr);
+    return S_OK;
+}
+
 static HRESULT WINAPI sink_writer_Finalize(IMFSinkWriterEx *iface)
 {
-    FIXME("%p.\n", iface);
+    struct sink_writer *writer = impl_from_IMFSinkWriterEx(iface);
+    HRESULT hr = S_OK;
 
-    return E_NOTIMPL;
+    TRACE("%p.\n", iface);
+
+    EnterCriticalSection(&writer->cs);
+    if (writer->state != SINK_WRITER_STATE_WRITING)
+        hr = MF_E_INVALIDREQUEST;
+    else
+        writer->state = SINK_WRITER_STATE_FINALIZING;
+    LeaveCriticalSection(&writer->cs);
+    if (FAILED(hr)) return hr;
+
+    /* With a callback the writer finalizes in the background and reports through it. */
+    if (writer->callback)
+        return MFPutWorkItem(MFASYNC_CALLBACK_QUEUE_MULTITHREADED, &writer->finalize_callback, NULL);
+
+    return sink_writer_finalize(writer);
 }
 
 static HRESULT sink_writer_get_service(void *object, REFGUID service, REFIID riid, void **ret)
@@ -1018,6 +1519,7 @@ static HRESULT WINAPI sink_writer_events_callback_Invoke(IMFAsyncCallback *iface
                 stream->stats.dwNumOutstandingSinkSampleRequests++;
 
                 sink_writer_process_sample(writer, stream);
+                WakeAllConditionVariable(&writer->sample_taken);
 
                 break;
 
@@ -1056,6 +1558,27 @@ static const IMFAsyncCallbackVtbl sink_writer_events_callback_vtbl =
     sink_writer_events_callback_Invoke,
 };
 
+static ULONG WINAPI sink_writer_finalize_callback_AddRef(IMFAsyncCallback *iface)
+{
+    struct sink_writer *writer = impl_from_finalize_callback_IMFAsyncCallback(iface);
+    return IMFSinkWriterEx_AddRef(&writer->IMFSinkWriterEx_iface);
+}
+
+static ULONG WINAPI sink_writer_finalize_callback_Release(IMFAsyncCallback *iface)
+{
+    struct sink_writer *writer = impl_from_finalize_callback_IMFAsyncCallback(iface);
+    return IMFSinkWriterEx_Release(&writer->IMFSinkWriterEx_iface);
+}
+
+static const IMFAsyncCallbackVtbl sink_writer_finalize_callback_vtbl =
+{
+    sink_writer_callback_QueryInterface,
+    sink_writer_finalize_callback_AddRef,
+    sink_writer_finalize_callback_Release,
+    sink_writer_callback_GetParameters,
+    sink_writer_finalize_callback_Invoke,
+};
+
 static HRESULT sink_writer_initialize_existing_streams(struct sink_writer *writer, IMFMediaSink *sink)
 {
     IMFStreamSink *stream_sink;
@@ -1092,6 +1615,8 @@ HRESULT create_sink_writer_from_sink(IMFMediaSink *sink, IMFAttributes *attribut
 
     object->IMFSinkWriterEx_iface.lpVtbl = &sink_writer_vtbl;
     object->events_callback.lpVtbl = &sink_writer_events_callback_vtbl;
+    object->finalize_callback.lpVtbl = &sink_writer_finalize_callback_vtbl;
+    InitializeConditionVariable(&object->sample_taken);
     object->refcount = 1;
     object->sink = sink;
     IMFMediaSink_AddRef(sink);

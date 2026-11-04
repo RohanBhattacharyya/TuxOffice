@@ -94,6 +94,44 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   apply the repair; it is also installed in the regular prefix.
 - Removed tracked `wine/autom4te.cache` output and ignored that directory.
 
+## 4 November, later: PowerPoint exports video
+
+- **File > Export > Create a Video failed every time** (status "failed" after a few
+  seconds, no file). PowerPoint renders frames as ARGB32 Direct3D surfaces and hands
+  them to Media Foundation's sink writer with an H.264 MP4 as the target. Wine's sink
+  writer could not convert or encode (`SetInputMediaType` was `E_NOTIMPL`) and could
+  not finalize a file (`Finalize` was `E_NOTIMPL`). It now puts a video processor, an
+  encoder or both in front of the sink, found through `MFTEnumEx`, feeds samples through
+  them, drains them on `Finalize`, waits for the sink to take everything and finalizes
+  it, asynchronously when the application gave a callback. Getting PowerPoint's video
+  out also needed fixes in winegstreamer's MP4 sink and muxer:
+  - The sink took no presentation clock (`SetPresentationClock` was a stub), so it never
+    started, and it never asked for samples (`MEStreamSinkRequestSample`).
+  - Two reference leaks, one in the sink writer's `AddStream` and one in the sink's
+    `BeginFinalize`, kept the MP4 file open after finalizing, so nothing could read it.
+  - Samples reached the muxer with no decode time, so MP4 timing came out as zero.
+    PowerPoint also gives some frames the same time as the one before; GStreamer's
+    parser then drops their time and the muxer stops. Times are now made to increase.
+  - The encoder's input type kept winegstreamer's default 1920×1080 frame size while
+    PowerPoint renders at 852×480; it now takes the frame format of what it encodes to,
+    and NV12 is preferred, since I420 at widths like 852 has a different plane layout in
+    Media Foundation and GStreamer (a winegstreamer bug, not fixed here).
+  - A missing timestamp on a drained encoder sample is filled in.
+  A 3-slide deck now exports as an 852×480 H.264 MP4 of 3.08 s with 77 frames, and its
+  frames show the slides. `tests/mf-sink-writer-encode.c` writes and reads back an MP4
+  through the sink writer, with and without a callback; `tests/functional/media.vbs`
+  exports a deck, inserts the video and saves (10 of 10).
+- **Reading video crashed decoding on machines with GStreamer's NVIDIA plugins:**
+  `nvh264dec` gave frames in CUDA memory, which Wine's parser accepted and its videoflip
+  then refused. The parser now asks for system memory. Inserted videos now get their
+  length and poster frame.
+- **Open: playing a video in a slide show ends PowerPoint.** It asks the media engine
+  for a service, `{805ea411-92e0-4e59-9b6e-5c7d7915e64f}` with interface
+  `{1f2a94c9-a3df-430d-9d0f-acd85ddc29af}`, which Wine lacks and is not documented, and on
+  failure PowerPoint stops itself with an assertion (tag `0x1d7815d5`). The media engine
+  used to return `E_NOTIMPL` without clearing the pointer; it now forwards services to its
+  session and clears the pointer, which does not change this case.
+
 ## 4 November: Word could not open PDFs, and the Excel chart crash explained
 
 Tested in the isolated session; Outlook, OneNote and the format test without a network.

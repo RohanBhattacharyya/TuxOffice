@@ -1180,6 +1180,15 @@ static bool stream_create_post_processing_elements(GstPad *pad, struct wg_parser
          * the front of the chain, and we remove the matrix-mode setting for the
          * videoconvert elements.
          */
+
+        /* Hardware decoders such as nvh264dec prefer to output frames in their own memory
+         * (video/x-raw(memory:CUDAMemory)), which videoconvert passes through and videoflip
+         * rejects. Ask for system memory, which they can all give. */
+        if (!(element = create_element("capsfilter", "core"))
+                || !append_element(parser->container, element, &first, &last))
+            return false;
+        gst_util_set_object_arg(G_OBJECT(element), "caps", "video/x-raw");
+
         if (!(element = create_element("capssetter", "good"))
                 || !append_element(parser->container, element, &first, &last))
             return false;

@@ -91,6 +91,7 @@ struct media_sink
 
     IMFByteStream *bytestream;
     IMFMediaEventQueue *event_queue;
+    IMFPresentationClock *clock;
 
     struct list stream_sinks;
 
@@ -600,7 +601,11 @@ static HRESULT media_sink_start(struct media_sink *media_sink)
 
     media_sink->state = STATE_STARTED;
 
-    return media_sink_queue_stream_event(media_sink, MEStreamSinkStarted);
+    /* Stream sinks pull: each asks for its first sample once started, and for the next one after
+     * each it has processed. */
+    if (FAILED(hr = media_sink_queue_stream_event(media_sink, MEStreamSinkStarted)))
+        return hr;
+    return media_sink_queue_stream_event(media_sink, MEStreamSinkRequestSample);
 }
 
 static HRESULT media_sink_stop(struct media_sink *media_sink)
@@ -672,7 +677,8 @@ static HRESULT media_sink_begin_finalize(struct media_sink *media_sink, IMFAsync
         IUnknown_Release(&command->IUnknown_iface);
         return hr;
     }
-    IMFAsyncResult_AddRef((command->u.finalize.result = result));
+    /* The command takes the reference; the result holds the caller's callback. */
+    command->u.finalize.result = result;
 
     hr = MFPutWorkItem(MFASYNC_CALLBACK_QUEUE_STANDARD,
             &media_sink->async_callback, &command->IUnknown_iface);
@@ -891,16 +897,55 @@ static HRESULT WINAPI media_sink_GetStreamSinkById(IMFFinalizableMediaSink *ifac
 
 static HRESULT WINAPI media_sink_SetPresentationClock(IMFFinalizableMediaSink *iface, IMFPresentationClock *clock)
 {
-    FIXME("iface %p, clock %p stub!\n", iface, clock);
+    struct media_sink *media_sink = impl_from_IMFFinalizableMediaSink(iface);
+    HRESULT hr = S_OK;
 
-    return E_NOTIMPL;
+    TRACE("iface %p, clock %p.\n", iface, clock);
+
+    EnterCriticalSection(&media_sink->cs);
+
+    if (media_sink->state == STATE_SHUTDOWN)
+        hr = MF_E_SHUTDOWN;
+    else
+    {
+        /* The sink starts, stops and pauses with the clock. */
+        if (media_sink->clock)
+        {
+            IMFPresentationClock_RemoveClockStateSink(media_sink->clock, &media_sink->IMFClockStateSink_iface);
+            IMFPresentationClock_Release(media_sink->clock);
+            media_sink->clock = NULL;
+        }
+        if (clock && SUCCEEDED(hr = IMFPresentationClock_AddClockStateSink(clock, &media_sink->IMFClockStateSink_iface)))
+            IMFPresentationClock_AddRef((media_sink->clock = clock));
+    }
+
+    LeaveCriticalSection(&media_sink->cs);
+
+    return hr;
 }
 
 static HRESULT WINAPI media_sink_GetPresentationClock(IMFFinalizableMediaSink *iface, IMFPresentationClock **clock)
 {
-    FIXME("iface %p, clock %p stub!\n", iface, clock);
+    struct media_sink *media_sink = impl_from_IMFFinalizableMediaSink(iface);
+    HRESULT hr = S_OK;
 
-    return E_NOTIMPL;
+    TRACE("iface %p, clock %p.\n", iface, clock);
+
+    if (!clock)
+        return E_POINTER;
+
+    EnterCriticalSection(&media_sink->cs);
+
+    if (media_sink->state == STATE_SHUTDOWN)
+        hr = MF_E_SHUTDOWN;
+    else if (!(*clock = media_sink->clock))
+        hr = MF_E_NO_CLOCK;
+    else
+        IMFPresentationClock_AddRef(*clock);
+
+    LeaveCriticalSection(&media_sink->cs);
+
+    return hr;
 }
 
 static HRESULT WINAPI media_sink_Shutdown(IMFFinalizableMediaSink *iface)
@@ -927,6 +972,12 @@ static HRESULT WINAPI media_sink_Shutdown(IMFFinalizableMediaSink *iface)
 
     IMFMediaEventQueue_Shutdown(media_sink->event_queue);
     IMFByteStream_Close(media_sink->bytestream);
+    if (media_sink->clock)
+    {
+        IMFPresentationClock_RemoveClockStateSink(media_sink->clock, &media_sink->IMFClockStateSink_iface);
+        IMFPresentationClock_Release(media_sink->clock);
+        media_sink->clock = NULL;
+    }
 
     media_sink->state = STATE_SHUTDOWN;
 
@@ -1207,9 +1258,17 @@ static HRESULT WINAPI media_sink_callback_Invoke(IMFAsyncCallback *iface, IMFAsy
             hr = media_sink_pause(media_sink);
             break;
         case ASYNC_PROCESS:
+        {
+            struct stream_sink *stream_sink;
+
             if (FAILED(hr = media_sink_process(media_sink, command->u.process.sample, command->u.process.stream_id)))
                 WARN("Failed to process sample, hr %#lx.\n", hr);
+            if (media_sink->state == STATE_STARTED
+                    && (stream_sink = media_sink_get_stream_sink_by_id(media_sink, command->u.process.stream_id)))
+                IMFMediaEventQueue_QueueEventParamVar(stream_sink->event_queue, MEStreamSinkRequestSample,
+                        &GUID_NULL, S_OK, NULL);
             break;
+        }
         case ASYNC_FINALIZE:
             if (FAILED(hr = media_sink_finalize(media_sink, command->u.finalize.result)))
                 WARN("Failed to finalize, hr %#lx.\n", hr);

@@ -81,6 +81,7 @@ struct wg_muxer_stream
     GstCaps *my_src_caps, *parser_src_caps;
     GstElement *parser;
     GstSegment segment;
+    GstClockTime last_dts;
 
     struct list entry;
 };
@@ -445,6 +446,7 @@ NTSTATUS wg_muxer_start(void *args)
 
         sprintf(buffer, "wg_muxer_stream_src_%u", stream->id);
         gst_segment_init(&stream->segment, GST_FORMAT_BYTES);
+        stream->last_dts = GST_CLOCK_TIME_NONE;
         if (!gst_pad_set_active(stream->my_src, 1))
             return status;
         if (!push_event(stream->my_src, gst_event_new_stream_start(buffer))
@@ -481,8 +483,18 @@ NTSTATUS wg_muxer_push_sample(void *args)
     GST_INFO("Copied %u bytes from sample %p to buffer %p.", sample->size, sample, buffer);
 
     /* Set sample properties. */
+    /* Samples carry no decode time, and muxers order by it. The streams written here do not
+     * reorder frames (Wine's H.264 encoder writes constrained baseline), so it equals the PTS.
+     * Both must grow: applications such as PowerPoint give two frames the same time, and parsers
+     * drop the PTS of a frame that repeats the previous one, which muxers reject. */
     if (sample->flags & WG_SAMPLE_FLAG_HAS_PTS)
-        GST_BUFFER_PTS(buffer) = sample->pts * 100;
+    {
+        GstClockTime time = sample->pts * 100;
+
+        if (GST_CLOCK_TIME_IS_VALID(stream->last_dts) && time <= stream->last_dts)
+            time = stream->last_dts + 1;
+        GST_BUFFER_PTS(buffer) = GST_BUFFER_DTS(buffer) = stream->last_dts = time;
+    }
     if (sample->flags & WG_SAMPLE_FLAG_HAS_DURATION)
         GST_BUFFER_DURATION(buffer) = sample->duration * 100;
     if (!(sample->flags & WG_SAMPLE_FLAG_SYNC_POINT))
@@ -545,8 +557,11 @@ NTSTATUS wg_muxer_finalize(void *args)
     /* Notify each stream of EOS. */
     LIST_FOR_EACH_ENTRY(stream, &muxer->streams, struct wg_muxer_stream, entry)
     {
-        if (!push_event(stream->my_src, gst_event_new_segment_done(GST_FORMAT_BYTES, -1))
-                || !push_event(stream->my_src, gst_event_new_eos()))
+        /* Elements may refuse segment-done, which only informs; end of stream is what makes the
+         * muxer write its index. */
+        if (!push_event(stream->my_src, gst_event_new_segment_done(GST_FORMAT_BYTES, -1)))
+            GST_WARNING("Stream %u did not take segment-done.", stream->id);
+        if (!push_event(stream->my_src, gst_event_new_eos()))
             return STATUS_UNSUCCESSFUL;
     }
 

@@ -3591,9 +3591,30 @@ static ULONG WINAPI media_engine_gs_Release(IMFGetService *iface)
 static HRESULT WINAPI media_engine_gs_GetService(IMFGetService *iface, REFGUID service,
         REFIID riid, void **object)
 {
-    FIXME("%p, %s, %s, %p stub.\n", iface, debugstr_guid(service), debugstr_guid(riid), object);
+    struct media_engine *engine = impl_from_IMFGetService(iface);
+    HRESULT hr;
 
-    return E_NOTIMPL;
+    TRACE("%p, %s, %s, %p.\n", iface, debugstr_guid(service), debugstr_guid(riid), object);
+
+    if (!object)
+        return E_POINTER;
+    *object = NULL;
+
+    /* Services of the playback pipeline, such as volume and rate control, come from the session,
+     * which asks its sinks and source. Callers such as PowerPoint use whatever is returned, so an
+     * unknown service must leave a NULL pointer behind. */
+    EnterCriticalSection(&engine->cs);
+    if (engine->flags & FLAGS_ENGINE_SHUT_DOWN)
+        hr = MF_E_SHUTDOWN;
+    else if (FAILED(hr = MFGetService((IUnknown *)engine->session, service, riid, object)))
+    {
+        WARN("Unsupported service %s, interface %s.\n", debugstr_guid(service), debugstr_guid(riid));
+        *object = NULL;
+        hr = MF_E_UNSUPPORTED_SERVICE;
+    }
+    LeaveCriticalSection(&engine->cs);
+
+    return hr;
 }
 
 static const IMFGetServiceVtbl media_engine_get_service_vtbl =
