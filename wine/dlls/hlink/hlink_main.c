@@ -24,6 +24,9 @@
 #include "rpcproxy.h"
 #include "hlguids.h"
 
+#include <stdlib.h>
+#include <wchar.h>
+
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(hlink);
@@ -561,4 +564,280 @@ HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID iid, LPVOID *ppv)
         return CLASS_E_CLASSNOTAVAILABLE;
 
     return IClassFactory_QueryInterface(pcf, iid, ppv);
+}
+
+/* Shortcuts are Internet Shortcut files: "[InternetShortcut]" then "URL=target#location". */
+#define HLSHORTCUTF_DONTACTUALLYCREATE 0x1
+#define HLSHORTCUTF_USEUNIQUEFILENAME 0x4
+#define HLSHORTCUTF_MAYUSEEXISTINGSHORTCUT 0x8
+
+static WCHAR *shortcut_path(const WCHAR *dir, const WCHAR *name, DWORD flags)
+{
+    static const WCHAR extension[] = L".url";
+    size_t dir_len = dir ? wcslen(dir) : 0, name_len, size;
+    const WCHAR *base = name && *name ? name : L"Shortcut";
+    WCHAR *path, *dot;
+    unsigned int n;
+
+    name_len = wcslen(base);
+    size = dir_len + 1 + name_len + 16 + ARRAY_SIZE(extension);
+    if (!(path = CoTaskMemAlloc(size * sizeof(WCHAR)))) return NULL;
+    path[0] = 0;
+    if (dir_len)
+    {
+        wcscpy(path, dir);
+        if (path[dir_len - 1] != '\\' && path[dir_len - 1] != '/') wcscat(path, L"\\");
+    }
+    wcscat(path, base);
+    dot = wcsrchr(path, '.');
+    if (!dot || wcsicmp(dot, extension) || wcschr(dot, '\\')) wcscat(path, extension);
+
+    if (!(flags & HLSHORTCUTF_USEUNIQUEFILENAME) || GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES)
+        return path;
+    /* Put a number before the extension until the name is free. */
+    for (n = 2; n < 10000; n++)
+    {
+        WCHAR *end = path + wcslen(path) - wcslen(extension);
+
+        swprintf(end, size - (end - path), L" (%u)%s", n, extension);
+        if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) return path;
+    }
+    CoTaskMemFree(path);
+    return NULL;
+}
+
+HRESULT WINAPI HlinkCreateShortcutFromString(DWORD flags, LPCWSTR target, LPCWSTR location, LPCWSTR dir,
+        LPCWSTR name, LPWSTR *file, DWORD reserved)
+{
+    char *utf8 = NULL;
+    WCHAR *url = NULL;
+    HANDLE handle;
+    DWORD written;
+    HRESULT hr = S_OK;
+    int len;
+
+    TRACE("%#lx, %s, %s, %s, %s, %p, %#lx.\n", flags, debugstr_w(target), debugstr_w(location),
+            debugstr_w(dir), debugstr_w(name), file, reserved);
+
+    if (!file) return E_INVALIDARG;
+    *file = NULL;
+    if (!target && !location) return E_INVALIDARG;
+    if (!name || !*name)
+    {
+        /* Name it after what it points to, as a person would. */
+        const WCHAR *start = target ? target : L"", *p;
+        WCHAR *base, *dot;
+
+        for (p = start; *p; p++) if (*p == '\\' || *p == '/') start = p + 1;
+        if (*start && (base = wcsdup(start)))
+        {
+            if ((dot = wcsrchr(base, '.')) && dot != base) *dot = 0;
+            for (dot = base; *dot; dot++) if (wcschr(L"?*:<>|\"", *dot)) *dot = '_';
+            *file = shortcut_path(dir, base, flags);
+            free(base);
+            if (!*file) return E_OUTOFMEMORY;
+        }
+    }
+    if (!*file && !(*file = shortcut_path(dir, name, flags))) return E_OUTOFMEMORY;
+    if (flags & HLSHORTCUTF_DONTACTUALLYCREATE) return S_OK;
+    if ((flags & HLSHORTCUTF_MAYUSEEXISTINGSHORTCUT) && GetFileAttributesW(*file) != INVALID_FILE_ATTRIBUTES)
+        return S_OK;
+
+    len = (target ? wcslen(target) : 0) + (location ? wcslen(location) + 1 : 0) + 1;
+    if (!(url = malloc(len * sizeof(WCHAR)))) { hr = E_OUTOFMEMORY; goto done; }
+    wcscpy(url, target ? target : L"");
+    if (location && *location)
+    {
+        if (*location != '#') wcscat(url, L"#");
+        wcscat(url, location);
+    }
+    len = WideCharToMultiByte(CP_UTF8, 0, url, -1, NULL, 0, NULL, NULL);
+    if (!(utf8 = malloc(len + 32))) { hr = E_OUTOFMEMORY; goto done; }
+    strcpy(utf8, "[InternetShortcut]\r\nURL=");
+    WideCharToMultiByte(CP_UTF8, 0, url, -1, utf8 + strlen(utf8), len, NULL, NULL);
+    strcat(utf8, "\r\n");
+
+    handle = CreateFileW(*file, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (handle == INVALID_HANDLE_VALUE)
+    {
+        hr = HRESULT_FROM_WIN32(GetLastError());
+        goto done;
+    }
+    if (!WriteFile(handle, utf8, strlen(utf8), &written, NULL)) hr = HRESULT_FROM_WIN32(GetLastError());
+    CloseHandle(handle);
+
+done:
+    free(url);
+    free(utf8);
+    if (FAILED(hr))
+    {
+        CoTaskMemFree(*file);
+        *file = NULL;
+    }
+    return hr;
+}
+
+HRESULT WINAPI HlinkCreateShortcutFromMoniker(DWORD flags, IMoniker *target, LPCWSTR location, LPCWSTR dir,
+        LPCWSTR name, LPWSTR *file, DWORD reserved)
+{
+    WCHAR *display = NULL;
+    IBindCtx *context;
+    HRESULT hr;
+
+    TRACE("%#lx, %p, %s, %s, %s, %p, %#lx.\n", flags, target, debugstr_w(location), debugstr_w(dir),
+            debugstr_w(name), file, reserved);
+
+    if (target)
+    {
+        if (FAILED(hr = CreateBindCtx(0, &context))) return hr;
+        hr = IMoniker_GetDisplayName(target, context, NULL, &display);
+        IBindCtx_Release(context);
+        if (FAILED(hr)) return hr;
+    }
+    hr = HlinkCreateShortcutFromString(flags, display, location, dir, name, file, reserved);
+    CoTaskMemFree(display);
+    return hr;
+}
+
+HRESULT WINAPI HlinkCreateShortcut(DWORD flags, IHlink *hlink, LPCWSTR dir, LPCWSTR name, LPWSTR *file,
+        DWORD reserved)
+{
+    WCHAR *target = NULL, *location = NULL, *friendly = NULL;
+    HRESULT hr;
+
+    TRACE("%#lx, %p, %s, %s, %p, %#lx.\n", flags, hlink, debugstr_w(dir), debugstr_w(name), file, reserved);
+
+    if (!hlink) return E_INVALIDARG;
+    if (FAILED(hr = IHlink_GetStringReference(hlink, HLINKGETREF_DEFAULT, &target, &location))) return hr;
+    if (!name || !*name) IHlink_GetFriendlyName(hlink, HLFNAMEF_DEFAULT, &friendly);
+    hr = HlinkCreateShortcutFromString(flags, target, location, dir, name && *name ? name : friendly, file,
+            reserved);
+    CoTaskMemFree(target);
+    CoTaskMemFree(location);
+    CoTaskMemFree(friendly);
+    return hr;
+}
+
+HRESULT WINAPI HlinkResolveShortcutToString(LPCWSTR file, LPWSTR *target, LPWSTR *location)
+{
+    WCHAR buffer[2084], *hash; /* the longest URL there can be */
+    size_t len;
+
+    TRACE("%s, %p, %p.\n", debugstr_w(file), target, location);
+
+    if (target) *target = NULL;
+    if (location) *location = NULL;
+    if (!file) return E_INVALIDARG;
+    if (!GetPrivateProfileStringW(L"InternetShortcut", L"URL", L"", buffer, ARRAY_SIZE(buffer), file))
+        return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+    if ((hash = wcschr(buffer, '#'))) *hash++ = 0;
+    if (target)
+    {
+        len = (wcslen(buffer) + 1) * sizeof(WCHAR);
+        if (!(*target = CoTaskMemAlloc(len))) return E_OUTOFMEMORY;
+        memcpy(*target, buffer, len);
+    }
+    if (location && hash)
+    {
+        len = (wcslen(hash) + 1) * sizeof(WCHAR);
+        if (!(*location = CoTaskMemAlloc(len)))
+        {
+            if (target) { CoTaskMemFree(*target); *target = NULL; }
+            return E_OUTOFMEMORY;
+        }
+        memcpy(*location, hash, len);
+    }
+    return S_OK;
+}
+
+HRESULT WINAPI HlinkResolveShortcutToMoniker(LPCWSTR file, IMoniker **moniker, LPWSTR *location)
+{
+    WCHAR *target;
+    HRESULT hr;
+
+    TRACE("%s, %p, %p.\n", debugstr_w(file), moniker, location);
+
+    if (!moniker) return E_INVALIDARG;
+    *moniker = NULL;
+    if (FAILED(hr = HlinkResolveShortcutToString(file, &target, location))) return hr;
+    hr = CreateURLMonikerEx(NULL, target, moniker, URL_MK_UNIFORM);
+    CoTaskMemFree(target);
+    if (FAILED(hr) && location)
+    {
+        CoTaskMemFree(*location);
+        *location = NULL;
+    }
+    return hr;
+}
+
+HRESULT WINAPI HlinkResolveShortcut(LPCWSTR file, IHlinkSite *site, DWORD site_data, IUnknown *outer,
+        REFIID riid, void **obj)
+{
+    WCHAR *target, *location;
+    HRESULT hr;
+
+    TRACE("%s, %p, %#lx, %p, %s, %p.\n", debugstr_w(file), site, site_data, outer, debugstr_guid(riid), obj);
+
+    if (!obj) return E_INVALIDARG;
+    *obj = NULL;
+    if (FAILED(hr = HlinkResolveShortcutToString(file, &target, &location))) return hr;
+    hr = HlinkCreateFromString(target, location, NULL, site, site_data, outer, riid, obj);
+    CoTaskMemFree(target);
+    CoTaskMemFree(location);
+    return hr;
+}
+
+/* Being stubs, these used to end the process when called. */
+HRESULT WINAPI HlinkOnRenameDocument(DWORD reserved, IHlinkBrowseContext *context, IMoniker *old_moniker,
+        IMoniker *new_moniker)
+{
+    FIXME("%#lx, %p, %p, %p stub.\n", reserved, context, old_moniker, new_moniker);
+    return S_OK;
+}
+
+HRESULT WINAPI HlinkResolveStringForData(LPCWSTR reference, DWORD reserved, IBindCtx *context, ULONG count,
+        FORMATETC *formats, IBindStatusCallback *callback, IMoniker *base)
+{
+    FIXME("%s, %#lx, %p, %lu, %p, %p, %p stub.\n", debugstr_w(reference), reserved, context, count, formats,
+            callback, base);
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI OleSaveToStreamEx(IUnknown *object, IStream *stream, BOOL clear_dirty)
+{
+    IPersistStream *persist;
+    CLSID clsid;
+    HRESULT hr;
+
+    TRACE("%p, %p, %d.\n", object, stream, clear_dirty);
+
+    if (!object || !stream) return E_INVALIDARG;
+    if (FAILED(hr = IUnknown_QueryInterface(object, &IID_IPersistStream, (void **)&persist))) return hr;
+    if (SUCCEEDED(hr = IPersistStream_GetClassID(persist, &clsid)) && SUCCEEDED(hr = WriteClassStm(stream, &clsid)))
+        hr = IPersistStream_Save(persist, stream, clear_dirty);
+    IPersistStream_Release(persist);
+    return hr;
+}
+
+HRESULT WINAPI HlinkSetSpecialReference(ULONG reference, LPCWSTR value)
+{
+    FIXME("%lu, %s stub.\n", reference, debugstr_w(value));
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI HlinkGetValueFromParams(LPCWSTR params, LPCWSTR name, LPWSTR *value)
+{
+    FIXME("%s, %s, %p stub.\n", debugstr_w(params), debugstr_w(name), value);
+    if (value) *value = NULL;
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI HlinkPreprocessMoniker(IBindCtx *context, IMoniker *in, IMoniker **out)
+{
+    TRACE("%p, %p, %p.\n", context, in, out);
+
+    if (!out) return E_INVALIDARG;
+    /* Nothing to change: hand back the same moniker. */
+    if ((*out = in)) IMoniker_AddRef(in);
+    return S_OK;
 }

@@ -7,25 +7,25 @@
 9 stdcall HlinkOnNavigate(ptr ptr long ptr wstr wstr ptr)
 10 stdcall HlinkNavigate(ptr ptr long ptr ptr ptr)
 11 stdcall HlinkUpdateStackItem(ptr ptr long ptr wstr wstr)
-12 stub HlinkOnRenameDocument
+12 stdcall HlinkOnRenameDocument(long ptr ptr ptr)
 14 stdcall HlinkResolveMonikerForData(ptr long ptr long ptr ptr ptr)
-15 stub HlinkResolveStringForData
-16 stub OleSaveToStreamEx
+15 stdcall HlinkResolveStringForData(wstr long ptr long ptr ptr ptr)
+16 stdcall OleSaveToStreamEx(ptr ptr long)
 18 stdcall HlinkParseDisplayName(ptr wstr long ptr ptr)
 20 stdcall HlinkQueryCreateFromData(ptr)
-21 stub HlinkSetSpecialReference
+21 stdcall HlinkSetSpecialReference(long wstr)
 22 stdcall HlinkGetSpecialReference(long ptr)
-23 stub HlinkCreateShortcut
-24 stub HlinkResolveShortcut
+23 stdcall HlinkCreateShortcut(long ptr wstr wstr ptr long)
+24 stdcall HlinkResolveShortcut(wstr ptr long ptr ptr ptr)
 25 stdcall HlinkIsShortcut(wstr)
-26 stub HlinkResolveShortcutToString
-27 stub HlinkCreateShortcutFromString
-28 stub HlinkGetValueFromParams
-29 stub HlinkCreateShortcutFromMoniker
-30 stub HlinkResolveShortcutToMoniker
+26 stdcall HlinkResolveShortcutToString(wstr ptr ptr)
+27 stdcall HlinkCreateShortcutFromString(long wstr wstr wstr wstr ptr long)
+28 stdcall HlinkGetValueFromParams(wstr wstr ptr)
+29 stdcall HlinkCreateShortcutFromMoniker(long ptr wstr wstr wstr ptr long)
+30 stdcall HlinkResolveShortcutToMoniker(wstr ptr ptr)
 31 stdcall HlinkTranslateURL(wstr long ptr)
 32 stdcall HlinkCreateExtensionServices(wstr long wstr wstr ptr ptr ptr)
-33 stub HlinkPreprocessMoniker
+33 stdcall HlinkPreprocessMoniker(ptr ptr ptr)
 
 @ stdcall -private DllCanUnloadNow()
 @ stdcall -private DllGetClassObject(ptr ptr ptr)
