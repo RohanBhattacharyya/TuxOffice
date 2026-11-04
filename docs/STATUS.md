@@ -467,6 +467,19 @@ parity with Windows remains unmeasured.
 
 ## Open: Excel crash after an embedded chart's workbook closes
 
+**4 November: cause found; it is the test racing Excel.** After the chart data is edited,
+Excel notifies PowerPoint from its idle loop (`ChDataSink` method 81, about 120 ms while
+PowerPoint reads the data back). The test's `Workbook.Close` and `Release` calls arrive
+during that outgoing call. Excel's message filter accepts them (it only puts calls off
+while its own busy counters are set), so they free the workbook's state under the
+notification, which then writes into it. Found with a gdb watchpoint on the freed pointer
+and COM traces. A person closes the data window on Excel's own thread, so this needs an
+outside automation client. `office-functional.c` now waits a second before `Close`:
+0 crashes in 40 PowerPoint rounds (was 8 of 40); 1 round hung after `Close`, not yet
+looked at. A combase change (correct `CALLTYPE_TOPLEVEL_CALLPENDING`, and deferring calls
+a filter answers with `SERVERCALL_RETRYLATER`, with `tests/com-message-filter.c`) is in
+the working tree, uncommitted until the full suite has run with it and the hang is ruled out.
+
 **3 November:** back, at about the old rate: 3 of 10 suite rounds, then 1 of 20 and 1 of 20
 PowerPoint-only rounds, same write to NULL+0x8c at `EXCEL.EXE+0xe02c6a`. It is not the day's
 new user32 and uxtheme functions: with those removed it was 3 of 30. Not the printer

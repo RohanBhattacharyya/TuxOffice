@@ -268,6 +268,13 @@ static void powerpoint(IDispatch *app,const WCHAR *directory)
             PUT(values,"Value2",integer(37));
             check(number(values,L"Value2")==37,"PowerPoint embedded Excel data can be edited");
             release(values);release(sheet);release(sheets);
+            /* Excel tells PowerPoint about the edit from its idle loop, and
+             * PowerPoint reads the data back during that call. A Close from
+             * this client in the meantime is let in by Excel's message filter
+             * and frees the workbook under Excel's own notification, which
+             * crashes it, as it would on Windows. A person closes the data
+             * window from Excel's own thread, so give Excel time first. */
+            pump_for(1000);
             {
                 char delay[32];
                 if(GetEnvironmentVariableA("TUXOFFICE_CHART_CLOSE_DELAY_MS",delay,sizeof(delay)))
