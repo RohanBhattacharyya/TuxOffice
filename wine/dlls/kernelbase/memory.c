@@ -106,6 +106,37 @@ static const SIZE_T page_mask = 0xfff;
 #define ROUND_SIZE(addr,size) (((SIZE_T)(size) + ((UINT_PTR)(addr) & page_mask) + page_mask) & ~page_mask)
 
 /***********************************************************************
+ *             OfferVirtualMemory   (kernelbase.@)
+ *
+ * The contents may be thrown away, but need not be: keeping them, as here, is always
+ * allowed, and makes reclaiming them trivially succeed.
+ */
+DWORD WINAPI OfferVirtualMemory( void *addr, SIZE_T size, DWORD priority )
+{
+    MEMORY_BASIC_INFORMATION info;
+
+    TRACE( "%p, %#Ix, %lu.\n", addr, size, priority );
+
+    if (!addr || !size || !priority) return ERROR_INVALID_PARAMETER;
+    if (!VirtualQuery( addr, &info, sizeof(info) ) || info.State != MEM_COMMIT)
+        return ERROR_INVALID_PARAMETER;
+    return ERROR_SUCCESS;
+}
+
+
+/***********************************************************************
+ *             ReclaimVirtualMemory   (kernelbase.@)
+ */
+DWORD WINAPI ReclaimVirtualMemory( const void *addr, SIZE_T size )
+{
+    TRACE( "%p, %#Ix.\n", addr, size );
+
+    if (!addr || !size) return ERROR_INVALID_PARAMETER;
+    return ERROR_SUCCESS;
+}
+
+
+/***********************************************************************
  *             DiscardVirtualMemory   (kernelbase.@)
  */
 DWORD WINAPI DECLSPEC_HOTPATCH DiscardVirtualMemory( void *addr, SIZE_T size )

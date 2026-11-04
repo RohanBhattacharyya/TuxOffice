@@ -8389,3 +8389,278 @@ int WINAPI GetTimeFormatEx( const WCHAR *name, DWORD flags, const SYSTEMTIME *sy
     TRACE( "(%s,%lx,%p,%s,%p,%d)\n", debugstr_w(name), flags, systime, debugstr_w(format), buffer, len );
     return get_time_format( locale, flags, systime, format, buffer, len );
 }
+
+/* Append a number to a duration string, padded to at least the given number of digits. */
+static int duration_put_number( WCHAR *out, int pos, int len, ULONGLONG value, int digits )
+{
+    WCHAR tmp[24];
+    int count = 0;
+
+    do { tmp[count++] = '0' + value % 10; value /= 10; } while (value);
+    while (count < digits) tmp[count++] = '0';
+    while (count--)
+    {
+        if (len && pos < len) out[pos] = tmp[count];
+        pos++;
+    }
+    return pos;
+}
+
+/***********************************************************************
+ *	GetDurationFormatEx  (kernelbase.@)
+ */
+int WINAPI GetDurationFormatEx( const WCHAR *name, DWORD flags, const SYSTEMTIME *systime,
+                                ULONGLONG duration, const WCHAR *format, WCHAR *buffer, int len )
+{
+    static const ULONGLONG units[] = { 864000000000ull, 36000000000ull, 600000000, 10000000 };
+    static const WCHAR letters[] = L"dhms";
+    WCHAR default_format[80];
+    ULONGLONG ticks, value;
+    const WCHAR *p;
+    int pos = 0, i, j;
+    BOOL present[4] = { FALSE };
+    LCID lcid;
+
+    TRACE( "(%s,%lx,%p,%s,%s,%p,%d)\n", debugstr_w(name), flags, systime,
+           wine_dbgstr_longlong(duration), debugstr_w(format), buffer, len );
+
+    if (len < 0 || (len && !buffer) || (flags & ~LOCALE_NOUSEROVERRIDE) || !get_locale_by_name( name, &lcid ))
+    {
+        SetLastError( flags & ~LOCALE_NOUSEROVERRIDE ? ERROR_INVALID_FLAGS : ERROR_INVALID_PARAMETER );
+        return 0;
+    }
+    if (systime)
+    {
+        if (systime->wMilliseconds > 999 || systime->wSecond > 59 || systime->wMinute > 59 || systime->wHour > 23)
+        {
+            SetLastError( ERROR_INVALID_PARAMETER );
+            return 0;
+        }
+        ticks = systime->wDay * units[0] + systime->wHour * units[1] + systime->wMinute * units[2]
+                + systime->wSecond * units[3] + systime->wMilliseconds * 10000ull;
+    }
+    else ticks = duration;
+
+    if (!format)
+    {
+        if (!GetLocaleInfoEx( name, LOCALE_SDURATION | (flags & LOCALE_NOUSEROVERRIDE),
+                              default_format, ARRAY_SIZE(default_format) ))
+            wcscpy( default_format, L"h:mm:ss" );
+        format = default_format;
+    }
+
+    /* Each unit counts what is left after the larger units the format shows, so the
+     * largest one shown takes the whole of the duration above it. */
+    for (p = format; *p; p++)
+    {
+        if (*p == '\'') { while (p[1] && p[1] != '\'') p++; if (p[1]) p++; continue; }
+        for (i = 0; i < 4; i++)
+            if (towlower( *p ) == letters[i]) present[i] = TRUE;
+    }
+
+    for (p = format; *p; )
+    {
+        int count = 1;
+        WCHAR ch = towlower( *p );
+
+        if (*p == '\'')
+        {
+            for (p++; *p && *p != '\''; p++)
+            {
+                if (len && pos < len) buffer[pos] = *p;
+                pos++;
+            }
+            if (*p) p++;
+            continue;
+        }
+        while (towlower( p[count] ) == ch && ch != '\0') count++;
+        for (i = 0; i < 4; i++) if (ch == letters[i]) break;
+        if (i < 4)
+        {
+            for (j = i - 1; j >= 0 && !present[j]; j--) ;
+            value = (j >= 0 ? ticks % units[j] : ticks) / units[i];
+            pos = duration_put_number( buffer, pos, len, value, count > 1 ? 2 : 1 );
+            p += count;
+        }
+        else if (ch == 'f')
+        {
+            ULONGLONG fraction = ticks % units[3];
+            int digits = min( count, 7 );
+
+            for (i = digits; i < 7; i++) fraction /= 10;
+            pos = duration_put_number( buffer, pos, len, fraction, digits );
+            p += count;
+        }
+        else
+        {
+            if (len && pos < len) buffer[pos] = *p;
+            pos++;
+            p++;
+        }
+    }
+
+    if (len && pos >= len)
+    {
+        SetLastError( ERROR_INSUFFICIENT_BUFFER );
+        return 0;
+    }
+    if (len) buffer[pos] = 0;
+    return pos + 1;
+}
+
+
+/* The script of a character, as an ISO 15924 code, or NULL for common and inherited ones. */
+static const WCHAR *char_script( WCHAR ch, BOOL *inherited )
+{
+    static const struct { WCHAR first, last; const WCHAR *script; } ranges[] =
+    {
+        { 0x0041, 0x005a, L"Latn" }, { 0x0061, 0x007a, L"Latn" }, { 0x00aa, 0x00aa, L"Latn" },
+        { 0x00ba, 0x00ba, L"Latn" }, { 0x00c0, 0x00d6, L"Latn" }, { 0x00d8, 0x00f6, L"Latn" },
+        { 0x00f8, 0x024f, L"Latn" }, { 0x0250, 0x02af, L"Latn" }, { 0x1e00, 0x1eff, L"Latn" },
+        { 0x2c60, 0x2c7f, L"Latn" }, { 0xa720, 0xa7ff, L"Latn" }, { 0xff21, 0xff3a, L"Latn" },
+        { 0xff41, 0xff5a, L"Latn" }, { 0x0370, 0x03ff, L"Grek" }, { 0x1f00, 0x1fff, L"Grek" },
+        { 0x0400, 0x052f, L"Cyrl" }, { 0x2de0, 0x2dff, L"Cyrl" }, { 0xa640, 0xa69f, L"Cyrl" },
+        { 0x0530, 0x058f, L"Armn" }, { 0x0590, 0x05ff, L"Hebr" }, { 0xfb1d, 0xfb4f, L"Hebr" },
+        { 0x0600, 0x06ff, L"Arab" }, { 0x0750, 0x077f, L"Arab" }, { 0xfb50, 0xfdff, L"Arab" },
+        { 0xfe70, 0xfeff, L"Arab" }, { 0x0700, 0x074f, L"Syrc" }, { 0x0780, 0x07bf, L"Thaa" },
+        { 0x0900, 0x097f, L"Deva" }, { 0x0980, 0x09ff, L"Beng" }, { 0x0a00, 0x0a7f, L"Guru" },
+        { 0x0a80, 0x0aff, L"Gujr" }, { 0x0b00, 0x0b7f, L"Orya" }, { 0x0b80, 0x0bff, L"Taml" },
+        { 0x0c00, 0x0c7f, L"Telu" }, { 0x0c80, 0x0cff, L"Knda" }, { 0x0d00, 0x0d7f, L"Mlym" },
+        { 0x0d80, 0x0dff, L"Sinh" }, { 0x0e00, 0x0e7f, L"Thai" }, { 0x0e80, 0x0eff, L"Laoo" },
+        { 0x0f00, 0x0fff, L"Tibt" }, { 0x1000, 0x109f, L"Mymr" }, { 0x10a0, 0x10ff, L"Geor" },
+        { 0x1100, 0x11ff, L"Hang" }, { 0x3130, 0x318f, L"Hang" }, { 0xac00, 0xd7af, L"Hang" },
+        { 0x1200, 0x139f, L"Ethi" }, { 0x13a0, 0x13ff, L"Cher" }, { 0x1780, 0x17ff, L"Khmr" },
+        { 0x1800, 0x18af, L"Mong" }, { 0x3040, 0x309f, L"Hira" }, { 0x30a0, 0x30ff, L"Kana" },
+        { 0x31f0, 0x31ff, L"Kana" }, { 0xff66, 0xff9f, L"Kana" }, { 0x3100, 0x312f, L"Bopo" },
+        { 0x2e80, 0x2fdf, L"Hani" }, { 0x3400, 0x4dbf, L"Hani" }, { 0x4e00, 0x9fff, L"Hani" },
+        { 0xf900, 0xfaff, L"Hani" }, { 0xa000, 0xa4cf, L"Yiii" },
+    };
+    unsigned int i;
+
+    *inherited = (ch >= 0x0300 && ch <= 0x036f) || (ch >= 0x1ab0 && ch <= 0x1aff) ||
+                 (ch >= 0x1dc0 && ch <= 0x1dff) || (ch >= 0x20d0 && ch <= 0x20ff) ||
+                 (ch >= 0xfe00 && ch <= 0xfe0f) || (ch >= 0xfe20 && ch <= 0xfe2f);
+    if (*inherited) return NULL;
+    for (i = 0; i < ARRAY_SIZE(ranges); i++)
+        if (ch >= ranges[i].first && ch <= ranges[i].last) return ranges[i].script;
+    return NULL;
+}
+
+/***********************************************************************
+ *	GetStringScripts   (kernelbase.@)
+ *
+ * The scripts of a string, as "Latn;Grek;" in alphabetical order. Characters of no script,
+ * such as digits and punctuation, are left out unless GSS_ALLOW_INHERITED_COMMON is given.
+ */
+INT WINAPI GetStringScripts( DWORD flags, const WCHAR *str, INT len, WCHAR *scripts, INT size )
+{
+    const WCHAR *found[64];
+    WCHAR result[64 * 5 + 1];
+    unsigned int count = 0, i, j;
+    BOOL common = FALSE, inherited_seen = FALSE;
+    INT needed;
+
+    TRACE( "%#lx, %s, %d, %p, %d\n", flags, debugstr_wn( str, len ), len, scripts, size );
+
+    if ((flags & ~1u) || !str || size < 0 || (size && !scripts))
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return 0;
+    }
+    if (len < 0) len = lstrlenW( str );
+
+    for (i = 0; i < len; i++)
+    {
+        BOOL inherited;
+        const WCHAR *script = char_script( str[i], &inherited );
+
+        if (!script)
+        {
+            if (inherited) inherited_seen = TRUE;
+            else common = TRUE;
+            continue;
+        }
+        for (j = 0; j < count; j++) if (!wcscmp( found[j], script )) break;
+        if (j == count && count < ARRAY_SIZE(found) - 2) found[count++] = script;
+    }
+    if (flags & 1)
+    {
+        if (inherited_seen) found[count++] = L"Qaai";
+        if (common) found[count++] = L"Zyyy";
+    }
+    /* Alphabetical order, as Windows gives them. */
+    for (i = 1; i < count; i++)
+        for (j = i; j > 0 && wcscmp( found[j - 1], found[j] ) > 0; j--)
+        {
+            const WCHAR *tmp = found[j]; found[j] = found[j - 1]; found[j - 1] = tmp;
+        }
+    result[0] = 0;
+    for (i = 0; i < count; i++)
+    {
+        wcscat( result, found[i] );
+        wcscat( result, L";" );
+    }
+    needed = lstrlenW( result ) + 1;
+    if (!size) return needed;
+    if (size < needed)
+    {
+        SetLastError( ERROR_INSUFFICIENT_BUFFER );
+        return 0;
+    }
+    memcpy( scripts, result, needed * sizeof(WCHAR) );
+    return needed;
+}
+
+static BOOL script_in_list( const WCHAR *script, INT script_len, const WCHAR *list, INT list_len )
+{
+    INT i = 0;
+
+    while (i < list_len)
+    {
+        INT start = i;
+
+        while (i < list_len && list[i] != ';') i++;
+        if (i - start == script_len && !wcsnicmp( list + start, script, script_len )) return TRUE;
+        i++;
+    }
+    return FALSE;
+}
+
+/***********************************************************************
+ *	VerifyScripts   (kernelbase.@)
+ *
+ * Whether every script in the test list is also in the locale's. VS_ALLOW_LATIN lets
+ * Latin pass as well.
+ */
+BOOL WINAPI VerifyScripts( DWORD flags, const WCHAR *locale_scripts, INT locale_len,
+        const WCHAR *test_scripts, INT test_len )
+{
+    INT i = 0;
+
+    TRACE( "%#lx, %s, %s\n", flags, debugstr_wn( locale_scripts, locale_len ),
+            debugstr_wn( test_scripts, test_len ) );
+
+    if ((flags & ~1u) || !locale_scripts || !test_scripts)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return FALSE;
+    }
+    if (locale_len < 0) locale_len = lstrlenW( locale_scripts );
+    if (test_len < 0) test_len = lstrlenW( test_scripts );
+
+    while (i < test_len)
+    {
+        INT start = i;
+
+        while (i < test_len && test_scripts[i] != ';') i++;
+        if (i > start && !script_in_list( test_scripts + start, i - start, locale_scripts, locale_len ) &&
+                !((flags & 1) && i - start == 4 && !wcsnicmp( test_scripts + start, L"Latn", 4 )))
+        {
+            SetLastError( ERROR_SUCCESS );
+            return FALSE;
+        }
+        i++;
+    }
+    SetLastError( ERROR_SUCCESS );
+    return TRUE;
+}

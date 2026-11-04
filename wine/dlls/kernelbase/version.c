@@ -1680,6 +1680,43 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetPackageFullName( HANDLE process, UINT32 *
 
 
 /***********************************************************************
+ *         OpenPackageInfoByFullName   (kernelbase.@)
+ *
+ * Wine runs no packaged apps, so no package can be opened.
+ */
+LONG WINAPI OpenPackageInfoByFullName( const WCHAR *full_name, const UINT32 reserved,
+                                       PACKAGE_INFO_REFERENCE *reference )
+{
+    TRACE( "(%s %#x %p)\n", debugstr_w(full_name), reserved, reference );
+    if (!full_name || !reference || reserved) return ERROR_INVALID_PARAMETER;
+    *reference = NULL;
+    return ERROR_NOT_FOUND;
+}
+
+
+/***********************************************************************
+ *         GetPackageInfo   (kernelbase.@)
+ */
+LONG WINAPI GetPackageInfo( PACKAGE_INFO_REFERENCE reference, const UINT32 flags, UINT32 *length,
+                            BYTE *buffer, UINT32 *count )
+{
+    TRACE( "(%p %#x %p %p %p)\n", reference, flags, length, buffer, count );
+    if (count) *count = 0;
+    return ERROR_INVALID_PARAMETER;
+}
+
+
+/***********************************************************************
+ *         ClosePackageInfo   (kernelbase.@)
+ */
+LONG WINAPI ClosePackageInfo( PACKAGE_INFO_REFERENCE reference )
+{
+    TRACE( "(%p)\n", reference );
+    return reference ? ERROR_INVALID_PARAMETER : ERROR_SUCCESS;
+}
+
+
+/***********************************************************************
  *         GetPackageFamilyName   (kernelbase.@)
  */
 LONG WINAPI /* DECLSPEC_HOTPATCH */ GetPackageFamilyName( HANDLE process, UINT32 *length, WCHAR *name )
@@ -1855,6 +1892,110 @@ LONG WINAPI PackageFullNameFromId(const PACKAGE_ID *package_id, UINT32 *length, 
         return ERROR_INSUFFICIENT_BUFFER;
 
     swprintf(full_name, *length, L"%s_%s_%s_%s_%s", package_id->name, ver_str, arch_str, package_id->resourceId, package_id->publisherId);
+    return ERROR_SUCCESS;
+}
+
+/* A package's publisher id: the first 8 bytes of the SHA-256 hash of its publisher, in
+ * 13 characters of Crockford's base32. */
+static BOOL publisher_id_from_publisher( const WCHAR *publisher, WCHAR *id )
+{
+    static const char alphabet[] = "0123456789abcdefghjkmnpqrstvwxyz";
+    static NTSTATUS (WINAPI *hash)( void *, UCHAR *, ULONG, UCHAR *, ULONG, UCHAR *, ULONG );
+    UCHAR digest[32];
+    ULONGLONG value = 0;
+    unsigned int i;
+
+    if (!hash)
+    {
+        HMODULE module = LoadLibraryW( L"bcrypt.dll" );
+        if (!module || !(hash = (void *)GetProcAddress( module, "BCryptHash" ))) return FALSE;
+    }
+    /* 0x41 is BCRYPT_SHA256_ALG_HANDLE. */
+    if (hash( (void *)0x41, NULL, 0, (UCHAR *)publisher, lstrlenW( publisher ) * sizeof(WCHAR),
+              digest, sizeof(digest) )) return FALSE;
+    for (i = 0; i < 8; i++) value = (value << 8) | digest[i];
+    /* 64 bits padded with a zero bit to 65, five bits a character. */
+    for (i = 0; i < 12; i++) id[i] = alphabet[(value >> (59 - 5 * i)) & 31];
+    id[12] = alphabet[(value << 1) & 31];
+    id[13] = 0;
+    return TRUE;
+}
+
+static LONG return_family_name( const WCHAR *name, UINT32 name_len, const WCHAR *publisher_id,
+                                UINT32 *length, WCHAR *family_name )
+{
+    UINT32 have = *length, publisher_len = lstrlenW( publisher_id );
+
+    *length = name_len + 1 + publisher_len + 1;
+    if (have < *length) return ERROR_INSUFFICIENT_BUFFER;
+    memcpy( family_name, name, name_len * sizeof(WCHAR) );
+    family_name[name_len] = '_';
+    memcpy( family_name + name_len + 1, publisher_id, (publisher_len + 1) * sizeof(WCHAR) );
+    return ERROR_SUCCESS;
+}
+
+
+/***********************************************************************
+ *         PackageFamilyNameFromFullName   (kernelbase.@)
+ */
+LONG WINAPI PackageFamilyNameFromFullName( const WCHAR *full_name, UINT32 *length, WCHAR *family_name )
+{
+    const WCHAR *p;
+    int i;
+
+    TRACE( "full_name %s, length %p, family_name %p.\n", debugstr_w(full_name), length, family_name );
+
+    if (!full_name || !length || (!family_name && *length)) return ERROR_INVALID_PARAMETER;
+    /* Name_Version_Architecture_ResourceId_PublisherId */
+    for (i = 0, p = full_name; i < 4; i++, p++)
+        if (!(p = wcschr( p, '_' ))) return ERROR_INVALID_PARAMETER;
+    if (lstrlenW( p ) != 13) return ERROR_INVALID_PARAMETER;
+    return return_family_name( full_name, wcschr( full_name, '_' ) - full_name, p, length, family_name );
+}
+
+
+/***********************************************************************
+ *         PackageFamilyNameFromId   (kernelbase.@)
+ */
+LONG WINAPI PackageFamilyNameFromId( const PACKAGE_ID *package_id, UINT32 *length, WCHAR *family_name )
+{
+    WCHAR publisher_id[14];
+
+    TRACE( "package_id %p, length %p, family_name %p.\n", package_id, length, family_name );
+
+    if (!package_id || !length || (!family_name && *length) || !package_id->name) return ERROR_INVALID_PARAMETER;
+    if (package_id->publisher)
+    {
+        if (!publisher_id_from_publisher( package_id->publisher, publisher_id )) return ERROR_NOT_SUPPORTED;
+    }
+    else if (package_id->publisherId && lstrlenW( package_id->publisherId ) == 13)
+        lstrcpyW( publisher_id, package_id->publisherId );
+    else return ERROR_INVALID_PARAMETER;
+    return return_family_name( package_id->name, lstrlenW( package_id->name ), publisher_id, length, family_name );
+}
+
+
+/***********************************************************************
+ *         FormatApplicationUserModelId   (kernelbase.@)
+ */
+LONG WINAPI FormatApplicationUserModelId( const WCHAR *family_name, const WCHAR *app_id,
+                                          UINT32 *length, WCHAR *aumid )
+{
+    UINT32 have, family_len, app_len;
+
+    TRACE( "family_name %s, app_id %s, length %p, aumid %p.\n", debugstr_w(family_name),
+           debugstr_w(app_id), length, aumid );
+
+    if (!family_name || !app_id || !length || (!aumid && *length) || !wcschr( family_name, '_' ) || !*app_id)
+        return ERROR_INVALID_PARAMETER;
+    family_len = lstrlenW( family_name );
+    app_len = lstrlenW( app_id );
+    have = *length;
+    *length = family_len + 1 + app_len + 1;
+    if (have < *length) return ERROR_INSUFFICIENT_BUFFER;
+    memcpy( aumid, family_name, family_len * sizeof(WCHAR) );
+    aumid[family_len] = '!';
+    memcpy( aumid + family_len + 1, app_id, (app_len + 1) * sizeof(WCHAR) );
     return ERROR_SUCCESS;
 }
 

@@ -138,7 +138,7 @@
 @ stdcall ClearCommError(long ptr ptr)
 # @ stub CloseGlobalizationUserSettingsKey
 @ stdcall CloseHandle(long)
-# @ stub ClosePackageInfo
+@ stdcall ClosePackageInfo(ptr)
 # @ stub ClosePrivateNamespace
 @ stdcall ClosePseudoConsole(ptr)
 # @ stub CloseState
@@ -396,7 +396,7 @@
 @ stdcall FlushViewOfFile(ptr long)
 @ stdcall FoldStringW(long wstr long ptr long)
 # @ stub ForceSyncFgPolicyInternal
-# @ stub FormatApplicationUserModelId
+@ stdcall FormatApplicationUserModelId(wstr wstr ptr ptr)
 @ stdcall FormatMessageA(long ptr long long ptr long ptr)
 @ stdcall FormatMessageW(long ptr long long ptr long ptr)
 @ stdcall FreeConsole()
@@ -521,7 +521,7 @@
 @ stdcall GetDiskSpaceInformationW(wstr ptr)
 @ stdcall GetDriveTypeA(str)
 @ stdcall GetDriveTypeW(wstr)
-# @ stub GetDurationFormatEx
+@ stdcall GetDurationFormatEx(wstr long ptr int64 wstr ptr long)
 @ stdcall GetDynamicTimeZoneInformation(ptr)
 @ stdcall GetDynamicTimeZoneInformationEffectiveYears(ptr ptr ptr)
 # @ stub GetEffectivePackageStatusForUser
@@ -634,7 +634,7 @@
 @ stdcall GetPackageFullName(long ptr ptr)
 # @ stub GetPackageFullNameFromToken
 # @ stub GetPackageId
-# @ stub GetPackageInfo
+@ stdcall GetPackageInfo(ptr long ptr ptr ptr)
 # @ stub GetPackageInstallTime
 # @ stub GetPackageOSMaxVersionTested
 @ stdcall GetPackagePath(ptr long ptr ptr)
@@ -710,7 +710,7 @@
 # @ stub GetStateSettingsFolder
 # @ stub GetStateVersion
 @ stdcall GetStdHandle(long)
-# @ stub GetStringScripts
+@ stdcall GetStringScripts(long wstr long ptr long)
 @ stub GetStringTableEntry
 @ stdcall GetStringTypeA(long long str long ptr)
 @ stdcall GetStringTypeExW(long long wstr long ptr)
@@ -1023,7 +1023,7 @@
 @ stdcall ObjectDeleteAuditAlarmW(wstr ptr long)
 @ stdcall ObjectOpenAuditAlarmW(wstr ptr wstr wstr ptr long long long ptr long long ptr)
 @ stdcall ObjectPrivilegeAuditAlarmW(wstr ptr long long ptr long)
-# @ stub OfferVirtualMemory
+@ stdcall OfferVirtualMemory(ptr long long)
 @ stdcall OpenEventA(long long str)
 @ stdcall OpenEventW(long long wstr)
 @ stdcall OpenFileById(long ptr long long ptr long)
@@ -1031,7 +1031,7 @@
 @ stdcall OpenFileMappingW(long long wstr)
 # @ stub OpenGlobalizationUserSettingsKey
 @ stdcall OpenMutexW(long long wstr)
-# @ stub OpenPackageInfoByFullName
+@ stdcall OpenPackageInfoByFullName(wstr long ptr)
 # @ stub OpenPackageInfoByFullNameForUser
 # @ stub OpenPrivateNamespaceW
 @ stdcall OpenProcess(long long long)
@@ -1049,8 +1049,8 @@
 @ stdcall OutputDebugStringA(str)
 @ stdcall OutputDebugStringW(wstr)
 # @ stub OverrideRoamingDataModificationTimesInRange
-# @ stub PackageFamilyNameFromFullName
-# @ stub PackageFamilyNameFromId
+@ stdcall PackageFamilyNameFromFullName(wstr ptr ptr)
+@ stdcall PackageFamilyNameFromId(ptr ptr ptr)
 # @ stub PackageFamilyNameFromProductId
 @ stdcall PackageFullNameFromId(ptr ptr ptr)
 # @ stub PackageFullNameFromProductId
@@ -1298,7 +1298,7 @@
 @ stdcall ReadProcessMemory(long ptr ptr long ptr)
 # @ stub ReadStateAtomValue
 # @ stub ReadStateContainerValue
-# @ stub ReclaimVirtualMemory
+@ stdcall ReclaimVirtualMemory(ptr long)
 # @ stub RefreshPolicyExInternal
 # @ stub RefreshPolicyInternal
 @ stdcall RegCloseKey(long)
@@ -1549,7 +1549,7 @@
 @ stdcall SetThreadpoolTimer(ptr ptr long long) ntdll.TpSetTimer
 @ stdcall SetThreadpoolTimerEx(ptr ptr long long) ntdll.TpSetTimerEx
 @ stdcall SetThreadpoolWait(ptr long ptr) ntdll.TpSetWait
-# @ stub SetThreadpoolWaitEx
+@ stdcall SetThreadpoolWaitEx(ptr long ptr ptr)
 @ stdcall SetTimeZoneInformation(ptr)
 @ stdcall SetTokenInformation(long long ptr long)
 @ stdcall SetUnhandledExceptionFilter(ptr)
@@ -1719,7 +1719,7 @@
 # @ stub VerifyPackageFullName
 # @ stub VerifyPackageId
 # @ stub VerifyPackageRelativeApplicationId
-# @ stub VerifyScripts
+@ stdcall VerifyScripts(long wstr long wstr long)
 @ stdcall VirtualAlloc2(long ptr long long long ptr long)
 @ stdcall VirtualAlloc2FromApp(long ptr long long long ptr long)
 @ stdcall VirtualAlloc(ptr long long long)

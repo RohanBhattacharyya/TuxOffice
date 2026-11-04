@@ -225,6 +225,7 @@
 @ stdcall -import ClearCommError(long ptr ptr)
 @ stdcall CloseConsoleHandle(long)
 @ stdcall -import CloseHandle(long)
+@ stdcall ClosePackageInfo(ptr) kernelbase.ClosePackageInfo
 # @ stub ClosePrivateNamespace
 @ stdcall CloseProfileUserMapping()
 @ stdcall -import ClosePseudoConsole(ptr)
@@ -533,6 +534,7 @@
 @ stdcall -import FlushViewOfFile(ptr long)
 @ stdcall FoldStringA(long str long ptr long)
 @ stdcall -import FoldStringW(long wstr long ptr long)
+@ stdcall FormatApplicationUserModelId(wstr wstr ptr ptr) kernelbase.FormatApplicationUserModelId
 @ stdcall -import FormatMessageA(long ptr long long ptr long ptr)
 @ stdcall -import FormatMessageW(long ptr long long ptr long ptr)
 @ stdcall -import FreeConsole()
@@ -669,8 +671,8 @@
 @ stdcall GetDllDirectoryW(long ptr)
 @ stdcall -import GetDriveTypeA(str)
 @ stdcall -import GetDriveTypeW(wstr)
-# @ stub GetDurationFormat
-# @ stub GetDurationFormatEx
+@ stdcall GetDurationFormat(long long ptr int64 wstr ptr long)
+@ stdcall GetDurationFormatEx(wstr long ptr int64 wstr ptr long) kernelbase.GetDurationFormatEx
 @ stdcall -import GetDynamicTimeZoneInformation(ptr)
 @ stdcall -import GetDynamicTimeZoneInformationEffectiveYears(ptr ptr ptr)
 @ stdcall -import -ret64 -arch=i386,x86_64 GetEnabledXStateFeatures()
@@ -782,6 +784,7 @@
 @ stdcall -import GetUserDefaultGeoName(ptr long)
 @ stdcall -import GetUserPreferredUILanguages(long ptr ptr ptr)
 @ stdcall GetPackageFamilyName(long ptr ptr) kernelbase.GetPackageFamilyName
+@ stdcall GetPackageInfo(ptr long ptr ptr ptr) kernelbase.GetPackageInfo
 @ stdcall GetPackageFullName(long ptr ptr) kernelbase.GetPackageFullName
 @ stdcall -import GetPackagePath(ptr long ptr ptr)
 @ stdcall -import GetPackagesByPackageFamily(wstr ptr ptr ptr ptr)
@@ -837,7 +840,7 @@
 @ stdcall GetStartupInfoA(ptr)
 @ stdcall -import GetStartupInfoW(ptr)
 @ stdcall -import GetStdHandle(long)
-# @ stub GetStringScripts
+@ stdcall GetStringScripts(long wstr long ptr long) kernelbase.GetStringScripts
 @ stdcall -import GetStringTypeA(long long str long ptr)
 @ stdcall GetStringTypeExA(long long str long ptr)
 @ stdcall -import GetStringTypeExW(long long wstr long ptr)
@@ -1146,6 +1149,7 @@
 @ stub NotifyNLSUserCache
 # @ stub NotifyUILanguageChange
 # @ stub NumaVirtualQueryNode
+@ stdcall OfferVirtualMemory(ptr long long) kernelbase.OfferVirtualMemory
 @ stdcall OpenConsoleW(wstr long long long)
 @ stub OpenDataFile
 @ stdcall -import OpenEventA(long long str)
@@ -1158,6 +1162,7 @@
 @ stdcall OpenJobObjectW(long long wstr)
 @ stdcall OpenMutexA(long long str)
 @ stdcall -import OpenMutexW(long long wstr)
+@ stdcall OpenPackageInfoByFullName(wstr long ptr) kernelbase.OpenPackageInfoByFullName
 # @ stub OpenPrivateNamespaceA
 # @ stub OpenPrivateNamespaceW
 @ stdcall -import OpenProcess(long long long)
@@ -1176,6 +1181,8 @@
 @ stdcall -import PeekConsoleInputW(ptr ptr long ptr)
 @ stdcall -import PeekNamedPipe(long ptr long ptr ptr ptr)
 @ stdcall -import PostQueuedCompletionStatus(long long ptr ptr)
+@ stdcall PackageFamilyNameFromFullName(wstr ptr ptr) kernelbase.PackageFamilyNameFromFullName
+@ stdcall PackageFamilyNameFromId(ptr ptr ptr) kernelbase.PackageFamilyNameFromId
 @ stdcall -import PackageFullNameFromId(ptr ptr ptr)
 @ stdcall -import PackageIdFromFullName(wstr long ptr ptr)
 @ stdcall PowerClearRequest(long long)
@@ -1282,6 +1289,7 @@
 @ stdcall -private -import RegSetValueExW(long wstr long long ptr long)
 @ stdcall -private -import RegUnLoadKeyA(long str)
 @ stdcall -private -import RegUnLoadKeyW(long wstr)
+@ stdcall ReclaimVirtualMemory(ptr long) kernelbase.ReclaimVirtualMemory
 @ stdcall RegisterApplicationRecoveryCallback(ptr ptr long long)
 @ stdcall RegisterApplicationRestart(wstr long)
 @ stub RegisterConsoleIME
@@ -1513,6 +1521,7 @@
 @ stdcall SetThreadpoolTimer(ptr ptr long long) NTDLL.TpSetTimer
 @ stdcall SetThreadpoolTimerEx(ptr ptr long long) NTDLL.TpSetTimerEx
 @ stdcall SetThreadpoolWait(ptr long ptr) NTDLL.TpSetWait
+@ stdcall SetThreadpoolWaitEx(ptr long ptr ptr) kernelbase.SetThreadpoolWaitEx
 @ stdcall -import SetTimeZoneInformation(ptr)
 @ stub SetTimerQueueTimer
 @ stdcall -arch=win64 SetUmsThreadInformation(ptr long ptr long)
@@ -1605,7 +1614,7 @@
 @ stdcall -import VerLanguageNameW(long wstr long)
 @ stdcall -ret64 VerSetConditionMask(long long long long) NTDLL.VerSetConditionMask
 @ stdcall VerifyConsoleIoHandle(long)
-# @ stub VerifyScripts
+@ stdcall VerifyScripts(long wstr long wstr long) kernelbase.VerifyScripts
 @ stdcall VerifyVersionInfoA(ptr long int64)
 @ stdcall VerifyVersionInfoW(ptr long int64)
 @ stdcall -import VirtualAlloc(ptr long long long)

@@ -1387,6 +1387,20 @@ PTP_WAIT WINAPI DECLSPEC_HOTPATCH CreateThreadpoolWait( PTP_WAIT_CALLBACK callba
 
 
 /***********************************************************************
+ *           SetThreadpoolWaitEx   (kernelbase.@)
+ *
+ * Windows returns whether this replaced a wait that had not fired. Wine's thread pool does
+ * not report that, so this always says it did not, as when the wait had already fired.
+ */
+BOOL WINAPI SetThreadpoolWaitEx( TP_WAIT *wait, HANDLE handle, FILETIME *timeout, void *reserved )
+{
+    TRACE( "%p %p %p %p\n", wait, handle, timeout, reserved );
+    TpSetWait( wait, handle, (LARGE_INTEGER *)timeout );
+    return FALSE;
+}
+
+
+/***********************************************************************
  *           CreateThreadpoolWork   (kernelbase.@)
  */
 PTP_WORK WINAPI DECLSPEC_HOTPATCH CreateThreadpoolWork( PTP_WORK_CALLBACK callback, PVOID userdata,

@@ -103,6 +103,8 @@ PACKAGE_ID;
 #define PACKAGE_PROPERTY_DYNAMIC 0x00100000
 #define PACKAGE_FILTER_DYNAMIC PACKAGE_PROPERTY_DYNAMIC
 
+typedef struct _PACKAGE_INFO_REFERENCE { void *reserved; } *PACKAGE_INFO_REFERENCE;
+
 LONG WINAPI AppPolicyGetMediaFoundationCodecLoading(HANDLE token, AppPolicyMediaFoundationCodecLoading *policy);
 LONG WINAPI AppPolicyGetProcessTerminationMethod(HANDLE token, AppPolicyProcessTerminationMethod *policy);
 LONG WINAPI AppPolicyGetShowDeveloperDiagnostic(HANDLE token, AppPolicyShowDeveloperDiagnostic *policy);
@@ -110,9 +112,15 @@ LONG WINAPI AppPolicyGetThreadInitializationType(HANDLE token, AppPolicyThreadIn
 LONG WINAPI AppPolicyGetWindowingModel(HANDLE processToken, AppPolicyWindowingModel *policy);
 LONG WINAPI FindPackagesByPackageFamily(const WCHAR *family_name, UINT32 filters, UINT32 *count,
         WCHAR **full_names, UINT32 *buffer_length, WCHAR *buffer, UINT32 *properties);
+LONG WINAPI ClosePackageInfo(PACKAGE_INFO_REFERENCE reference);
+LONG WINAPI GetPackageInfo(PACKAGE_INFO_REFERENCE reference, const UINT32 flags, UINT32 *length, BYTE *buffer, UINT32 *count);
 LONG WINAPI GetPackagePath(const PACKAGE_ID *package_id, const UINT32 reserved, UINT32 *length, WCHAR *path);
 LONG WINAPI GetPackagesByPackageFamily(const WCHAR *family_name, UINT32 *count, WCHAR **full_names,
         UINT32 *buffer_length, WCHAR *buffer);
+LONG WINAPI OpenPackageInfoByFullName(const WCHAR *full_name, const UINT32 reserved, PACKAGE_INFO_REFERENCE *reference);
+LONG WINAPI FormatApplicationUserModelId(const WCHAR *family_name, const WCHAR *app_id, UINT32 *length, WCHAR *aumid);
+LONG WINAPI PackageFamilyNameFromFullName(const WCHAR *full_name, UINT32 *length, WCHAR *family_name);
+LONG WINAPI PackageFamilyNameFromId(const PACKAGE_ID *package_id, UINT32 *length, WCHAR *family_name);
 LONG WINAPI PackageFullNameFromId(const PACKAGE_ID *package_id, UINT32 *length, WCHAR *full_name);
 LONG WINAPI PackageIdFromFullName(const WCHAR *full_name, UINT32 flags, UINT32 *buffer_length, BYTE *buffer);
 

@@ -528,3 +528,20 @@ INT WINAPI GetGeoInfoA(GEOID geoid, GEOTYPE geotype, LPSTR data, int data_len, L
     if (!GetGeoInfoW( geoid, geotype, buffer, ARRAY_SIZE(buffer), lang )) return 0;
     return WideCharToMultiByte( CP_ACP, 0, buffer, -1, data, data_len, NULL, NULL );
 }
+
+
+/***********************************************************************
+ *	GetDurationFormat  (KERNEL32.@)
+ */
+INT WINAPI GetDurationFormat( LCID lcid, DWORD flags, const SYSTEMTIME *systime, ULONGLONG duration,
+                              const WCHAR *format, WCHAR *buffer, INT len )
+{
+    WCHAR name[LOCALE_NAME_MAX_LENGTH];
+
+    if (!LCIDToLocaleName( lcid, name, ARRAY_SIZE(name), 0 ))
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return 0;
+    }
+    return GetDurationFormatEx( name, flags, systime, duration, format, buffer, len );
+}
