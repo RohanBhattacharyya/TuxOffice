@@ -110,7 +110,9 @@ fi
 base=$(git -C "$SRC" log --format=%H --grep='^soda' -n1 -- .)
 [[ -n $base ]] || { echo "no 'soda' commit in $SRC" >&2; exit 1; }
 # wine/ is part of the TuxOffice repository; --relative keeps paths inside it.
-mapfile -t dlls < <( { git -C "$SRC" diff --relative --name-only "$base" -- dlls; git -C "$SRC" diff --relative --name-only -- dlls; } |
+# A new module is untracked until committed, and git diff does not list it.
+mapfile -t dlls < <( { git -C "$SRC" diff --relative --name-only "$base" -- dlls; git -C "$SRC" diff --relative --name-only -- dlls;
+                       git -C "$SRC" ls-files --others --exclude-standard -- dlls; } |
                      cut -d/ -f2 | grep -v '^Makefile' | sort -u)
 # The generated server protocol version also lives in ntdll's Unix client.
 # Shared-memory layout changes must ship a matching client and server.
@@ -154,6 +156,25 @@ done
 if ((${#missing[@]})); then
   echo "error: changed modules were not built (missing build dependencies?): ${missing[*]}" >&2
   rm -rf "$OUT.tmp"; exit 1
+fi
+# Wine only puts a builtin module into a prefix's system32 when it updates the prefix, which
+# it does when wine.inf's time differs from the one the prefix recorded. A module the runner
+# being replaced did not have would otherwise never be found by existing prefixes, so give
+# wine.inf a new time then, and otherwise keep the installed runner's, so that a rebuild does
+# not update every prefix (the launcher sets Office up again after an update).
+previous="$OUT/lib/wine/x86_64-windows"
+[[ -d $previous ]] || previous="$base_runner/lib/wine/x86_64-windows"
+new_module=
+for d in "${dlls[@]}"; do
+  for pe in "dlls/$d/x86_64-windows/"*.{dll,drv,exe}; do
+    [[ -f $pe && ! -e "$previous/$(basename "$pe")" ]] && { new_module=$(basename "$pe"); break 2; }
+  done
+done
+if [[ -n $new_module ]]; then
+  echo ":: $new_module is new; existing prefixes will update on their next start"
+  touch "$OUT.tmp/share/wine/wine.inf"
+elif [[ -f "$OUT/share/wine/wine.inf" ]]; then
+  touch -r "$OUT/share/wine/wine.inf" "$OUT.tmp/share/wine/wine.inf"
 fi
 if [[ " ${dlls[*]} " == *" winewayland.drv "* && ! -f dlls/winewayland.drv/winewayland.so ]]; then
   echo "error: winewayland.so was not built; install the Wayland and xkbcommon development files" >&2
