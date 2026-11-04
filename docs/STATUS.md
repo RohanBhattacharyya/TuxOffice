@@ -125,6 +125,13 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   `nvh264dec` gave frames in CUDA memory, which Wine's parser accepted and its videoflip
   then refused. The parser now asks for system memory. Inserted videos now get their
   length and poster frame.
+- **Open: Excel's Power Query (Data > Get Data) does not start.** Its engine is .NET,
+  which runs on wine-mono here, as setup installs no .NET Framework. `Queries.Add` fails
+  with `TargetInvocationException` (0x80131604) and Excel reports "Something went wrong":
+  `PluggableProtocolManager.RegisterProtocol` hits a `NullReferenceException` while the
+  add-in starts, so every query fails, CSV included. Not a crash. The options are to find
+  what wine-mono lacks there, or to install Microsoft's .NET Framework 4.8 in the prefix,
+  which changes setup and was not tried.
 - **Open: playing a video in a slide show ends PowerPoint.** It asks the media engine
   for a service, `{805ea411-92e0-4e59-9b6e-5c7d7915e64f}` with interface
   `{1f2a94c9-a3df-430d-9d0f-acd85ddc29af}`, which Wine lacks and is not documented, and on
