@@ -111,6 +111,8 @@ struct dispatch_params
     BOOL               bypass_rpcrt; /* bypass RPC runtime? */
     RPC_STATUS         status; /* status (out) */
     HRESULT            hr; /* hresult (out) */
+    struct list        entry; /* entry in the apartment's deferred calls */
+    DWORD              deferred_since; /* tick count when first deferred, or 0 */
 };
 
 struct message_state
@@ -1257,6 +1259,7 @@ static HRESULT WINAPI ClientRpcChannelBuffer_GetBuffer(LPRPCCHANNELBUFFER iface,
     }
     if (apt) apartment_release(apt);
     message_state->params.handle = ClientRpcChannelBuffer_GetEventHandle(This);
+    message_state->params.deferred_since = 0;
     /* Note: message_state->params.msg is initialised in
      * ClientRpcChannelBuffer_SendReceive */
 
@@ -1458,7 +1461,10 @@ static HRESULT WINAPI ClientRpcChannelBuffer_SendReceive(LPRPCCHANNELBUFFER ifac
         {
             tlsdata->pending_call_count_client++;
             hr = CoWaitForMultipleHandles(0, INFINITE, 1, &message_state->params.handle, &index);
-            tlsdata->pending_call_count_client--;
+            /* Calls the message filter put off until this thread stopped
+             * waiting for a reply can run now. */
+            if (!--tlsdata->pending_call_count_client && !apt->multi_threaded)
+                rpc_retry_deferred_calls(apt);
         }
     }
     ClientRpcChannelBuffer_ReleaseEventHandle(This, message_state->params.handle);
@@ -1885,6 +1891,24 @@ static void rpc_release_dispatch_refs(struct dispatch_params *params)
     params->stub_manager = NULL;
 }
 
+/* Queue the calls the message filter put off on the apartment window again. */
+void rpc_retry_deferred_calls(struct apartment *apt)
+{
+    struct dispatch_params *params, *next;
+
+    if (!apt->win || list_empty(&apt->deferred_calls)) return;
+    KillTimer(apt->win, DEFERRED_CALL_TIMER);
+    LIST_FOR_EACH_ENTRY_SAFE(params, next, &apt->deferred_calls, struct dispatch_params, entry)
+    {
+        list_remove(&params->entry);
+        if (!PostMessageW(apt->win, DM_EXECUTERPC, 0, (LPARAM)params))
+        {
+            params->deferred_since = GetTickCount() - DEFERRED_CALL_TIMEOUT;
+            rpc_execute_call(params);
+        }
+    }
+}
+
 void rpc_execute_call(struct dispatch_params *params)
 {
     struct message_state *message_state = NULL;
@@ -1896,6 +1920,7 @@ void rpc_execute_call(struct dispatch_params *params)
     GUID old_causality_id;
     struct tlsdata *tlsdata;
     struct apartment *apt;
+    BOOL deferred = FALSE;
 
     if (FAILED(com_get_tlsdata(&tlsdata)))
         return;
@@ -1958,9 +1983,12 @@ void rpc_execute_call(struct dispatch_params *params)
         interface_info.iid = params->iid;
         interface_info.wMethod = msg->ProcNum;
 
+        /* The call types describe this thread's outgoing calls: a call
+         * arriving on a new causality while one is waiting for its reply is
+         * TOPLEVEL_CALLPENDING, which filters use to decide what to put off. */
         if (IsEqualGUID(&orpcthis.cid, &tlsdata->causality_id))
             calltype = CALLTYPE_NESTED;
-        else if (tlsdata->pending_call_count_server == 0)
+        else if (tlsdata->pending_call_count_client == 0)
             calltype = CALLTYPE_TOPLEVEL;
         else
             calltype = CALLTYPE_TOPLEVEL_CALLPENDING;
@@ -1970,20 +1998,25 @@ void rpc_execute_call(struct dispatch_params *params)
                                                        UlongToHandle(GetCurrentProcessId()),
                                                        0 /* FIXME */,
                                                        &interface_info);
-        TRACE("IMessageFilter_HandleInComingCall returned %ld\n", handlecall);
+        TRACE("IMessageFilter_HandleInComingCall(%d) returned %ld\n", calltype, handlecall);
         switch (handlecall)
         {
         case SERVERCALL_REJECTED:
             params->hr = RPC_E_CALL_REJECTED;
             goto exit_reset_state;
         case SERVERCALL_RETRYLATER:
-#if 0 /* FIXME: handle retries on the client side before enabling this code */
-            params->hr = RPC_E_RETRY;
+            /* Windows hands the rejection to the caller, whose message filter
+             * retries the call. Hold the call here instead and run it again
+             * once the apartment is free, as a retrying caller would, and
+             * give up with RPC_E_SERVERCALL_RETRYLATER after a while. */
+            if (!params->deferred_since) params->deferred_since = GetTickCount() | 1;
+            if (apt->win && tlsdata->inits && (LONG)(GetTickCount() - params->deferred_since) < DEFERRED_CALL_TIMEOUT)
+            {
+                TRACE("deferring call to %s method %u\n", debugstr_guid(&params->iid), msg->ProcNum);
+                deferred = TRUE;
+            }
+            else params->hr = RPC_E_SERVERCALL_RETRYLATER;
             goto exit_reset_state;
-#else
-            FIXME("retry call later not implemented\n");
-            break;
-#endif
         case SERVERCALL_ISHANDLED:
         default:
             break;
@@ -2014,6 +2047,12 @@ exit_reset_state:
 
 exit:
     free(message_state);
+    if (deferred)
+    {
+        list_add_tail(&apt->deferred_calls, &params->entry);
+        SetTimer(apt->win, DEFERRED_CALL_TIMER, DEFERRED_CALL_RETRY_MS, NULL);
+        return;
+    }
     /* Disconnecting an object during its last call can leave this call's
      * reference as the stub manager's only reference. Destroy its interfaces
      * here, in the apartment that owns them, before waking the RPC worker. */
@@ -2055,6 +2094,7 @@ static void __RPC_STUB dispatch_rpc(RPC_MESSAGE *msg)
     params->hr = S_OK;
     params->handle = NULL;
     params->bypass_rpcrt = FALSE;
+    params->deferred_since = 0;
     params->stub_manager = stub_manager;
 
     /* Note: this is the important difference between STAs and MTAs - we

@@ -370,6 +370,7 @@ static struct apartment *apartment_construct(DWORD model)
 
     list_init(&apt->proxies);
     list_init(&apt->stubmgrs);
+    list_init(&apt->deferred_calls);
     list_init(&apt->loaded_dlls);
     list_init(&apt->usage_cookies);
     apt->ipidc = 0;
@@ -1114,6 +1115,16 @@ static LRESULT CALLBACK apartment_wndproc(HWND hWnd, UINT msg, WPARAM wParam, LP
     case DM_EXECUTERPC:
         rpc_execute_call((struct dispatch_params *)lParam);
         return 0;
+    case WM_TIMER:
+        if (wParam == DEFERRED_CALL_TIMER)
+        {
+            struct apartment *apt = com_get_current_apt();
+
+            if (apt) rpc_retry_deferred_calls(apt);
+            else KillTimer(hWnd, wParam);
+            return 0;
+        }
+        return DefWindowProcW(hWnd, msg, wParam, lParam);
     case DM_HOSTOBJECT:
     {
         struct apartment *apt = com_get_current_apt();
@@ -1163,6 +1174,8 @@ static void apartment_dispatch_pending_calls(struct apartment *apt)
     MSG msg;
 
     if (!apt || apt->multi_threaded || !apt->win || apt->tid != GetCurrentThreadId()) return;
+    /* Calls the message filter put off are answered now too. */
+    rpc_retry_deferred_calls(apt);
     while (PeekMessageW(&msg, apt->win, DM_EXECUTERPC, DM_EXECUTERPC, PM_REMOVE))
     {
         /* WM_QUIT is returned whatever the filter; leave it for the thread. */

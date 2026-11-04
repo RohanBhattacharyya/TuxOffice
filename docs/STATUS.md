@@ -475,10 +475,17 @@ while its own busy counters are set), so they free the workbook's state under th
 notification, which then writes into it. Found with a gdb watchpoint on the freed pointer
 and COM traces. A person closes the data window on Excel's own thread, so this needs an
 outside automation client. `office-functional.c` now waits a second before `Close`:
-0 crashes in 40 PowerPoint rounds (was 8 of 40); 1 round hung after `Close`, not yet
-looked at. A combase change (correct `CALLTYPE_TOPLEVEL_CALLPENDING`, and deferring calls
-a filter answers with `SERVERCALL_RETRYLATER`, with `tests/com-message-filter.c`) is in
-the working tree, uncommitted until the full suite has run with it and the hang is ruled out.
+0 crashes in 40 PowerPoint rounds (was 8 of 40), then 40 of 40 again and 10 of 10
+full suite rounds. One earlier round hung after `Close`; it did not come back in the next
+90 rounds, and no call was put off in any of them, so it is not the combase change below.
+
+Two COM bugs found on the way are fixed in combase, though neither caused this crash.
+Message filters were told a call was `CALLTYPE_TOPLEVEL` while the thread waited for
+its own outgoing call: Wine counted incoming calls, not outgoing ones. And a filter's
+`SERVERCALL_RETRYLATER` was ignored, so the call ran at once. Such calls are now held and
+run again when the outgoing call returns or after 100 ms, as a retrying caller would see,
+and fail with `RPC_E_SERVERCALL_RETRYLATER` after 30 s. Excel's filter answers that while
+it is busy. `tests/com-message-filter.c` checks both (7 of 7; the old combase fails 5).
 
 **3 November:** back, at about the old rate: 3 of 10 suite rounds, then 1 of 20 and 1 of 20
 PowerPoint-only rounds, same write to NULL+0x8c at `EXCEL.EXE+0xe02c6a`. It is not the day's

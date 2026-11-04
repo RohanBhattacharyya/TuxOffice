@@ -47,6 +47,7 @@ struct apartment
     /* STA-only fields */
     HWND win;                /* message window (LOCK) */
     IMessageFilter *filter;  /* message filter (CS cs) */
+    struct list deferred_calls; /* incoming calls the filter put off (apartment thread) */
     BOOL main;               /* is this a main-threaded-apartment? (RO) */
 
     /* MTA-only */
@@ -135,6 +136,11 @@ void rpc_unregister_channel_hooks(void);
 
 struct dispatch_params;
 void rpc_execute_call(struct dispatch_params *params);
+void rpc_retry_deferred_calls(struct apartment *apt);
+
+#define DEFERRED_CALL_TIMER     0x10de /* apartment window timer for deferred calls */
+#define DEFERRED_CALL_RETRY_MS  100
+#define DEFERRED_CALL_TIMEOUT   30000
 
 enum class_reg_data_origin
 {
