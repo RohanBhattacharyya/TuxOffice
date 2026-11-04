@@ -125,6 +125,20 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   `nvh264dec` gave frames in CUDA memory, which Wine's parser accepted and its videoflip
   then refused. The parser now asks for system memory. Inserted videos now get their
   length and poster frame.
+- **Open: saving as a Single File Web Page (MHT) is refused** in Word and Outlook ("You
+  need to have Microsoft Outlook Express or Windows Mail installed"). Office looks up
+  the MIME class `{FD853CED-7F86-11d0-8252-00C04FD85AB4}`, which Wine's `inetcomm` does
+  not provide or register, and gives up before loading it. Saving as HTML, MSG, text,
+  iCalendar and vCard works.
+- Also checked by hand, without faults: Outlook recurring appointments, flags, a filtered
+  `Restrict`, `AdvancedSearch`, a second data file, and saving items as MSG, HTML, text,
+  iCalendar and vCard. Rules report "This store does not support rules", as they do on
+  Windows for a data file with no account. Word footnotes, a table of contents, tracked
+  changes, comparing documents, equations, SmartArt, embedded charts, mail merge from an
+  Excel file and XPS export; Excel tables, pivot tables with a slicer, conditional
+  formats, sparklines, goal seek, dynamic array and LAMBDA formulas, the newer chart types
+  and chart image export; PowerPoint SmartArt, Morph, sections, slide image export and
+  reusing slides from another file.
 - **Open: Excel's Power Query (Data > Get Data) does not start.** Its engine is .NET,
   which runs on wine-mono here, as setup installs no .NET Framework. `Queries.Add` fails
   with `TargetInvocationException` (0x80131604) and Excel reports "Something went wrong":
