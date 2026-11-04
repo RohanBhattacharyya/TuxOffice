@@ -146,12 +146,15 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   add-in starts, so every query fails, CSV included. Not a crash. The options are to find
   what wine-mono lacks there, or to install Microsoft's .NET Framework 4.8 in the prefix,
   which changes setup and was not tried.
-- **Open: playing a video in a slide show ends PowerPoint.** It asks the media engine
-  for a service, `{805ea411-92e0-4e59-9b6e-5c7d7915e64f}` with interface
-  `{1f2a94c9-a3df-430d-9d0f-acd85ddc29af}`, which Wine lacks and is not documented, and on
-  failure PowerPoint stops itself with an assertion (tag `0x1d7815d5`). The media engine
-  used to return `E_NOTIMPL` without clearing the pointer; it now forwards services to its
-  session and clears the pointer, which does not change this case.
+- **Playing a video in a slide show ended PowerPoint.** It asks the media engine for
+  its timed text (captions) service, `MF_MEDIA_ENGINE_TIMEDTEXT`
+  `{805ea411-92e0-4e59-9b6e-5c7d7915e64f}` with `IMFTimedText`, and stops itself with an
+  assertion (tag `0x1d7815d5`) when there is none; the GUIDs sit next to its
+  "IMFMediaEngineEx doesn't provide timed text" message in `PPCORE.DLL`. The media engine
+  now offers timed text with no tracks (the interfaces are not in Wine's headers, so the
+  method order follows the Windows SDK), and forwards other services to its session with
+  the pointer cleared on failure. Videos now play in slide shows: `media.vbs` plays the
+  inserted video and sees its position advance, 13 of 13. Captions files are not loaded.
 
 ## 4 November: Word could not open PDFs, and the Excel chart crash explained
 

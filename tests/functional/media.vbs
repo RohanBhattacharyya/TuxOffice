@@ -1,12 +1,12 @@
 ' SPDX-License-Identifier: LGPL-2.1-or-later
 ' PowerPoint video: export a deck as MP4 through Media Foundation's sink writer
 ' (converter, H.264 encoder, MP4 sink), then insert that video into a slide,
-' which reads it back through a source reader. Playing it in a slide show is
-' not tried: PowerPoint asks the media engine for a service Wine lacks and
-' stops itself (see docs/STATUS.md).
+' which reads it back through a source reader, and play it in a slide show
+' through the media engine, which PowerPoint stops itself without when the
+' engine offers no timed text service.
 ' Usage: cscript //nologo media.vbs C:\work\dir
 Option Explicit
-Dim dir, fails, passes, fso, pp, pres, sl, i, t0, status, m, slides
+Dim dir, fails, passes, fso, pp, pres, sl, i, t0, status, m, slides, win, pos
 dir = WScript.Arguments(0) & "\media"
 fails = 0 : passes = 0
 On Error Resume Next
@@ -58,6 +58,18 @@ sl.Export dir & "\video-slide.png", "PNG", 960, 540
 Check "slide with video exports", fso.FileExists(dir & "\video-slide.png")
 pres.SaveAs dir & "\with-video.pptx"
 Check "deck with video saves", fso.FileExists(dir & "\with-video.pptx")
+For i = 1 To 3 : pres.Slides(i).SlideShowTransition.AdvanceOnTime = False : Next
+Set win = pres.SlideShowSettings.Run
+WScript.Sleep 1500
+win.View.GotoSlide 4
+WScript.Sleep 1000
+win.View.Player(m.Name).Play
+Check "video plays in the slide show", True
+WScript.Sleep 2500
+pos = win.View.Player(m.Name).CurrentPosition
+Check "playback advances (" & pos & " ms)", pos > 1000
+win.View.Exit
+Check "slide show exits", pp.SlideShowWindows.Count = 0
 pres.Close
 pp.Quit
 Check "powerpoint quits", True
