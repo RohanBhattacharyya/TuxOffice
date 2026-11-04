@@ -158,7 +158,8 @@ Tested in the isolated session; Outlook, OneNote and the format test without a n
   library built by a 64-bit process got a wrong size too; it is converted now.
   `tests/typelib-marshal-win32.c` builds, registers and marshals a 32-bit library
   (6 of 6; the old rpcrt4 crashes at the first call). Word opens and converts its
-  own PDF.
+  own PDF, and an Excel VBA macro that drives Word with early binding now returns
+  (`tests/functional/vba.vbs`, 5 of 5; with the old rpcrt4 it never did).
 - **New test, `tests/functional/formats.vbs`:** Word saves and reopens doc, rtf, htm,
   odt, pdf and txt; Excel xls, csv, ods, xml, htm and PDF export; PowerPoint ppt, odp
   and pdf. 44 of 44. Copying an Excel range and chart into Word (OLE object, RTF, HTML,
