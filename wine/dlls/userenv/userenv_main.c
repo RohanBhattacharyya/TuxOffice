@@ -29,6 +29,7 @@
 #include "winnls.h"
 #include "sddl.h"
 #include "objbase.h"
+#include "bcrypt.h"
 #include "userenv.h"
 
 #include "wine/debug.h"
@@ -696,4 +697,42 @@ HRESULT WINAPI CreateAppContainerProfile(PCWSTR container_name, PCWSTR display_n
           debugstr_w(description), capabilities, capability_count, container_sid);
 
     return E_NOTIMPL;
+}
+
+HRESULT WINAPI DeleteAppContainerProfile(PCWSTR container_name)
+{
+    FIXME("(%s): stub\n", debugstr_w(container_name));
+
+    if (!container_name || !container_name[0]) return E_INVALIDARG;
+    /* CreateAppContainerProfile never makes one, so there is nothing to delete. */
+    return S_OK;
+}
+
+/* An AppContainer SID is S-1-15-2 followed by the first 28 bytes of the SHA-256 hash of
+ * the lowercased container name. */
+HRESULT WINAPI DeriveAppContainerSidFromAppContainerName(PCWSTR container_name, PSID *container_sid)
+{
+    static SID_IDENTIFIER_AUTHORITY authority = {SECURITY_APP_PACKAGE_AUTHORITY};
+    DWORD hash[8];
+    WCHAR *lower;
+    NTSTATUS status;
+    int len, i;
+
+    TRACE("(%s, %p)\n", debugstr_w(container_name), container_sid);
+
+    if (!container_sid) return E_INVALIDARG;
+    *container_sid = NULL;
+    if (!container_name || !(len = lstrlenW(container_name)) || len > 64) return E_INVALIDARG;
+
+    if (!(lower = HeapAlloc(GetProcessHeap(), 0, (len + 1) * sizeof(WCHAR)))) return E_OUTOFMEMORY;
+    for (i = 0; i <= len; i++) lower[i] = RtlDowncaseUnicodeChar(container_name[i]);
+    status = BCryptHash(BCRYPT_SHA256_ALG_HANDLE, NULL, 0, (UCHAR *)lower, len * sizeof(WCHAR),
+                        (UCHAR *)hash, sizeof(hash));
+    HeapFree(GetProcessHeap(), 0, lower);
+    if (status) return HRESULT_FROM_NT(status);
+
+    if (!AllocateAndInitializeSid(&authority, 8, SECURITY_APP_PACKAGE_BASE_RID, hash[0], hash[1],
+                                  hash[2], hash[3], hash[4], hash[5], hash[6], container_sid))
+        return HRESULT_FROM_WIN32(GetLastError());
+    return S_OK;
 }
