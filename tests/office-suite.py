@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """Exercise Word, Excel and PowerPoint with fresh documents in a test prefix.
 
-Build helpers first with tests/build-helpers.sh. Usage: office-suite.py OUTDIR
+Build helpers first with tests/build-helpers.sh. Usage: office-suite.py OUTDIR [APP...]
 The suite also checks the saved Office packages, extracted PDF text and exit.
 """
 import json
@@ -84,14 +84,14 @@ def verify(app, directory):
 
 results = []
 try:
-    for app in executables:
+    for app in sys.argv[2:] or executables:
         directory = out / app
         directory.mkdir(exist_ok=True)
         result = {"app":app, "status":"failed"}
         try:
             sp.run([str(root / "tuxoffice"), "kill"], check=True)
             env = os.environ.copy()
-            env["WINEDEBUG"] = "-all,err+all,warn+seh"
+            env["WINEDEBUG"] = os.environ.get("SUITE_WINEDEBUG", "-all,err+all,warn+seh")
             with (directory / "actions.log").open("w") as log:
                 process = sp.run([str(root / "tuxoffice"), "wine", "C:/tuxoffice/office-functional.exe", app,
                                   "Z:" + str(directory).replace("/", "\\")], stdout=log, stderr=log,

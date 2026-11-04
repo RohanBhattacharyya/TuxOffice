@@ -82,8 +82,10 @@ try:
     deadline = time.monotonic()+15
     while time.monotonic()<deadline:
         status, response = typer("ping",500)
-        if response.startswith("noword"): break
-        if response.startswith("modal"): require_input("key","0x0d")
+        # Wine's own warnings can come first in the output; the helper's answer is a line.
+        lines = response.splitlines()
+        if "noword" in lines: break
+        if "modal" in lines: require_input("key","0x0d")
         time.sleep(.3)
     else: raise TimeoutError("Excel editor did not close")
     trigger.touch()

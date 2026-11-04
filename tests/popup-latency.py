@@ -53,7 +53,7 @@ try:
     deadline = clock()+90
     while clock()<deadline:
         helper("typer","dismiss-startup")
-        if helper("typer","ping",700)[1].startswith("ok"):
+        if any(l.startswith("ok") for l in helper("typer","ping",700)[1].splitlines()):
             break
         time.sleep(.5)
     else:
