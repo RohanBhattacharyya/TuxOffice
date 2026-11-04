@@ -11175,6 +11175,31 @@ static HRESULT WINAPI ICreateTypeInfo2_fnSetTypeIdldesc(ICreateTypeInfo2 *iface,
     return S_OK;
 }
 
+/* Number of vtable slots of an interface. A library read from disk reports
+ * function offsets and vtable size in this process's pointer size, one built in
+ * memory in its own; the two always agree, so take the slot size from them. */
+static UINT get_vtbl_slots(ITypeInfo *info, const TYPEATTR *attr)
+{
+    UINT size = sizeof(void *);
+    SHORT first = attr->cbSizeVft;
+    FUNCDESC *desc;
+    WORD i;
+
+    for (i = 0; i < attr->cFuncs; i++)
+    {
+        if (FAILED(ITypeInfo_GetFuncDesc(info, i, &desc))) break;
+        if (desc->oVft < first) first = desc->oVft;
+        ITypeInfo_ReleaseFuncDesc(info, desc);
+    }
+    if (i == attr->cFuncs && attr->cFuncs && attr->cbSizeVft > first
+            && !((attr->cbSizeVft - first) % attr->cFuncs))
+    {
+        UINT slot = (attr->cbSizeVft - first) / attr->cFuncs;
+        if (slot == 4 || slot == 8) size = slot;
+    }
+    return attr->cbSizeVft / size;
+}
+
 static HRESULT WINAPI ICreateTypeInfo2_fnLayOut(ICreateTypeInfo2 *iface)
 {
     ITypeInfoImpl *This = info_impl_from_ICreateTypeInfo2(iface);
@@ -11203,7 +11228,8 @@ static HRESULT WINAPI ICreateTypeInfo2_fnLayOut(ICreateTypeInfo2 *iface)
                     ITypeInfo_Release(inh);
                     return hres;
                 }
-                This->typeattr.cbSizeVft = attr->cbSizeVft;
+                /* The parent may count in another pointer size than this library. */
+                This->typeattr.cbSizeVft = get_vtbl_slots(inh, attr) * This->pTypeLib->ptr_size;
                 ITypeInfo_ReleaseTypeAttr(inh, attr);
 
                 do{

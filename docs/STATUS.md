@@ -94,6 +94,37 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   apply the repair; it is also installed in the regular prefix.
 - Removed tracked `wine/autom4te.cache` output and ignored that directory.
 
+## 4 November: Word could not open PDFs, and the Excel chart crash explained
+
+Tested in the isolated session; Outlook, OneNote and the format test without a network.
+
+- **Word failed to open any PDF** ("The last time you opened it, it caused a serious
+  error"). Word converts a PDF through Office's `IConverter`, a custom interface
+  marshalled from Office's type library, which is a 32-bit one (`SYS_WIN32`). Since
+  `1c89057` (2 November) oleaut32 reports such a library's vtable size in this
+  process's pointer size, but rpcrt4 still divided it by the library's 4 bytes, so
+  every proxy and stub it built from a 32-bit library had twice the slots. Each
+  method became a forwarder to a base proxy that does not exist, and the first call
+  read through NULL. This affected every early-bound call into Office across
+  processes or apartments; late-bound `IDispatch` calls, which all the other tests
+  make, go through a different proxy. rpcrt4 now takes the slot size from the
+  interface's own function offsets. The same commit also made `LayOut` of a library
+  built in memory start from its parent's size in the parent's unit, so a 32-bit
+  library built by a 64-bit process got a wrong size too; it is converted now.
+  `tests/typelib-marshal-win32.c` builds, registers and marshals a 32-bit library
+  (6 of 6; the old rpcrt4 crashes at the first call). Word opens and converts its
+  own PDF.
+- **New test, `tests/functional/formats.vbs`:** Word saves and reopens doc, rtf, htm,
+  odt, pdf and txt; Excel xls, csv, ods, xml, htm and PDF export; PowerPoint ppt, odp
+  and pdf. 44 of 44. Copying an Excel range and chart into Word (OLE object, RTF, HTML,
+  metafile, EMF, bitmap, text) and PowerPoint, and Word content back into Excel, also
+  ran without a fault (by hand, not a committed test).
+- **The Excel crash after an embedded chart edit was the test**, see its entry below:
+  0 in 80 PowerPoint rounds since. Two combase bugs found on the way are fixed.
+- Regression after all of it: chart UI 8/8, suite 10/10 (Word, Excel, PowerPoint),
+  Access 41/43 (the known XML export and compact), Publisher 17/17 (the known hang
+  after `Quit`), Outlook 27/27, OneNote 9/10 (Search), formats 44/44.
+
 ## 3 November: running every ribbon command, and missing imports
 
 To find crashes rather than wait for them, `tests/mso-crash-hunt.py` runs every command

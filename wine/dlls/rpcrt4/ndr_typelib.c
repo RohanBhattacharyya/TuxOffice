@@ -1394,6 +1394,59 @@ err:
 }
 
 /* Common helper for Create{Proxy,Stub}FromTypeInfo(). */
+/* Number of vtable slots of an interface. oleaut32 gives a library it loads
+ * function offsets and a vtable size in this process's pointer size, whatever
+ * the library's syskind; one built in memory keeps the library's. The offsets
+ * and the size always agree, so take the slot size from them. */
+static HRESULT get_vtbl_slots(ITypeInfo *typeinfo, SYSKIND syskind, WORD *slots)
+{
+    unsigned int size = syskind == SYS_WIN64 ? 8 : 4;
+    ITypeInfo *parentinfo;
+    TYPEATTR *typeattr;
+    FUNCDESC *desc;
+    HREFTYPE reftype;
+    SHORT first;
+    HRESULT hr;
+    WORD i;
+
+    hr = ITypeInfo_GetTypeAttr(typeinfo, &typeattr);
+    if (FAILED(hr))
+        return hr;
+
+    if (!typeattr->cFuncs && typeattr->cImplTypes)
+    {
+        /* No functions of its own: as many slots as its parent. */
+        ITypeInfo_ReleaseTypeAttr(typeinfo, typeattr);
+        hr = ITypeInfo_GetRefTypeOfImplType(typeinfo, 0, &reftype);
+        if (FAILED(hr))
+            return hr;
+        hr = ITypeInfo_GetRefTypeInfo(typeinfo, reftype, &parentinfo);
+        if (FAILED(hr))
+            return hr;
+        hr = get_vtbl_slots(parentinfo, syskind, slots);
+        ITypeInfo_Release(parentinfo);
+        return hr;
+    }
+
+    first = typeattr->cbSizeVft;
+    for (i = 0; i < typeattr->cFuncs; i++)
+    {
+        if (FAILED(ITypeInfo_GetFuncDesc(typeinfo, i, &desc)))
+            break;
+        if (desc->oVft < first) first = desc->oVft;
+        ITypeInfo_ReleaseFuncDesc(typeinfo, desc);
+    }
+    if (i == typeattr->cFuncs && typeattr->cFuncs && typeattr->cbSizeVft > first
+            && !((typeattr->cbSizeVft - first) % typeattr->cFuncs))
+    {
+        unsigned int slot = (typeattr->cbSizeVft - first) / typeattr->cFuncs;
+        if (slot == 4 || slot == 8) size = slot;
+    }
+    *slots = typeattr->cbSizeVft / size;
+    ITypeInfo_ReleaseTypeAttr(typeinfo, typeattr);
+    return S_OK;
+}
+
 static HRESULT get_iface_info(ITypeInfo *typeinfo, WORD *funcs, WORD *parentfuncs,
         GUID *parentiid, ITypeInfo **real_typeinfo)
 {
@@ -1445,8 +1498,11 @@ static HRESULT get_iface_info(ITypeInfo *typeinfo, WORD *funcs, WORD *parentfunc
     if (FAILED(hr))
         goto err;
     *funcs = typeattr->cFuncs;
-    *parentfuncs = typeattr->cbSizeVft / (syskind == SYS_WIN64 ? 8 : 4) - *funcs;
     ITypeInfo_ReleaseTypeAttr(*real_typeinfo, typeattr);
+    hr = get_vtbl_slots(*real_typeinfo, syskind, parentfuncs);
+    if (FAILED(hr))
+        goto err;
+    *parentfuncs -= *funcs;
 
     hr = ITypeInfo_GetRefTypeOfImplType(*real_typeinfo, 0, &reftype);
     if (FAILED(hr))
