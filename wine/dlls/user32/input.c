@@ -869,6 +869,48 @@ BOOL WINAPI GetPointerInfoHistory( UINT32 id, UINT32 *count, POINTER_INFO *info 
     return FALSE;
 }
 
+BOOL WINAPI GetPointerFrameInfo( UINT32 id, UINT32 *count, POINTER_INFO *info )
+{
+    FIXME( "id %u, count %p, info %p stub.\n", id, count, info );
+    SetLastError( ERROR_INVALID_PARAMETER );
+    return FALSE;
+}
+
+BOOL WINAPI GetPointerFrameInfoHistory( UINT32 id, UINT32 *entries, UINT32 *count, POINTER_INFO *info )
+{
+    FIXME( "id %u, entries %p, count %p, info %p stub.\n", id, entries, count, info );
+    SetLastError( ERROR_INVALID_PARAMETER );
+    return FALSE;
+}
+
+/*******************************************************************
+ *           InheritWindowMonitor (USER32.@)
+ *
+ * Asks for a window to open on the monitor of another. Wine places windows itself, so
+ * there is nothing to do.
+ */
+BOOL WINAPI InheritWindowMonitor( HWND hwnd, HWND inherit )
+{
+    TRACE( "hwnd %p, inherit %p\n", hwnd, inherit );
+    if (!IsWindow( hwnd ))
+    {
+        SetLastError( ERROR_INVALID_WINDOW_HANDLE );
+        return FALSE;
+    }
+    return TRUE;
+}
+
+/*******************************************************************
+ *           IsImmersiveProcess (USER32.@)
+ *
+ * No process runs as a Windows Store app under Wine.
+ */
+BOOL WINAPI IsImmersiveProcess( HANDLE process )
+{
+    TRACE( "process %p\n", process );
+    return FALSE;
+}
+
 BOOL WINAPI SkipPointerFrameMessages( UINT32 id )
 {
     FIXME( "id %u stub.\n", id );
