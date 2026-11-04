@@ -95,6 +95,11 @@ t.Subject = "TuxOffice task"
 t.Save
 checked = Empty : checked = (tasks.Items.Find("[Subject] = 'TuxOffice task'").Subject = "TuxOffice task") : Check "task", checked
 
+' A run stopped between these steps leaves the folder behind; start without it.
+Dim leftover : For Each leftover In inbox.Folders
+  If leftover.Name = "TuxTest" Then leftover.Delete
+Next
+Err.Clear
 Dim sub1 : Set sub1 = inbox.Folders.Add("TuxTest")
 checked = Empty : checked = (inbox.Folders("TuxTest").Name = "TuxTest") : Check "add folder", checked
 sub1.Delete
