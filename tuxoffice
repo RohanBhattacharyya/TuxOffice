@@ -212,6 +212,34 @@ configure_virtual_registry() {
   fi
 }
 
+# Wine updates a prefix by itself when the runner's wine.inf changes, as after a
+# runner upgrade, and that update drops what TuxOffice set up: the fallback
+# printer (Excel then says no printer is installed and cannot export a PDF) and
+# Office's proxy and Installer registrations. Run the update here instead, then
+# set them up again.
+update_runner() {
+  local inf stamp="$TUX_PREFIX/.update-timestamp" current
+  inf="$(dirname "$(dirname "$WINE")")/share/wine/wine.inf"
+  [[ -f $inf && -f "$TUX_PREFIX/system.reg" ]] || return 0
+  current=$(stat -c %Y "$inf")
+  if [[ -f $stamp ]]; then
+    local stored; stored=$(<"$stamp")
+    stored=${stored%%[[:space:]]*}  # wineboot ends the line with CRLF
+    [[ $stored == "$current" || $stored == disable* ]] && return 0
+  fi
+  mkdir -p "$TUX_CACHE"
+  msg "updating the prefix for the new runner" >&2
+  if ! wine wineboot -u >"$TUX_CACHE/prefix-update.log" 2>&1; then
+    warn "prefix update failed; see $TUX_CACHE/prefix-update.log"
+    return 0
+  fi
+  configure_layout_printer
+  configure_chart_proxies
+  configure_installer_components
+  configure_shell
+  configure_virtual_registry || true
+}
+
 # Settings that older TuxOffice versions did not apply: run once per revision,
 # so an installed Office picks them up on its next start.
 PREFIX_REVISION=1
@@ -711,6 +739,7 @@ cmd_run() {
   runner_env
   [[ -f "$OFFICE_ROOT/$exe" ]] || die "$exe not installed"
   fix_locker
+  update_runner
   update_prefix
   refresh_root_certs
   sync_app_theme
@@ -867,12 +896,13 @@ cmd_doctor() {
   done
 }
 
-cmd_wine() { runner_env; exec wine "$@"; }
+cmd_wine() { runner_env; update_runner; exec wine "$@"; }
 
 # A Windows command prompt in the Office environment, or a batch script run
 # in it: tuxoffice cmd [SCRIPT [ARGS...]]
 cmd_cmd() {
   runner_env
+  update_runner
   if (($#)); then
     local script=$1
     shift
