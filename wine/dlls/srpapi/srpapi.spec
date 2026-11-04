@@ -1,0 +1,5 @@
+@ stdcall SrpDisablePermissiveModeFileEncryption()
+@ stdcall SrpEnablePermissiveModeFileEncryption(wstr)
+@ stdcall SrpGetEnterpriseIds(ptr ptr ptr ptr)
+@ stdcall SrpGetEnterprisePolicy(ptr ptr)
+@ stdcall SrpIsTokenService(ptr ptr)

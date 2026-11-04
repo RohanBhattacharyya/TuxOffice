@@ -1,0 +1,4 @@
+MODULE    = mfsensorgroup.dll
+
+SOURCES = \
+	main.c

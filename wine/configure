@@ -1161,6 +1161,7 @@ enable_dx8vb
 enable_dxcore
 enable_dxdiagn
 enable_dxgi
+enable_elscore
 enable_dxtrans
 enable_dxva2
 enable_esent
@@ -1252,6 +1253,7 @@ enable_mfasfsrcsnk
 enable_mferror
 enable_mfh264enc
 enable_mfmediaengine
+enable_mfsensorgroup
 enable_mfmp4srcsnk
 enable_mfplat
 enable_mfplay
@@ -1456,6 +1458,7 @@ enable_softpub
 enable_spoolss
 enable_sppc
 enable_srclient
+enable_srpapi
 enable_srvcli
 enable_srvsvc
 enable_sspicli
@@ -1609,6 +1612,7 @@ enable_wow64win
 enable_wpc
 enable_wpcap
 enable_ws2_32
+enable_wscapi
 enable_wsdapi
 enable_wshom_ocx
 enable_wsnmp32
@@ -23369,6 +23373,7 @@ wine_fn_config_makefile dlls/dxcore/tests enable_tests
 wine_fn_config_makefile dlls/dxdiagn enable_dxdiagn
 wine_fn_config_makefile dlls/dxdiagn/tests enable_tests
 wine_fn_config_makefile dlls/dxgi enable_dxgi
+wine_fn_config_makefile dlls/elscore enable_elscore
 wine_fn_config_makefile dlls/dxgi/tests enable_tests
 wine_fn_config_makefile dlls/dxtrans enable_dxtrans
 wine_fn_config_makefile dlls/dxva2 enable_dxva2
@@ -23505,6 +23510,7 @@ wine_fn_config_makefile dlls/mfasfsrcsnk enable_mfasfsrcsnk
 wine_fn_config_makefile dlls/mferror enable_mferror
 wine_fn_config_makefile dlls/mfh264enc enable_mfh264enc
 wine_fn_config_makefile dlls/mfmediaengine enable_mfmediaengine
+wine_fn_config_makefile dlls/mfsensorgroup enable_mfsensorgroup
 wine_fn_config_makefile dlls/mfmediaengine/tests enable_tests
 wine_fn_config_makefile dlls/mfmp4srcsnk enable_mfmp4srcsnk
 wine_fn_config_makefile dlls/mfplat enable_mfplat
@@ -23830,6 +23836,7 @@ wine_fn_config_makefile dlls/spoolss enable_spoolss
 wine_fn_config_makefile dlls/spoolss/tests enable_tests
 wine_fn_config_makefile dlls/sppc enable_sppc
 wine_fn_config_makefile dlls/srclient enable_srclient
+wine_fn_config_makefile dlls/srpapi enable_srpapi
 wine_fn_config_makefile dlls/srvcli enable_srvcli
 wine_fn_config_makefile dlls/srvsvc enable_srvsvc
 wine_fn_config_makefile dlls/sspicli enable_sspicli
@@ -24085,6 +24092,7 @@ wine_fn_config_makefile dlls/wpc/tests enable_tests
 wine_fn_config_makefile dlls/wpcap enable_wpcap
 wine_fn_config_makefile dlls/wpcap/tests enable_tests
 wine_fn_config_makefile dlls/ws2_32 enable_ws2_32
+wine_fn_config_makefile dlls/wscapi enable_wscapi
 wine_fn_config_makefile dlls/ws2_32/tests enable_tests
 wine_fn_config_makefile dlls/wsdapi enable_wsdapi
 wine_fn_config_makefile dlls/wsdapi/tests enable_tests

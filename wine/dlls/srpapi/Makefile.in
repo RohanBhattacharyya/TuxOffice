@@ -1,0 +1,4 @@
+MODULE    = srpapi.dll
+
+SOURCES = \
+	main.c

@@ -1,0 +1,4 @@
+MODULE    = wscapi.dll
+
+SOURCES = \
+	main.c

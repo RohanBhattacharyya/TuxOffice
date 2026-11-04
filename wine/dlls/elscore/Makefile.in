@@ -1,0 +1,4 @@
+MODULE    = elscore.dll
+
+SOURCES = \
+	main.c
