@@ -26,6 +26,9 @@
 #include "winuser.h"
 #include "uxthemedll.h"
 #include "vssym32.h"
+#include "wine/debug.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(uxtheme);
 
 static void uxtheme_draw_menu_button(HTHEME theme, HWND hwnd, HDC hdc, enum NONCLIENT_BUTTON_TYPE type,
                                      RECT rect, BOOL down, BOOL grayed)
@@ -88,4 +91,34 @@ void WINAPI UXTHEME_NonClientButtonDraw(HWND hwnd, HDC hdc, enum NONCLIENT_BUTTO
     }
 
     CloseThemeData(theme);
+}
+
+/* Windows nudges a window when panning hits the end of its content. Wine does not move
+ * windows for this, which loses only the bounce. */
+
+/***********************************************************************
+ *      BeginPanningFeedback                                (UXTHEME.@)
+ */
+BOOL WINAPI BeginPanningFeedback(HWND hwnd)
+{
+    TRACE("(%p)\n", hwnd);
+    return IsWindow(hwnd);
+}
+
+/***********************************************************************
+ *      UpdatePanningFeedback                               (UXTHEME.@)
+ */
+BOOL WINAPI UpdatePanningFeedback(HWND hwnd, LONG x, LONG y, BOOL inertia)
+{
+    TRACE("(%p, %ld, %ld, %d)\n", hwnd, x, y, inertia);
+    return IsWindow(hwnd);
+}
+
+/***********************************************************************
+ *      EndPanningFeedback                                  (UXTHEME.@)
+ */
+BOOL WINAPI EndPanningFeedback(HWND hwnd, BOOL animate)
+{
+    TRACE("(%p, %d)\n", hwnd, animate);
+    return IsWindow(hwnd);
 }

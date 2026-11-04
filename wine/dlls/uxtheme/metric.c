@@ -257,3 +257,41 @@ HRESULT WINAPI GetThemeTransitionDuration(HTHEME hTheme, int iPartId, int iState
     *pdwDuration = intlist.iValues[1 + intlist.iValues[0] * (iStateIdFrom - 1) + (iStateIdTo - 1)];
     return S_OK;
 }
+
+/* Wine's themes carry no animation storyboards, so there is no animation data to find.
+ * Callers then animate without theme timing, as they do with classic themes on Windows. */
+
+/***********************************************************************
+ *      GetThemeAnimationProperty                           (UXTHEME.@)
+ */
+HRESULT WINAPI GetThemeAnimationProperty(HTHEME theme, int storyboard, int target, int property,
+                                         void *buffer, DWORD size, DWORD *returned)
+{
+    TRACE("(%p, %d, %d, %d, %p, %lu, %p)\n", theme, storyboard, target, property, buffer, size, returned);
+    if (!theme) return E_HANDLE;
+    if (returned) *returned = 0;
+    return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+}
+
+/***********************************************************************
+ *      GetThemeAnimationTransform                          (UXTHEME.@)
+ */
+HRESULT WINAPI GetThemeAnimationTransform(HTHEME theme, int storyboard, int target, DWORD index,
+                                          void *transform, DWORD size, DWORD *returned)
+{
+    TRACE("(%p, %d, %d, %lu, %p, %lu, %p)\n", theme, storyboard, target, index, transform, size, returned);
+    if (!theme) return E_HANDLE;
+    if (returned) *returned = 0;
+    return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+}
+
+/***********************************************************************
+ *      GetThemeTimingFunction                              (UXTHEME.@)
+ */
+HRESULT WINAPI GetThemeTimingFunction(HTHEME theme, int id, void *function, DWORD size, DWORD *returned)
+{
+    TRACE("(%p, %d, %p, %lu, %p)\n", theme, id, function, size, returned);
+    if (!theme) return E_HANDLE;
+    if (returned) *returned = 0;
+    return HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+}
