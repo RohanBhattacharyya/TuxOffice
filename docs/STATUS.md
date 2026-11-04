@@ -94,6 +94,78 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   apply the repair; it is also installed in the regular prefix.
 - Removed tracked `wine/autom4te.cache` output and ignored that directory.
 
+## 3 November: running every ribbon command, and missing imports
+
+To find crashes rather than wait for them, `tests/mso-crash-hunt.py` runs every command
+an app offers, one at a time, in the isolated prefix with no network. Commands come from
+`CommandBars.FindControl` over control ids 1 to 45,000, or `DoCmd.RunCommand` 1 to 999 in
+Access. `tests/dialog-closer.c` closes each dialog after it has painted. A crash or a hang
+of 40 s is recorded with its command and the app is started again at the next one.
+
+| App | Commands run | Crashes | Hangs |
+|---|---|---|---|
+| Word | 1,149 | 0 | 7, all the desktop file chooser |
+| Excel | 1,409 | 0 | 1, Open |
+| PowerPoint | 1,012 | 1, New Comment (fixed) | 1, Open Favorites |
+| Access | 992 | 1, RunCommand 301 (fixed) | several, inside ACE |
+| Publisher | 696 | 0 | Print, Open |
+
+Under Wine, calling a function a DLL does not have ends the process: a missing export
+is an "unimplemented function" stub, and a delay-loaded DLL that cannot be found raises
+`0xC06D007F`. Both only fire when the code runs. `tests/import-gaps.py` reads the
+static and delay imports of every Office binary, by name and by ordinal, and lists what
+the runner and the prefix do not provide.
+
+- **Access crashed on RunCommand 301 (Create Shortcut).** `HlinkCreateShortcutFromString`
+  and the rest of hlink's shortcut family were missing. They now write and read
+  Internet Shortcut files, as on Windows.
+- **PowerPoint crashed on New Comment.** `elscore.dll` (extended linguistic services) did
+  not exist. It now exists, and reports no services, which Office handles.
+- **Other imports that would have ended the process** are now present: `srpapi` and
+  `wscapi` (enterprise data protection and security center, both reporting nothing
+  configured, never "protected"), `mfsensorgroup`, kernelbase memory offers,
+  `GetStringScripts` and `VerifyScripts`, `GetDurationFormat(Ex)`, the package
+  functions (`OpenPackageInfoByFullName`, `GetPackageInfo`, `ClosePackageInfo`,
+  `PackageFamilyNameFromFullName`, `PackageFamilyNameFromId`,
+  `FormatApplicationUserModelId`), `SetThreadpoolWaitEx`, crypt32 chain selection
+  and time stamps, `CoCancelCall`, `RegDisablePredefinedCacheEx`, user32's pointer
+  frame functions, `InheritWindowMonitor` and `IsImmersiveProcess`, uxtheme panning
+  feedback and theme animation queries, `UiaDisconnectAllProviders`,
+  `UiaIAccessibleFromProvider`, `DeleteAppContainerProfile` and
+  `DeriveAppContainerSidFromAppContainerName`. The AppContainer SID and the publisher id
+  use Windows' derivations and match known values (Edge's `S-1-15-2-3624051433-...` and
+  `8wekyb3d8bbwe`).
+- `runner/build.sh` now builds new, untracked modules. When a module is new to the
+  installed runner, it gives `wine.inf` a new time, so existing prefixes update and get the
+  DLL. Otherwise it keeps the installed runner's time, so a rebuild does not update them.
+- **A runner upgrade broke printing and dropped Office's registrations.** Wine
+  updates a prefix by itself when `wine.inf`'s time changes. That update dropped the
+  fallback layout printer (Excel: "No printers are installed", so no PDF export) and the
+  registrations TuxOffice makes at setup. The launcher now runs the update itself before
+  starting Wine (`run`, `wine`, `cmd`), then sets up the printer, chart proxies,
+  Installer components, shell settings and virtual registry again. Wine writes the
+  prefix's stamp with a CRLF ending, which the comparison has to allow for, or every start
+  would update.
+
+Left alone on purpose: `slc.dll` and `slwga.dll` (Windows genuineness checks). Also
+not fixed: DXVK's `d3d11` lacks `CreateDirect3D11DeviceFromDXGIDevice`. Gaps that are
+only in components Office rarely loads are also left: ALPC and WNF in `coremessagingxp`,
+`inkobjcore`, and some ninput and mscms ordinals.
+
+Harness notes: since the host dropped `lib32-freetype2`, the 32-bit `start.exe` that
+launches each `wine` command prints a FreeType warning on stderr. Helpers' answers are
+now read by line. OneNote's "How do you want to start OneNote?" prompt follows from
+`OneNote\General\ConsecutiveEarlyCrashes`, which the harness's kills raise. Its dialog
+exposes no accessibility tree, so the regression clears the counter instead.
+
+Still open from the hunt: Publisher's Print raised a first-chance access violation in
+oleacc's `client_get_state`, reached from an RPC stub with a bad out pointer. The RPC
+layer catches it and the call fails. A cross-apartment test with ten child id types did
+not reproduce it.
+
+Regression on the final build: suite 10 rounds (Word and Excel 10/10, PowerPoint 7/10, all three the
+Excel crash in "Open: Excel crash after an embedded chart's workbook closes"), chart UI 8/8, Access 41/43, Publisher 17/17, Outlook 27/27, OneNote 9/10 (Search).
+
 ## 2 November: the rest of the suite (Outlook, OneNote, Access, Publisher)
 
 Tested in the isolated session on a clean copy of the prefix, with a real
@@ -394,6 +466,16 @@ parity with Windows remains unmeasured.
   like `db.OpenRecordset(q).Fields(0).Value`. Office's VBA does not use it.
 
 ## Open: Excel crash after an embedded chart's workbook closes
+
+**3 November:** back, at about the old rate: 3 of 10 suite rounds, then 1 of 20 and 1 of 20
+PowerPoint-only rounds, same write to NULL+0x8c at `EXCEL.EXE+0xe02c6a`. It is not the day's
+new user32 and uxtheme functions: with those removed it was 3 of 30. Not the printer
+either: 1 of 20 with the fallback printer instead of a CUPS one. And not the new
+`UiaDisconnectAllProviders`, which PowerPoint never calls in this step. All of these runs
+came after Wine updated the test prefix, and the clean runs before it did not. That fits
+the update, but does not prove it. The faulting code takes a per-thread context
+(`[TLS+0x130]`), then its object at `+0x3e0`, and stores several fields into it after that
+object has gone.
 
 **Later on 2 November:** not seen in the last 60 scripted suite runs, whose logs record exceptions
 from the chart step. At the old rate of 12%, 60 clean runs would happen by chance about 0.05% of
