@@ -55,7 +55,7 @@
 @ stub TransformPattern_Rotate
 @ stdcall UiaAddEvent(ptr long ptr long ptr long ptr ptr)
 @ stdcall UiaClientsAreListening()
-#@ stub UiaDisconnectAllProviders
+@ stdcall UiaDisconnectAllProviders()
 @ stdcall UiaDisconnectProvider(ptr)
 @ stdcall UiaEventAddWindow(ptr long)
 @ stdcall UiaEventRemoveWindow(ptr long)
@@ -73,7 +73,7 @@
 @ stdcall UiaHUiaNodeFromVariant(ptr ptr)
 @ stdcall UiaHasServerSideProvider(long)
 @ stdcall UiaHostProviderFromHwnd(long ptr)
-#@ stub UiaIAccessibleFromProvider
+@ stdcall UiaIAccessibleFromProvider(ptr long ptr ptr)
 @ stdcall UiaLookupId(long ptr)
 @ stdcall UiaNavigate(ptr long ptr ptr ptr ptr)
 @ stdcall UiaNodeFromFocus(ptr ptr ptr)

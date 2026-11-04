@@ -2059,6 +2059,41 @@ exit:
     LeaveCriticalSection(&provider_thread_cs);
 }
 
+static void uia_provider_thread_disconnect_all(void)
+{
+    struct list *cursor, *cursor2;
+    struct uia_node *node_data;
+
+    EnterCriticalSection(&provider_thread_cs);
+
+    if (provider_thread.ref)
+    {
+        LIST_FOR_EACH_SAFE(cursor, cursor2, &provider_thread.nodes_list)
+        {
+            node_data = LIST_ENTRY(cursor, struct uia_node, prov_thread_list_entry);
+
+            list_remove(cursor);
+            list_init(cursor);
+            if (!list_empty(&node_data->node_map_list_entry))
+            {
+                list_remove(&node_data->node_map_list_entry);
+                list_init(&node_data->node_map_list_entry);
+                if (list_empty(&node_data->map->nodes_list))
+                {
+                    rb_remove(&provider_thread.node_map, &node_data->map->entry);
+                    SafeArrayDestroy(node_data->map->runtime_id);
+                    free(node_data->map);
+                }
+                node_data->map = NULL;
+            }
+
+            IWineUiaNode_disconnect(&node_data->IWineUiaNode_iface);
+        }
+    }
+
+    LeaveCriticalSection(&provider_thread_cs);
+}
+
 static HRESULT uia_provider_thread_add_node(HUIANODE node, SAFEARRAY *rt_id)
 {
     struct uia_node *node_data = impl_from_IWineUiaNode((IWineUiaNode *)node);
@@ -2336,5 +2371,46 @@ HRESULT WINAPI UiaDisconnectProvider(IRawElementProviderSimple *elprov)
 
     SafeArrayDestroy(sa);
 
+    return S_OK;
+}
+
+/***********************************************************************
+ *          UiaDisconnectAllProviders (uiautomationcore.@)
+ */
+HRESULT WINAPI UiaDisconnectAllProviders(void)
+{
+    TRACE("()\n");
+
+    uia_provider_thread_disconnect_all();
+    return S_OK;
+}
+
+/***********************************************************************
+ *          UiaIAccessibleFromProvider (uiautomationcore.@)
+ *
+ * Only providers that are themselves IAccessible objects can be returned; Wine has no
+ * MSAA wrapper for other providers.
+ */
+HRESULT WINAPI UiaIAccessibleFromProvider(IRawElementProviderSimple *elprov, DWORD flags, IAccessible **acc,
+        VARIANT *child_id)
+{
+    HRESULT hr;
+
+    TRACE("(%p, %#lx, %p, %p)\n", elprov, flags, acc, child_id);
+
+    if (!elprov || !acc || !child_id)
+        return E_INVALIDARG;
+
+    *acc = NULL;
+    VariantInit(child_id);
+    hr = IRawElementProviderSimple_QueryInterface(elprov, &IID_IAccessible, (void **)acc);
+    if (FAILED(hr))
+    {
+        FIXME("No IAccessible wrapper for provider %p.\n", elprov);
+        return E_NOTIMPL;
+    }
+
+    V_VT(child_id) = VT_I4;
+    V_I4(child_id) = CHILDID_SELF;
     return S_OK;
 }

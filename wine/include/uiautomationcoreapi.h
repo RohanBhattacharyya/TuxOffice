@@ -547,6 +547,8 @@ HRESULT WINAPI UiaNodeFromHandle(HWND hwnd, HUIANODE *huianode);
 HRESULT WINAPI UiaGetRootNode(HUIANODE *huianode);
 HRESULT WINAPI UiaNodeFromFocus(struct UiaCacheRequest *cache_req, SAFEARRAY **out_req, BSTR *tree_struct);
 HRESULT WINAPI UiaDisconnectProvider(IRawElementProviderSimple *elprov);
+HRESULT WINAPI UiaDisconnectAllProviders(void);
+HRESULT WINAPI UiaIAccessibleFromProvider(IRawElementProviderSimple *elprov, DWORD flags, IAccessible **acc, VARIANT *child_id);
 HRESULT WINAPI UiaGetUpdatedCache(HUIANODE huianode, struct UiaCacheRequest *cache_req, enum NormalizeState normalize_state,
         struct UiaCondition *normalize_cond, SAFEARRAY **out_req, BSTR *tree_struct);
 HRESULT WINAPI UiaNavigate(HUIANODE huianode, enum NavigateDirection dir, struct UiaCondition *nav_condition,
