@@ -166,6 +166,7 @@ struct media_engine
     IMFPresentationClock *clock;
     IMFSourceResolver *resolver;
     IMFMediaEngineExtension *extension;
+    IMFTimedText *timed_text;
     BSTR current_source;
     struct
     {
@@ -1620,6 +1621,11 @@ static ULONG WINAPI media_engine_AddRef(IMFMediaEngineEx *iface)
 
 static void free_media_engine(struct media_engine *engine)
 {
+    if (engine->timed_text)
+    {
+        timed_text_detach(engine->timed_text);
+        IMFTimedText_Release(engine->timed_text);
+    }
     if (engine->callback)
         IMFMediaEngineNotify_Release(engine->callback);
     if (engine->clock)
@@ -1720,6 +1726,7 @@ static HRESULT media_engine_set_source(struct media_engine *engine, IMFByteStrea
 
     SysFreeString(engine->current_source);
     engine->current_source = NULL;
+    if (engine->timed_text) timed_text_media_changed(engine->timed_text);
     if (url)
         engine->current_source = SysAllocString(url);
 
@@ -2488,6 +2495,8 @@ static HRESULT WINAPI media_engine_Shutdown(IMFMediaEngineEx *iface)
          * callbacks to complete, and some callbacks require this cs */
         LeaveCriticalSection(&engine->cs);
         IMFMediaSession_Shutdown(engine->session);
+        /* Its cue timer asks for the current time, which takes the lock. */
+        if (engine->timed_text) timed_text_detach(engine->timed_text);
         EnterCriticalSection(&engine->cs);
     }
     LeaveCriticalSection(&engine->cs);
@@ -3588,227 +3597,6 @@ static ULONG WINAPI media_engine_gs_Release(IMFGetService *iface)
     return IMFMediaEngineEx_Release(&engine->IMFMediaEngineEx_iface);
 }
 
-/* Timed text (captions and subtitles), which Windows' media engine offers as a service.
- * PowerPoint stops itself when a video it plays has none, so offer one without tracks.
- * The interfaces are not in Wine's headers; the method order is that of mfmediaengine.h. */
-DEFINE_GUID(MF_MEDIA_ENGINE_TIMEDTEXT, 0x805ea411, 0x92e0, 0x4e59, 0x9b, 0x6e, 0x5c, 0x7d, 0x79, 0x15, 0xe6, 0x4f);
-DEFINE_GUID(IID_IMFTimedText, 0x1f2a94c9, 0xa3df, 0x430d, 0x9d, 0x0f, 0xac, 0xd8, 0x5d, 0xdc, 0x29, 0xaf);
-DEFINE_GUID(IID_IMFTimedTextTrackList, 0x23ff334c, 0x442c, 0x445f, 0xbc, 0xcc, 0xed, 0xc4, 0x38, 0xaa, 0x11, 0xe2);
-
-typedef struct timed_text_track_list timed_text_track_list;
-struct timed_text_track_list_vtbl
-{
-    HRESULT (WINAPI *QueryInterface)(timed_text_track_list *iface, REFIID riid, void **out);
-    ULONG (WINAPI *AddRef)(timed_text_track_list *iface);
-    ULONG (WINAPI *Release)(timed_text_track_list *iface);
-    DWORD (WINAPI *GetLength)(timed_text_track_list *iface);
-    HRESULT (WINAPI *GetTrack)(timed_text_track_list *iface, DWORD index, IUnknown **track);
-    HRESULT (WINAPI *GetTrackById)(timed_text_track_list *iface, DWORD id, IUnknown **track);
-};
-struct timed_text_track_list { const struct timed_text_track_list_vtbl *lpVtbl; };
-
-static HRESULT WINAPI empty_track_list_QueryInterface(timed_text_track_list *iface, REFIID riid, void **out)
-{
-    if (IsEqualIID(riid, &IID_IMFTimedTextTrackList) || IsEqualIID(riid, &IID_IUnknown))
-    {
-        *out = iface;
-        return S_OK;
-    }
-    *out = NULL;
-    return E_NOINTERFACE;
-}
-
-static ULONG WINAPI empty_track_list_AddRef(timed_text_track_list *iface) { return 2; }
-static ULONG WINAPI empty_track_list_Release(timed_text_track_list *iface) { return 1; }
-static DWORD WINAPI empty_track_list_GetLength(timed_text_track_list *iface) { return 0; }
-
-static HRESULT WINAPI empty_track_list_GetTrack(timed_text_track_list *iface, DWORD index, IUnknown **track)
-{
-    if (!track) return E_POINTER;
-    *track = NULL;
-    return E_INVALIDARG;
-}
-
-static const struct timed_text_track_list_vtbl empty_track_list_vtbl =
-{
-    empty_track_list_QueryInterface,
-    empty_track_list_AddRef,
-    empty_track_list_Release,
-    empty_track_list_GetLength,
-    empty_track_list_GetTrack,
-    empty_track_list_GetTrack,
-};
-static timed_text_track_list empty_track_list = { &empty_track_list_vtbl };
-
-typedef struct timed_text timed_text;
-struct timed_text_vtbl
-{
-    HRESULT (WINAPI *QueryInterface)(timed_text *iface, REFIID riid, void **out);
-    ULONG (WINAPI *AddRef)(timed_text *iface);
-    ULONG (WINAPI *Release)(timed_text *iface);
-    HRESULT (WINAPI *RegisterNotifications)(timed_text *iface, IUnknown *notify);
-    HRESULT (WINAPI *SelectTrack)(timed_text *iface, DWORD id, BOOL selected);
-    HRESULT (WINAPI *AddDataSource)(timed_text *iface, IMFByteStream *stream, const WCHAR *label,
-            const WCHAR *language, DWORD kind, BOOL is_default, DWORD *id);
-    HRESULT (WINAPI *AddDataSourceFromUrl)(timed_text *iface, const WCHAR *url, const WCHAR *label,
-            const WCHAR *language, DWORD kind, BOOL is_default, DWORD *id);
-    HRESULT (WINAPI *AddTrack)(timed_text *iface, const WCHAR *label, const WCHAR *language, DWORD kind,
-            IUnknown **track);
-    HRESULT (WINAPI *RemoveTrack)(timed_text *iface, IUnknown *track);
-    HRESULT (WINAPI *GetCueTimeOffset)(timed_text *iface, double *offset);
-    HRESULT (WINAPI *SetCueTimeOffset)(timed_text *iface, double offset);
-    HRESULT (WINAPI *GetTracks)(timed_text *iface, timed_text_track_list **tracks);
-    HRESULT (WINAPI *GetActiveTracks)(timed_text *iface, timed_text_track_list **tracks);
-    HRESULT (WINAPI *GetTextTracks)(timed_text *iface, timed_text_track_list **tracks);
-    HRESULT (WINAPI *GetMetadataTracks)(timed_text *iface, timed_text_track_list **tracks);
-    HRESULT (WINAPI *SetInBandEnabled)(timed_text *iface, BOOL enabled);
-    BOOL (WINAPI *IsInBandEnabled)(timed_text *iface);
-};
-struct timed_text
-{
-    const struct timed_text_vtbl *lpVtbl;
-    LONG refcount;
-    double cue_offset;
-    BOOL in_band;
-};
-
-static HRESULT WINAPI timed_text_QueryInterface(timed_text *iface, REFIID riid, void **out)
-{
-    if (IsEqualIID(riid, &IID_IMFTimedText) || IsEqualIID(riid, &IID_IUnknown))
-    {
-        *out = iface;
-        iface->lpVtbl->AddRef(iface);
-        return S_OK;
-    }
-    WARN("Unsupported interface %s.\n", debugstr_guid(riid));
-    *out = NULL;
-    return E_NOINTERFACE;
-}
-
-static ULONG WINAPI timed_text_AddRef(timed_text *iface)
-{
-    return InterlockedIncrement(&iface->refcount);
-}
-
-static ULONG WINAPI timed_text_Release(timed_text *iface)
-{
-    LONG refcount = InterlockedDecrement(&iface->refcount);
-    if (!refcount) free(iface);
-    return refcount;
-}
-
-static HRESULT WINAPI timed_text_RegisterNotifications(timed_text *iface, IUnknown *notify)
-{
-    TRACE("%p, %p.\n", iface, notify);
-    return S_OK;
-}
-
-static HRESULT WINAPI timed_text_SelectTrack(timed_text *iface, DWORD id, BOOL selected)
-{
-    TRACE("%p, %lu, %d.\n", iface, id, selected);
-    return E_INVALIDARG;
-}
-
-static HRESULT WINAPI timed_text_AddDataSource(timed_text *iface, IMFByteStream *stream, const WCHAR *label,
-        const WCHAR *language, DWORD kind, BOOL is_default, DWORD *id)
-{
-    FIXME("%p, %p, %s, %s, %lu, %d, %p stub.\n", iface, stream, debugstr_w(label), debugstr_w(language), kind,
-            is_default, id);
-    if (id) *id = 0;
-    return E_NOTIMPL;
-}
-
-static HRESULT WINAPI timed_text_AddDataSourceFromUrl(timed_text *iface, const WCHAR *url, const WCHAR *label,
-        const WCHAR *language, DWORD kind, BOOL is_default, DWORD *id)
-{
-    FIXME("%p, %s, %s, %s, %lu, %d, %p stub.\n", iface, debugstr_w(url), debugstr_w(label), debugstr_w(language),
-            kind, is_default, id);
-    if (id) *id = 0;
-    return E_NOTIMPL;
-}
-
-static HRESULT WINAPI timed_text_AddTrack(timed_text *iface, const WCHAR *label, const WCHAR *language,
-        DWORD kind, IUnknown **track)
-{
-    FIXME("%p, %s, %s, %lu, %p stub.\n", iface, debugstr_w(label), debugstr_w(language), kind, track);
-    if (track) *track = NULL;
-    return E_NOTIMPL;
-}
-
-static HRESULT WINAPI timed_text_RemoveTrack(timed_text *iface, IUnknown *track)
-{
-    TRACE("%p, %p.\n", iface, track);
-    return E_INVALIDARG;
-}
-
-static HRESULT WINAPI timed_text_GetCueTimeOffset(timed_text *iface, double *offset)
-{
-    if (!offset) return E_POINTER;
-    *offset = iface->cue_offset;
-    return S_OK;
-}
-
-static HRESULT WINAPI timed_text_SetCueTimeOffset(timed_text *iface, double offset)
-{
-    iface->cue_offset = offset;
-    return S_OK;
-}
-
-static HRESULT WINAPI timed_text_get_empty_list(timed_text *iface, timed_text_track_list **tracks)
-{
-    TRACE("%p, %p.\n", iface, tracks);
-    if (!tracks) return E_POINTER;
-    *tracks = &empty_track_list;
-    return S_OK;
-}
-
-static HRESULT WINAPI timed_text_SetInBandEnabled(timed_text *iface, BOOL enabled)
-{
-    iface->in_band = enabled;
-    return S_OK;
-}
-
-static BOOL WINAPI timed_text_IsInBandEnabled(timed_text *iface)
-{
-    return iface->in_band;
-}
-
-static const struct timed_text_vtbl timed_text_vtbl =
-{
-    timed_text_QueryInterface,
-    timed_text_AddRef,
-    timed_text_Release,
-    timed_text_RegisterNotifications,
-    timed_text_SelectTrack,
-    timed_text_AddDataSource,
-    timed_text_AddDataSourceFromUrl,
-    timed_text_AddTrack,
-    timed_text_RemoveTrack,
-    timed_text_GetCueTimeOffset,
-    timed_text_SetCueTimeOffset,
-    timed_text_get_empty_list,
-    timed_text_get_empty_list,
-    timed_text_get_empty_list,
-    timed_text_get_empty_list,
-    timed_text_SetInBandEnabled,
-    timed_text_IsInBandEnabled,
-};
-
-static HRESULT create_timed_text(REFIID riid, void **out)
-{
-    timed_text *object;
-    HRESULT hr;
-
-    if (!(object = calloc(1, sizeof(*object))))
-        return E_OUTOFMEMORY;
-    object->lpVtbl = &timed_text_vtbl;
-    object->refcount = 1;
-    object->in_band = TRUE;
-    hr = timed_text_QueryInterface(object, riid, out);
-    timed_text_Release(object);
-    return hr;
-}
-
 static HRESULT WINAPI media_engine_gs_GetService(IMFGetService *iface, REFGUID service,
         REFIID riid, void **object)
 {
@@ -3828,7 +3616,12 @@ static HRESULT WINAPI media_engine_gs_GetService(IMFGetService *iface, REFGUID s
     if (engine->flags & FLAGS_ENGINE_SHUT_DOWN)
         hr = MF_E_SHUTDOWN;
     else if (IsEqualGUID(service, &MF_MEDIA_ENGINE_TIMEDTEXT))
-        hr = create_timed_text(riid, object);
+    {
+        /* One timed text object per engine; it follows the engine's playback position. */
+        if (engine->timed_text || SUCCEEDED(hr = timed_text_create(&engine->IMFMediaEngineEx_iface,
+                &engine->timed_text)))
+            hr = IMFTimedText_QueryInterface(engine->timed_text, riid, object);
+    }
     else if (FAILED(hr = MFGetService((IUnknown *)engine->session, service, riid, object)))
     {
         WARN("Unsupported service %s, interface %s.\n", debugstr_guid(service), debugstr_guid(riid));

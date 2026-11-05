@@ -1,9 +1,10 @@
 MODULE    = mfmediaengine.dll
-IMPORTS = oleaut32 ole32 mfplat mf mfuuid uuid
+IMPORTS = oleaut32 ole32 mfplat mf mfuuid uuid xmllite
 
 EXTRADLLFLAGS = -Wb,--prefer-native
 
 SOURCES = \
 	main.c \
 	mediaengine_classes.idl \
+	timedtext.c \
 	video_frame_sink.c

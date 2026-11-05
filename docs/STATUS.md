@@ -148,14 +148,25 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   broke UI Automation; setup keeps Wine's three. `tests/functional/powerquery.vbs` imports
   a CSV, filters and types it, loads it into a table and saves (8 of 8).
 - **Playing a video in a slide show ended PowerPoint.** It asks the media engine for
-  its timed text (captions) service, `MF_MEDIA_ENGINE_TIMEDTEXT`
-  `{805ea411-92e0-4e59-9b6e-5c7d7915e64f}` with `IMFTimedText`, and stops itself with an
-  assertion (tag `0x1d7815d5`) when there is none; the GUIDs sit next to its
-  "IMFMediaEngineEx doesn't provide timed text" message in `PPCORE.DLL`. The media engine
-  now offers timed text with no tracks (the interfaces are not in Wine's headers, so the
-  method order follows the Windows SDK), and forwards other services to its session with
-  the pointer cleared on failure. Videos now play in slide shows: `media.vbs` plays the
-  inserted video and sees its position advance, 13 of 13. Captions files are not loaded.
+  its timed text (captions) service, `MF_MEDIA_ENGINE_TIMEDTEXT`, and stops itself with
+  an assertion (tag `0x1d7815d5`) when there is none. The media engine now implements
+  timed text (`dlls/mfmediaengine/timedtext.c`, interfaces added to `mfmediaengine.idl`
+  with the Windows SDK's layout): tracks from WebVTT (cue settings, REGION blocks,
+  markup and entities), SRT (with `<font color>`) and TTML (styles, regions, nested
+  timing, spans and line breaks, read with xmllite), from byte streams or URLs, or built
+  by the application with text and data cues; regions, styles and per-run formatting;
+  and notifications, delivered in order on a worker, for tracks added, loaded, selected
+  and removed, errors, and cues becoming active and inactive as the playback position,
+  shifted by the cue time offset, enters and leaves them. `tests/mf-timed-text.c` covers
+  all of it, with cues firing within one 40 ms poll of their times during playback.
+  Videos play in slide shows (`media.vbs`, 13 of 13).
+- **Open: PowerPoint shows no captions button for a video with a caption track.** A deck
+  whose video carries a WebVTT track (`p173:tracksInfo`, MS-PPTX 2.13) opens and keeps it
+  on saving, and in a slide show PowerPoint asks the engine for timed text, its in-band
+  text tracks and notifications, but never hands it the caption file, and the video's
+  control bar has no CC button. PowerPoint parses WebVTT itself; its strings name a
+  feature gate, `ReconcileOOBCaptionTracks`, around out-of-band caption tracks. Not
+  resolved.
 
 ## 4 November: Word could not open PDFs, and the Excel chart crash explained
 
