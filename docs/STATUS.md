@@ -139,13 +139,14 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   formats, sparklines, goal seek, dynamic array and LAMBDA formulas, the newer chart types
   and chart image export; PowerPoint SmartArt, Morph, sections, slide image export and
   reusing slides from another file.
-- **Open: Excel's Power Query (Data > Get Data) does not start.** Its engine is .NET,
-  which runs on wine-mono here, as setup installs no .NET Framework. `Queries.Add` fails
-  with `TargetInvocationException` (0x80131604) and Excel reports "Something went wrong":
-  `PluggableProtocolManager.RegisterProtocol` hits a `NullReferenceException` while the
-  add-in starts, so every query fails, CSV included. Not a crash. The options are to find
-  what wine-mono lacks there, or to install Microsoft's .NET Framework 4.8 in the prefix,
-  which changes setup and was not tried.
+- **Excel's Power Query (Data > Get Data) did not start.** Its engine is .NET, and on
+  wine-mono `PluggableProtocolManager.RegisterProtocol` failed while the add-in started,
+  so every query failed. Setup now installs Microsoft's .NET Framework 4.8 (winetricks
+  `dotnet48`, about 120 MB), and existing installs get it once at their next start; a
+  failed download only warns. The .NET installers copy Windows 7's `uiautomationcore`,
+  `dxva2` and `evr` over Wine's, and the old `uiautomationcore` has no class factory, which
+  broke UI Automation; setup keeps Wine's three. `tests/functional/powerquery.vbs` imports
+  a CSV, filters and types it, loads it into a table and saves (8 of 8).
 - **Playing a video in a slide show ended PowerPoint.** It asks the media engine for
   its timed text (captions) service, `MF_MEDIA_ENGINE_TIMEDTEXT`
   `{805ea411-92e0-4e59-9b6e-5c7d7915e64f}` with `IMFTimedText`, and stops itself with an

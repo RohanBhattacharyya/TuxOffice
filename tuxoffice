@@ -122,6 +122,7 @@ cmd_setup() {
   msg "installing fonts and native runtime components"
   W_OPT_UNATTENDED=1 "$TUX_HOME/tools/winetricks" -q corefonts gdiplus msxml6 riched20 msls31 \
     >"$TUX_CACHE/winetricks.log" 2>&1 || die "winetricks failed; see $TUX_CACHE/winetricks.log"
+  install_dotnet || die ".NET Framework 4.8 failed to install; see $TUX_CACHE/dotnet48.log"
 
   # Selawik: Microsoft's open-source metric-compatible stand-in for Segoe UI.
   fetch "$SELAWIK_URL" "$TUX_CACHE/selawik.zip"
@@ -246,12 +247,45 @@ PREFIX_REVISION=1
 update_prefix() {
   local stamp="$TUX_CACHE/prefix-revision"
   [[ -f "$OFFICE_ROOT/WINWORD.EXE" || -f "$OFFICE_ROOT/EXCEL.EXE" ]] || return 0
+  # Prefixes set up before .NET was part of setup get it once; a failed download
+  # only warns, so Office still starts, and the next start tries again.
+  [[ -f "$TUX_CACHE/dotnet48" ]] || install_dotnet || \
+    warn ".NET Framework 4.8 is not installed (Excel's Power Query needs it); see $TUX_CACHE/dotnet48.log"
   [[ -f $stamp && $(<"$stamp") == "$PREFIX_REVISION" ]] && return 0
   mkdir -p "$TUX_CACHE"
   msg "updating the Office environment"
   configure_shell
   configure_virtual_registry || return 0
   printf '%s\n' "$PREFIX_REVISION" >"$stamp"
+}
+
+# Microsoft's .NET Framework 4.8. Office's .NET components, such as Excel's
+# Power Query, do not start on wine-mono.
+DOTNET_RELEASE=528040
+dotnet_installed() {
+  local release
+  release=$(wine reg query 'HKLM\Software\Microsoft\NET Framework Setup\NDP\v4\Full' /v Release 2>/dev/null |
+    awk '$1 == "Release" { print $3 }' | tr -d '\r')
+  [[ $release == 0x* || $release =~ ^[0-9]+$ ]] && (( release >= DOTNET_RELEASE ))
+}
+
+install_dotnet() {
+  mkdir -p "$TUX_CACHE"
+  if ! dotnet_installed; then
+    [[ -x "$TUX_HOME/tools/winetricks" ]] || fetch "$WINETRICKS_URL" "$TUX_HOME/tools/winetricks"
+    chmod +x "$TUX_HOME/tools/winetricks"
+    msg "installing Microsoft .NET Framework 4.8 (a download of about 120 MB; this takes several minutes)"
+    W_OPT_UNATTENDED=1 "$TUX_HOME/tools/winetricks" -q dotnet48 >"$TUX_CACHE/dotnet48.log" 2>&1 || return 1
+    dotnet_installed || return 1
+  fi
+  # The .NET installers copy Windows 7's uiautomationcore, dxva2 and evr over
+  # Wine's. Those lack what Office uses (UI Automation's class factory among
+  # it), so keep Wine's own.
+  local dll
+  for dll in uiautomationcore dxva2 evr; do
+    wreg 'HKCU\Software\Wine\DllOverrides' /v "$dll" /t REG_SZ /d builtin
+  done
+  : >"$TUX_CACHE/dotnet48"
 }
 
 # Hide Wine's standalone tray window (a box floating over Office with an icon
