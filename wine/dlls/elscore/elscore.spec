@@ -1,4 +1,4 @@
-@ stdcall MappingDoAction(ptr wstr ptr)
+@ stdcall MappingDoAction(ptr long wstr)
 @ stdcall MappingFreePropertyBag(ptr)
 @ stdcall MappingFreeServices(ptr)
 @ stdcall MappingGetServices(ptr ptr ptr)

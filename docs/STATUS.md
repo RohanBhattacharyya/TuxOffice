@@ -94,6 +94,41 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   apply the repair; it is also installed in the regular prefix.
 - Removed tracked `wine/autom4te.cache` output and ignored that directory.
 
+## 4 November, night: placeholders replaced
+
+The DLLs added for Office's imports on 3 November answered "nothing here". They
+now do the real work where Office uses them:
+
+- **Extended Linguistic Services** (`elscore`). Office's RichEdit and Outlook's
+  MAPIPH ask for one service by GUID, Microsoft Script Detection
+  (`{2D64B439-6CAF-4F6B-B688-E5D0F4FAA7D7}`). It is now installed: the text is split
+  into runs of one Unicode script, named by ISO 15924 code. Common and inherited
+  characters join the run before them, or the first run when they lead. Surrogate
+  pairs count as one character. Service enumeration filters by GUID, category and
+  content type. Recognition runs synchronously or, given a callback, on the thread
+  pool. The property bag frees what the service allocated. `MappingDoAction` now
+  has the documented signature (bag, range index, action id). The spec had it wrong.
+  The public `elscore.h` and `elssrvc.h` headers are added.
+- **One Unicode script table.** `tools/make_unicode_scripts` generates
+  `include/wine/unicode_scripts.h` from Unicode 17 `Scripts.txt` and
+  `PropertyValueAliases.txt`. `GetStringScripts` used a hand-written table of about
+  60 ranges. It now uses the generated table, so every script is covered, and it
+  reads surrogate pairs. `winnls.h` declares it and `VerifyScripts`.
+- **`SrpIsTokenService`** reads the token. It reports a service for LocalSystem,
+  LocalService and NetworkService, or for a token holding the enabled SERVICE group.
+  Office uses only the enterprise ID and policy queries. They report no enterprise
+  and no policy, which is the true state of an unmanaged machine.
+- **`WscRegisterForChanges`** returns a real registration that
+  `WscUnRegisterChanges` removes exactly once. Health stays "not monitored",
+  because there is no Security Center service.
+- **`MFCreateSensorActivityMonitor`** (PowerPoint) returns a monitor that holds its
+  callback and starts and stops. The `IMFSensor*Activit*` interfaces are added to
+  `mfidl.idl`, with IIDs checked against PowerPoint and windows-rs. Wine's Media
+  Foundation offers no video capture devices, so no sensor activity is reported
+  (see the camera item under open items).
+- Tests: `tests/els-script-detection.c` (23 checks) and
+  `tests/security-sensor-apis.c` (14 checks) pass.
+
 ## 4 November, later: PowerPoint exports video
 
 - **File > Export > Create a Video failed every time** (status "failed" after a few
@@ -226,7 +261,7 @@ the runner and the prefix do not provide.
   and the rest of hlink's shortcut family were missing. They now write and read
   Internet Shortcut files, as on Windows.
 - **PowerPoint crashed on New Comment.** `elscore.dll` (extended linguistic services) did
-  not exist. It now exists, and reports no services, which Office handles.
+  not exist. It now exists. Script detection was added on 4 November.
 - **Other imports that would have ended the process** are now present: `srpapi` and
   `wscapi` (enterprise data protection and security center, both reporting nothing
   configured, never "protected"), `mfsensorgroup`, kernelbase memory offers,

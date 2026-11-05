@@ -26,6 +26,7 @@
 #include "winbase.h"
 
 #include "wine/debug.h"
+#include "wine/list.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(wscapi);
 
@@ -40,21 +41,62 @@ HRESULT WINAPI WscGetSecurityProviderHealth(DWORD providers, DWORD *health)
     return S_OK;
 }
 
+/* Registrations for changes in security provider health. The health of every provider stays
+ * "not monitored", as there is no Security Center service, so no registration is ever called;
+ * they are kept so that each handle can be unregistered once. */
+struct registration
+{
+    struct list entry;
+    LPTHREAD_START_ROUTINE callback;
+    void *context;
+};
+
+static struct list registrations = LIST_INIT(registrations);
+static CRITICAL_SECTION registrations_cs;
+static CRITICAL_SECTION_DEBUG registrations_cs_debug =
+{
+    0, 0, &registrations_cs,
+    { &registrations_cs_debug.ProcessLocksList, &registrations_cs_debug.ProcessLocksList },
+      0, 0, { (DWORD_PTR)(__FILE__ ": registrations_cs") }
+};
+static CRITICAL_SECTION registrations_cs = { &registrations_cs_debug, -1, 0, 0, 0, 0 };
+
 HRESULT WINAPI WscRegisterForChanges(void *reserved, HANDLE *handle, LPTHREAD_START_ROUTINE callback,
         void *context)
 {
+    struct registration *registration;
+
     TRACE("%p, %p, %p, %p.\n", reserved, handle, callback, context);
 
-    /* Nothing ever changes, so the callback is never called. */
     if (!handle || !callback) return E_INVALIDARG;
-    *handle = (HANDLE)(ULONG_PTR)0x5c5c;
+    if (!(registration = malloc(sizeof(*registration)))) return E_OUTOFMEMORY;
+    registration->callback = callback;
+    registration->context = context;
+    EnterCriticalSection(&registrations_cs);
+    list_add_tail(&registrations, &registration->entry);
+    LeaveCriticalSection(&registrations_cs);
+    *handle = registration;
     return S_OK;
 }
 
 HRESULT WINAPI WscUnRegisterChanges(HANDLE handle)
 {
+    struct registration *registration;
+    HRESULT hr = E_INVALIDARG;
+
     TRACE("%p.\n", handle);
-    return S_OK;
+
+    EnterCriticalSection(&registrations_cs);
+    LIST_FOR_EACH_ENTRY(registration, &registrations, struct registration, entry)
+    {
+        if (registration != handle) continue;
+        list_remove(&registration->entry);
+        free(registration);
+        hr = S_OK;
+        break;
+    }
+    LeaveCriticalSection(&registrations_cs);
+    return hr;
 }
 
 HRESULT WINAPI WscRegisterForUserNotifications(void)

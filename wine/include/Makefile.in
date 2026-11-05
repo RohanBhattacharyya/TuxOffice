@@ -321,6 +321,8 @@ SOURCES = \
 	dxva2api.idl \
 	dxvahd.idl \
 	dyngraph.idl \
+	elscore.h \
+	elssrvc.h \
 	endpointvolume.idl \
 	errhandlingapi.h \
 	errlup.idl \
@@ -1007,6 +1009,7 @@ SOURCES = \
 	wine/strmbase.h \
 	wine/svcctl.idl \
 	wine/test.h \
+	wine/unicode_scripts.h \
 	wine/unixlib.h \
 	wine/vulkan.h \
 	wine/vulkan_driver.h \

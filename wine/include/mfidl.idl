@@ -693,6 +693,74 @@ interface IMFSeekInfo : IUnknown
 }
 
 cpp_quote("HRESULT WINAPI CreatePropertyStore(IPropertyStore **store);")
+typedef enum MFSensorDeviceMode
+{
+    MFSensorDeviceMode_Controller = 0,
+    MFSensorDeviceMode_Shared,
+} MFSensorDeviceMode;
+
+[
+    object,
+    uuid(39dc7f4a-b141-4719-813c-a7f46162a2b8),
+    local
+]
+interface IMFSensorProcessActivity : IUnknown
+{
+    HRESULT GetProcessId([out] ULONG *pid);
+    HRESULT GetStreamingState([out] BOOL *streaming);
+    HRESULT GetStreamingMode([out] MFSensorDeviceMode *mode);
+    HRESULT GetReportTime([out] FILETIME *time);
+}
+
+[
+    object,
+    uuid(3e8c4be1-a8c2-4528-90de-2851bde5fead),
+    local
+]
+interface IMFSensorActivityReport : IUnknown
+{
+    HRESULT GetFriendlyName([out] LPWSTR name, [in] ULONG size, [out] ULONG *written);
+    HRESULT GetSymbolicLink([out] LPWSTR link, [in] ULONG size, [out] ULONG *written);
+    HRESULT GetProcessCount([out] ULONG *count);
+    HRESULT GetProcessActivity([in] ULONG index, [out] IMFSensorProcessActivity **activity);
+}
+
+[
+    object,
+    uuid(683f7a5e-4a19-43cd-b1a9-dbf4ab3f7777),
+    local
+]
+interface IMFSensorActivitiesReport : IUnknown
+{
+    HRESULT GetCount([out] ULONG *count);
+    HRESULT GetActivityReport([in] ULONG index, [out] IMFSensorActivityReport **report);
+    HRESULT GetActivityReportByDeviceName([in] LPCWSTR link, [out] IMFSensorActivityReport **report);
+}
+
+[
+    object,
+    uuid(de5072ee-dbe3-46dc-8a87-b6f631194751),
+    local
+]
+interface IMFSensorActivitiesReportCallback : IUnknown
+{
+    HRESULT OnActivitiesReport([in] IMFSensorActivitiesReport *report);
+}
+
+[
+    object,
+    uuid(d0cef145-b3f4-4340-a2e5-7a5080ca05cb),
+    local
+]
+interface IMFSensorActivityMonitor : IUnknown
+{
+    HRESULT Start();
+    HRESULT Stop();
+}
+
+cpp_quote("HRESULT WINAPI MFCreateSensorActivityMonitor(IMFSensorActivitiesReportCallback *callback,")
+cpp_quote("        IMFSensorActivityMonitor **monitor);")
+
 cpp_quote("HRESULT WINAPI MFCreate3GPMediaSink(IMFByteStream *stream, IMFMediaType *video_type,")
 cpp_quote("    IMFMediaType *audio_type, IMFMediaSink **sink);")
 cpp_quote("HRESULT WINAPI MFCreateAC3MediaSink(IMFByteStream *stream, IMFMediaType *audio_type,")

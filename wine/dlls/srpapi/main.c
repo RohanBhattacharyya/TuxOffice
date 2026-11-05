@@ -62,11 +62,49 @@ HRESULT WINAPI SrpDisablePermissiveModeFileEncryption(void)
     return S_OK;
 }
 
+/* Whether a token belongs to a service: its user is one of the service accounts, or it holds
+ * the SERVICE group that the service control manager gives the processes it starts. */
 NTSTATUS WINAPI SrpIsTokenService(HANDLE token, BOOLEAN *service)
 {
+    static const DWORD accounts[] =
+    {
+        SECURITY_LOCAL_SYSTEM_RID, SECURITY_LOCAL_SERVICE_RID, SECURITY_NETWORK_SERVICE_RID,
+    };
+    union { TOKEN_USER user; BYTE buffer[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE]; } user;
+    TOKEN_GROUPS *groups;
+    NTSTATUS status;
+    ULONG size, i;
+
     TRACE("%p, %p.\n", token, service);
 
     if (!service) return STATUS_INVALID_PARAMETER;
     *service = FALSE;
-    return STATUS_SUCCESS;
+
+    if ((status = NtQueryInformationToken(token, TokenUser, &user, sizeof(user), &size))) return status;
+    for (i = 0; i < ARRAY_SIZE(accounts); i++)
+    {
+        SID sid = { SID_REVISION, 1, SECURITY_NT_AUTHORITY, { accounts[i] } };
+
+        if (RtlEqualSid(user.user.User.Sid, &sid))
+        {
+            *service = TRUE;
+            return STATUS_SUCCESS;
+        }
+    }
+
+    status = NtQueryInformationToken(token, TokenGroups, NULL, 0, &size);
+    if (status != STATUS_BUFFER_TOO_SMALL) return status;
+    if (!(groups = malloc(size))) return STATUS_NO_MEMORY;
+    if (!(status = NtQueryInformationToken(token, TokenGroups, groups, size, &size)))
+    {
+        SID sid = { SID_REVISION, 1, SECURITY_NT_AUTHORITY, { SECURITY_SERVICE_RID } };
+
+        for (i = 0; i < groups->GroupCount; i++)
+        {
+            if (!(groups->Groups[i].Attributes & SE_GROUP_ENABLED)) continue;
+            if (RtlEqualSid(groups->Groups[i].Sid, &sid)) *service = TRUE;
+        }
+    }
+    free(groups);
+    return status;
 }

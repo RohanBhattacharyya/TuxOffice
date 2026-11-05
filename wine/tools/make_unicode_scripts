@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Generate include/wine/unicode_scripts.h, the Unicode Script property of every
+# code point as ISO 15924 codes, from the UCD's Scripts.txt and
+# PropertyValueAliases.txt.
+# Usage: make_unicode_scripts Scripts.txt PropertyValueAliases.txt > include/wine/unicode_scripts.h
+import re, sys
+
+scripts_txt, aliases_txt = sys.argv[1:3]
+codes = {}
+for line in open(aliases_txt, encoding="utf-8"):
+    m = re.match(r"sc\s*;\s*(\w{4})\s*;\s*(\w+)", line)
+    if m: codes[m.group(2)] = m.group(1)
+
+version = None
+points = []
+for line in open(scripts_txt, encoding="utf-8"):
+    if version is None:
+        m = re.match(r"#\s*Scripts-([\d.]+)\.txt", line)
+        if m: version = m.group(1)
+    line = line.split("#")[0].strip()
+    if not line: continue
+    rng, name = [f.strip() for f in line.split(";")]
+    first, _, last = rng.partition("..")
+    points.append((int(first, 16), int(last or first, 16), codes[name]))
+points.sort()
+
+ranges = []
+for first, last, code in points:
+    if ranges and ranges[-1][2] == code and ranges[-1][1] + 1 == first:
+        ranges[-1][1] = last
+    else:
+        ranges.append([first, last, code])
+
+out = sys.stdout
+out.write(f"""/* The Unicode Script property as ISO 15924 codes. */
+/* generated from Unicode {version} Scripts.txt and PropertyValueAliases.txt */
+/* by tools/make_unicode_scripts. DO NOT EDIT!! */
+
+#ifndef __WINE_UNICODE_SCRIPTS_H
+#define __WINE_UNICODE_SCRIPTS_H
+
+struct unicode_script_range
+{{
+    unsigned int first;
+    unsigned int last;
+    char code[5];
+}};
+
+static const struct unicode_script_range unicode_script_ranges[] =
+{{
+""")
+for first, last, code in ranges:
+    out.write(f"    {{ 0x{first:06x}, 0x{last:06x}, \"{code}\" }},\n")
+out.write("""};
+
+/* The ISO 15924 code of a code point's script, "Zyyy" for common characters,
+ * "Zinh" for inherited ones and "Zzzz" for unassigned ones. */
+static inline const char *unicode_script_code( unsigned int ch )
+{
+    unsigned int min = 0, max = sizeof(unicode_script_ranges) / sizeof(unicode_script_ranges[0]);
+
+    while (min < max)
+    {
+        unsigned int pos = (min + max) / 2;
+
+        if (ch < unicode_script_ranges[pos].first) max = pos;
+        else if (ch > unicode_script_ranges[pos].last) min = pos + 1;
+        else return unicode_script_ranges[pos].code;
+    }
+    return "Zzzz";
+}
+
+#endif /* __WINE_UNICODE_SCRIPTS_H */
+""")

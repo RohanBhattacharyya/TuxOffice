@@ -1,4 +1,5 @@
 MODULE    = mfsensorgroup.dll
+IMPORTS   = mfuuid uuid
 
 SOURCES = \
 	main.c

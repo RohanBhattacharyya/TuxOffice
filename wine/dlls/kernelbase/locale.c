@@ -37,6 +37,7 @@
 #include "winternl.h"
 #include "kernelbase.h"
 #include "wine/debug.h"
+#include "wine/unicode_scripts.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(nls);
 
@@ -8509,41 +8510,19 @@ int WINAPI GetDurationFormatEx( const WCHAR *name, DWORD flags, const SYSTEMTIME
 }
 
 
-/* The script of a character, as an ISO 15924 code, or NULL for common and inherited ones. */
-static const WCHAR *char_script( WCHAR ch, BOOL *inherited )
+/* The script of the code point at str[*pos], as an ISO 15924 code, or NULL for common, inherited
+ * and unassigned ones. A surrogate pair is one code point, and *pos moves past it. */
+static const char *char_script( const WCHAR *str, INT len, INT *pos, BOOL *inherited )
 {
-    static const struct { WCHAR first, last; const WCHAR *script; } ranges[] =
-    {
-        { 0x0041, 0x005a, L"Latn" }, { 0x0061, 0x007a, L"Latn" }, { 0x00aa, 0x00aa, L"Latn" },
-        { 0x00ba, 0x00ba, L"Latn" }, { 0x00c0, 0x00d6, L"Latn" }, { 0x00d8, 0x00f6, L"Latn" },
-        { 0x00f8, 0x024f, L"Latn" }, { 0x0250, 0x02af, L"Latn" }, { 0x1e00, 0x1eff, L"Latn" },
-        { 0x2c60, 0x2c7f, L"Latn" }, { 0xa720, 0xa7ff, L"Latn" }, { 0xff21, 0xff3a, L"Latn" },
-        { 0xff41, 0xff5a, L"Latn" }, { 0x0370, 0x03ff, L"Grek" }, { 0x1f00, 0x1fff, L"Grek" },
-        { 0x0400, 0x052f, L"Cyrl" }, { 0x2de0, 0x2dff, L"Cyrl" }, { 0xa640, 0xa69f, L"Cyrl" },
-        { 0x0530, 0x058f, L"Armn" }, { 0x0590, 0x05ff, L"Hebr" }, { 0xfb1d, 0xfb4f, L"Hebr" },
-        { 0x0600, 0x06ff, L"Arab" }, { 0x0750, 0x077f, L"Arab" }, { 0xfb50, 0xfdff, L"Arab" },
-        { 0xfe70, 0xfeff, L"Arab" }, { 0x0700, 0x074f, L"Syrc" }, { 0x0780, 0x07bf, L"Thaa" },
-        { 0x0900, 0x097f, L"Deva" }, { 0x0980, 0x09ff, L"Beng" }, { 0x0a00, 0x0a7f, L"Guru" },
-        { 0x0a80, 0x0aff, L"Gujr" }, { 0x0b00, 0x0b7f, L"Orya" }, { 0x0b80, 0x0bff, L"Taml" },
-        { 0x0c00, 0x0c7f, L"Telu" }, { 0x0c80, 0x0cff, L"Knda" }, { 0x0d00, 0x0d7f, L"Mlym" },
-        { 0x0d80, 0x0dff, L"Sinh" }, { 0x0e00, 0x0e7f, L"Thai" }, { 0x0e80, 0x0eff, L"Laoo" },
-        { 0x0f00, 0x0fff, L"Tibt" }, { 0x1000, 0x109f, L"Mymr" }, { 0x10a0, 0x10ff, L"Geor" },
-        { 0x1100, 0x11ff, L"Hang" }, { 0x3130, 0x318f, L"Hang" }, { 0xac00, 0xd7af, L"Hang" },
-        { 0x1200, 0x139f, L"Ethi" }, { 0x13a0, 0x13ff, L"Cher" }, { 0x1780, 0x17ff, L"Khmr" },
-        { 0x1800, 0x18af, L"Mong" }, { 0x3040, 0x309f, L"Hira" }, { 0x30a0, 0x30ff, L"Kana" },
-        { 0x31f0, 0x31ff, L"Kana" }, { 0xff66, 0xff9f, L"Kana" }, { 0x3100, 0x312f, L"Bopo" },
-        { 0x2e80, 0x2fdf, L"Hani" }, { 0x3400, 0x4dbf, L"Hani" }, { 0x4e00, 0x9fff, L"Hani" },
-        { 0xf900, 0xfaff, L"Hani" }, { 0xa000, 0xa4cf, L"Yiii" },
-    };
-    unsigned int i;
+    unsigned int ch = str[(*pos)++];
+    const char *code;
 
-    *inherited = (ch >= 0x0300 && ch <= 0x036f) || (ch >= 0x1ab0 && ch <= 0x1aff) ||
-                 (ch >= 0x1dc0 && ch <= 0x1dff) || (ch >= 0x20d0 && ch <= 0x20ff) ||
-                 (ch >= 0xfe00 && ch <= 0xfe0f) || (ch >= 0xfe20 && ch <= 0xfe2f);
-    if (*inherited) return NULL;
-    for (i = 0; i < ARRAY_SIZE(ranges); i++)
-        if (ch >= ranges[i].first && ch <= ranges[i].last) return ranges[i].script;
-    return NULL;
+    if (IS_HIGH_SURROGATE( ch ) && *pos < len && IS_LOW_SURROGATE( str[*pos] ))
+        ch = 0x10000 + ((ch - 0xd800) << 10) + (str[(*pos)++] - 0xdc00);
+    code = unicode_script_code( ch );
+    *inherited = !strcmp( code, "Zinh" );
+    if (*inherited || !strcmp( code, "Zyyy" ) || !strcmp( code, "Zzzz" )) return NULL;
+    return code;
 }
 
 /***********************************************************************
@@ -8554,11 +8533,11 @@ static const WCHAR *char_script( WCHAR ch, BOOL *inherited )
  */
 INT WINAPI GetStringScripts( DWORD flags, const WCHAR *str, INT len, WCHAR *scripts, INT size )
 {
-    const WCHAR *found[64];
+    const char *found[64];
     WCHAR result[64 * 5 + 1];
-    unsigned int count = 0, i, j;
+    unsigned int count = 0, i, j, k;
     BOOL common = FALSE, inherited_seen = FALSE;
-    INT needed;
+    INT needed, pos;
 
     TRACE( "%#lx, %s, %d, %p, %d\n", flags, debugstr_wn( str, len ), len, scripts, size );
 
@@ -8569,10 +8548,10 @@ INT WINAPI GetStringScripts( DWORD flags, const WCHAR *str, INT len, WCHAR *scri
     }
     if (len < 0) len = lstrlenW( str );
 
-    for (i = 0; i < len; i++)
+    for (pos = 0; pos < len;)
     {
         BOOL inherited;
-        const WCHAR *script = char_script( str[i], &inherited );
+        const char *script = char_script( str, len, &pos, &inherited );
 
         if (!script)
         {
@@ -8580,27 +8559,27 @@ INT WINAPI GetStringScripts( DWORD flags, const WCHAR *str, INT len, WCHAR *scri
             else common = TRUE;
             continue;
         }
-        for (j = 0; j < count; j++) if (!wcscmp( found[j], script )) break;
+        for (j = 0; j < count; j++) if (!strcmp( found[j], script )) break;
         if (j == count && count < ARRAY_SIZE(found) - 2) found[count++] = script;
     }
     if (flags & 1)
     {
-        if (inherited_seen) found[count++] = L"Qaai";
-        if (common) found[count++] = L"Zyyy";
+        if (inherited_seen) found[count++] = "Qaai";
+        if (common) found[count++] = "Zyyy";
     }
     /* Alphabetical order, as Windows gives them. */
     for (i = 1; i < count; i++)
-        for (j = i; j > 0 && wcscmp( found[j - 1], found[j] ) > 0; j--)
+        for (j = i; j > 0 && strcmp( found[j - 1], found[j] ) > 0; j--)
         {
-            const WCHAR *tmp = found[j]; found[j] = found[j - 1]; found[j - 1] = tmp;
+            const char *tmp = found[j]; found[j] = found[j - 1]; found[j - 1] = tmp;
         }
-    result[0] = 0;
-    for (i = 0; i < count; i++)
+    for (i = k = 0; i < count; i++)
     {
-        wcscat( result, found[i] );
-        wcscat( result, L";" );
+        for (j = 0; found[i][j]; j++) result[k++] = found[i][j];
+        result[k++] = ';';
     }
-    needed = lstrlenW( result ) + 1;
+    result[k] = 0;
+    needed = k + 1;
     if (!size) return needed;
     if (size < needed)
     {
