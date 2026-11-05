@@ -126,6 +126,33 @@ now do the real work where Office uses them:
   `mfidl.idl`, with IIDs checked against PowerPoint and windows-rs. Wine's Media
   Foundation offers no video capture devices, so no sensor activity is reported
   (see the camera item under open items).
+- **Single File Web Pages (MHT).** Office checks that `CLSID_IMimePropertySchema`
+  (`{FD853CED-...}`) is registered before it saves MHT. inetcomm now provides and
+  registers it. Word and Outlook then write the archive themselves. Excel reads MHT
+  through inetcomm, which needed real work:
+  - `IMimeBody::GetData` converts between encodings: decoded (binary, 7bit, 8bit,
+    internet charset), UTF-16 in the body's charset, and re-encoding to base64 or
+    quoted-printable. It also decodes uuencode. `IET_CURRENT` gives decoded content,
+    because Excel parses it as HTML without asking for the transfer encoding.
+  - `IMimeMessage::ResolveURL` finds a part by `Content-Location` (a URL, a DOS path
+    or a URL relative to a base) or by `cid:` Content-ID.
+  - Message-level `Get/Set/Delete/QueryProp` act on the root body's headers.
+    `Set/Delete/QueryBodyProp` and `IMimeBody::QueryProp` are implemented, and
+    `GetProp` with `VT_EMPTY` returns the stored value.
+  - The read-only body stream now has `Stat` (stream type), `Clone`, and access errors
+    for writes.
+  - Fixed a crash: TRACE and FIXME messages printed property names as `%s`, but names
+    can be `PIDTOSTR` ids. FIXMEs are on by default, so this could crash outside debugging.
+  - `runner/build.sh` now updates existing prefixes when a changed module's
+    `WINE_REGISTRY` resources differ, not only when the module is new. Otherwise
+    inetcomm's new class would never be registered.
+  - `formats.vbs` now saves and reopens MHT in Word and Excel (50/50), and
+    `outlook.vbs` saves a mail as MHT (28/28). `tests/mime-web-archive.c` (24 checks)
+    passes, as do Wine's inetcomm tests (474 checks, no failures).
+- **Composition logging.** The QueryInterface methods of Wine's `windows.ui`
+  composition objects, and about a dozen implemented methods, logged a FIXME on every
+  call: tens of thousands per Word session, hiding real gaps. They now TRACE, and
+  QueryInterface WARNs only for an interface it lacks.
 - Tests: `tests/els-script-detection.c` (23 checks) and
   `tests/security-sensor-apis.c` (14 checks) pass.
 
@@ -160,11 +187,9 @@ now do the real work where Office uses them:
   `nvh264dec` gave frames in CUDA memory, which Wine's parser accepted and its videoflip
   then refused. The parser now asks for system memory. Inserted videos now get their
   length and poster frame.
-- **Open: saving as a Single File Web Page (MHT) is refused** in Word and Outlook ("You
-  need to have Microsoft Outlook Express or Windows Mail installed"). Office looks up
-  the MIME class `{FD853CED-7F86-11d0-8252-00C04FD85AB4}`, which Wine's `inetcomm` does
-  not provide or register, and gives up before loading it. Saving as HTML, MSG, text,
-  iCalendar and vCard works.
+- **Saving as a Single File Web Page (MHT)** was refused in Word and Outlook ("You
+  need to have Microsoft Outlook Express or Windows Mail installed"). Fixed on
+  4 November, night (below).
 - Also checked by hand, without faults: Outlook recurring appointments, flags, a filtered
   `Restrict`, `AdvancedSearch`, a second data file, and saving items as MSG, HTML, text,
   iCalendar and vCard. Rules report "This store does not support rules", as they do on

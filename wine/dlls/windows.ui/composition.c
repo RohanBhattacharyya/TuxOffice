@@ -297,7 +297,7 @@ static inline struct desktop_window_target *target_from_IDesktopWindowTargetInte
 static HRESULT desktop_window_target_query_interface( struct desktop_window_target *impl,
         REFIID iid, void **out )
 {
-    FIXME( "impl %p, iid %s, out %p.\n", impl, debugstr_guid( iid ), out );
+    TRACE( "impl %p, iid %s, out %p.\n", impl, debugstr_guid( iid ), out );
     if (!out) return E_POINTER;
     if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
         IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_IDesktopWindowTarget ))
@@ -308,6 +308,7 @@ static HRESULT desktop_window_target_query_interface( struct desktop_window_targ
         *out = &impl->IDesktopWindowTargetInterop_iface;
     else
     {
+        WARN( "%s not implemented.\n", debugstr_guid( iid ) );
         *out = NULL;
         return E_NOINTERFACE;
     }
@@ -1741,7 +1742,7 @@ static inline struct sprite_visual *sprite_visual_from_ICompositionObject( IComp
 
 static HRESULT WINAPI sprite_visual_QueryInterface( ISpriteVisual *iface, REFIID iid, void **out )
 {
-    FIXME( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
+    TRACE( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
     if (!out) return E_POINTER;
     if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
         IsEqualGUID( iid, &IID_IAgileObject ))
@@ -1765,6 +1766,7 @@ static HRESULT WINAPI sprite_visual_QueryInterface( ISpriteVisual *iface, REFIID
         *out = &impl_from_ISpriteVisual( iface )->ICompositionObject_iface;
     else
     {
+        WARN( "%s not implemented.\n", debugstr_guid( iid ) );
         *out = NULL;
         return E_NOINTERFACE;
     }
@@ -2511,7 +2513,7 @@ static HRESULT WINAPI compositor_QueryInterface( ICompositor *iface, REFIID iid,
 {
     struct compositor *impl = impl_from_ICompositor( iface );
 
-    FIXME( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
+    TRACE( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
     if (!out) return E_POINTER;
     if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
         IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_ICompositor ))
@@ -2532,6 +2534,7 @@ static HRESULT WINAPI compositor_QueryInterface( ICompositor *iface, REFIID iid,
         *out = &impl->ICompositorInterop_iface;
     else
     {
+        WARN( "%s not implemented.\n", debugstr_guid( iid ) );
         *out = NULL;
         return E_NOINTERFACE;
     }
@@ -2633,7 +2636,7 @@ static inline struct color_brush *color_brush_from_IClosable( IClosable *iface )
 
 static HRESULT color_brush_query_interface( struct color_brush *impl, REFIID iid, void **out )
 {
-    FIXME( "impl %p, iid %s, out %p.\n", impl, debugstr_guid( iid ), out );
+    TRACE( "impl %p, iid %s, out %p.\n", impl, debugstr_guid( iid ), out );
     if (!out) return E_POINTER;
     if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
         IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_ICompositionColorBrush ))
@@ -2646,6 +2649,7 @@ static HRESULT color_brush_query_interface( struct color_brush *impl, REFIID iid
         *out = &impl->IClosable_iface;
     else
     {
+        WARN( "%s not implemented.\n", debugstr_guid( iid ) );
         *out = NULL;
         return E_NOINTERFACE;
     }
@@ -2991,7 +2995,7 @@ static BOOL surface_brush_snapshot( struct surface_brush *brush, struct surface_
 
 static HRESULT surface_brush_query_interface( struct surface_brush *impl, REFIID iid, void **out )
 {
-    FIXME( "impl %p, iid %s, out %p.\n", impl, debugstr_guid( iid ), out );
+    TRACE( "impl %p, iid %s, out %p.\n", impl, debugstr_guid( iid ), out );
     if (!out) return E_POINTER;
     if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
         IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_ICompositionSurfaceBrush ))
@@ -3008,6 +3012,7 @@ static HRESULT surface_brush_query_interface( struct surface_brush *impl, REFIID
         *out = &impl->IClosable_iface;
     else
     {
+        WARN( "%s not implemented.\n", debugstr_guid( iid ) );
         *out = NULL;
         return E_NOINTERFACE;
     }
@@ -3464,7 +3469,7 @@ static inline struct nine_grid_brush *nine_grid_brush_from_IClosable( IClosable 
 
 static HRESULT nine_grid_brush_query_interface( struct nine_grid_brush *impl, REFIID iid, void **out )
 {
-    FIXME( "impl %p, iid %s, out %p.\n", impl, debugstr_guid( iid ), out );
+    TRACE( "impl %p, iid %s, out %p.\n", impl, debugstr_guid( iid ), out );
     if (!out) return E_POINTER;
     if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
         IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &composition_nine_grid_brush_iid ))
@@ -3477,6 +3482,7 @@ static HRESULT nine_grid_brush_query_interface( struct nine_grid_brush *impl, RE
         *out = &impl->IClosable_iface;
     else
     {
+        WARN( "%s not implemented.\n", debugstr_guid( iid ) );
         *out = NULL;
         return E_NOINTERFACE;
     }
@@ -3988,7 +3994,7 @@ static inline struct composition_property_set *property_set_from_ICompositionObj
 static HRESULT WINAPI composition_property_set_QueryInterface( ICompositionPropertySet *iface,
         REFIID iid, void **out )
 {
-    FIXME( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
+    TRACE( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
     if (!out) return E_POINTER;
     if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
         IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_ICompositionPropertySet ))
@@ -3997,6 +4003,7 @@ static HRESULT WINAPI composition_property_set_QueryInterface( ICompositionPrope
         *out = &impl_from_ICompositionPropertySet( iface )->ICompositionObject_iface;
     else
     {
+        WARN( "%s not implemented.\n", debugstr_guid( iid ) );
         *out = NULL;
         return E_NOINTERFACE;
     }
@@ -4313,6 +4320,7 @@ static HRESULT expression_animation_query_interface( struct expression_animation
         *out = &impl->ICompositionAnimation_iface;
     else
     {
+        WARN( "%s not implemented.\n", debugstr_guid( iid ) );
         *out = NULL;
         return E_NOINTERFACE;
     }
@@ -4376,7 +4384,7 @@ static HRESULT expression_animation_get_trust_level( TrustLevel *level )
 static HRESULT WINAPI expression_animation_QueryInterface( IExpressionAnimation *iface,
         REFIID iid, void **out )
 {
-    FIXME( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
+    TRACE( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
     return expression_animation_query_interface( impl_from_IExpressionAnimation( iface ), iid, out );
 }
 
@@ -7870,7 +7878,7 @@ static HRESULT WINAPI compositor_CreateSpriteVisual( ICompositor *iface, ISprite
     struct sprite_visual *impl;
     HRESULT hr;
 
-    FIXME( "iface %p, result %p.\n", iface, result );
+    TRACE( "iface %p, result %p.\n", iface, result );
     if (!result) return E_POINTER;
     *result = NULL;
     if (!(impl = calloc( 1, sizeof(*impl) ))) return E_OUTOFMEMORY;
@@ -11032,7 +11040,7 @@ static HRESULT WINAPI compositor_desktop_CreateDesktopWindowTarget( ICompositorD
     struct compositor *impl = compositor_from_ICompositorDesktopInterop( iface );
     HRESULT hr;
 
-    FIXME( "iface %p, hwnd %p, topmost %u, result %p.\n", iface, hwnd, topmost, result );
+    TRACE( "iface %p, hwnd %p, topmost %u, result %p.\n", iface, hwnd, topmost, result );
     hr = desktop_window_target_create( impl->dcomp_device, &impl->targets, hwnd, topmost, result );
     TRACE( "desktop target hwnd %p create returned %#lx.\n", hwnd, hr );
     if (SUCCEEDED(hr))
@@ -11047,7 +11055,7 @@ static HRESULT WINAPI compositor_desktop_CreateDesktopWindowTarget( ICompositorD
 static HRESULT WINAPI compositor_desktop_EnsureOnThread( ICompositorDesktopInterop *iface,
         DWORD thread_id )
 {
-    FIXME( "iface %p, thread_id %lu.\n", iface, thread_id );
+    TRACE( "iface %p, thread_id %lu.\n", iface, thread_id );
     return S_OK;
 }
 
@@ -11109,7 +11117,7 @@ static inline struct composition_drawing_surface *impl_from_ICompositionVirtualD
 static HRESULT WINAPI composition_drawing_surface_QueryInterface( ICompositionDrawingSurface *iface,
         REFIID iid, void **out )
 {
-    FIXME( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
+    TRACE( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
     if (!out) return E_POINTER;
     *out = NULL;
     if (IsEqualGUID( iid, &IID_ICompositionDrawingSurfaceInterop ))
@@ -11128,6 +11136,7 @@ static HRESULT WINAPI composition_drawing_surface_QueryInterface( ICompositionDr
     if (!IsEqualGUID( iid, &IID_IUnknown ) && !IsEqualGUID( iid, &IID_IInspectable ) &&
         !IsEqualGUID( iid, &IID_IAgileObject ) && !IsEqualGUID( iid, &IID_ICompositionSurface ) &&
         !IsEqualGUID( iid, &IID_ICompositionDrawingSurface ))
+        WARN( "%s not implemented.\n", debugstr_guid( iid ) );
         return E_NOINTERFACE;
     *out = iface;
     ICompositionDrawingSurface_AddRef( iface );
@@ -11410,7 +11419,7 @@ static HRESULT WINAPI composition_drawing_surface_interop_BeginDraw( ICompositio
     HRESULT hr;
 
     InterlockedIncrement( &impl->content_version );
-    FIXME( "iface %p, update_rect %s, iid %s, update_object %p, update_offset %p.\n",
+    TRACE( "iface %p, update_rect %s, iid %s, update_object %p, update_offset %p.\n",
             iface, wine_dbgstr_rect( update_rect ), debugstr_guid( iid ), update_object, update_offset );
     if (!update_object || !update_offset) return E_POINTER;
     *update_object = NULL;
@@ -13251,7 +13260,7 @@ static HRESULT WINAPI composition_drawing_surface_interop_EndDraw( ICompositionD
     HRESULT hr;
 
     InterlockedIncrement( &impl->content_version );
-    FIXME( "iface %p.\n", iface );
+    TRACE( "iface %p.\n", iface );
     TRACE_(uisurface)("surface %p context %p drawing %d\n", impl, impl->context, impl->drawing);
     if (impl->drawing)
     {
@@ -13325,7 +13334,7 @@ static HRESULT WINAPI composition_drawing_surface_interop_ResumeDraw( ICompositi
     struct composition_drawing_surface *impl = impl_from_ICompositionDrawingSurfaceInterop( iface );
 
     InterlockedIncrement( &impl->content_version );
-    FIXME( "iface %p.\n", iface );
+    TRACE( "iface %p.\n", iface );
     if (!impl->drawing || !impl->suspended) return D2DERR_WRONG_STATE;
     ID2D1DeviceContext_SetTarget( impl->context, (ID2D1Image *)impl->bitmap );
     ID2D1DeviceContext_BeginDraw( impl->context );
@@ -13338,7 +13347,7 @@ static HRESULT WINAPI composition_drawing_surface_interop_SuspendDraw( IComposit
     struct composition_drawing_surface *impl = impl_from_ICompositionDrawingSurfaceInterop( iface );
     HRESULT hr;
 
-    FIXME( "iface %p.\n", iface );
+    TRACE( "iface %p.\n", iface );
     if (!impl->drawing || impl->suspended) return D2DERR_WRONG_STATE;
     if (FAILED(hr = ID2D1DeviceContext_EndDraw( impl->context, NULL, NULL ))) return hr;
     impl->suspended = TRUE;
@@ -13361,7 +13370,7 @@ static const ICompositionDrawingSurfaceInteropVtbl composition_drawing_surface_i
 static HRESULT WINAPI composition_graphics_device_QueryInterface( ICompositionGraphicsDevice *iface,
         REFIID iid, void **out )
 {
-    FIXME( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
+    TRACE( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
     if (!out) return E_POINTER;
     *out = NULL;
     if (IsEqualGUID( iid, &IID_ICompositionGraphicsDeviceInterop ))
@@ -13371,6 +13380,7 @@ static HRESULT WINAPI composition_graphics_device_QueryInterface( ICompositionGr
     else
     if (!IsEqualGUID( iid, &IID_IUnknown ) && !IsEqualGUID( iid, &IID_IInspectable ) &&
         !IsEqualGUID( iid, &IID_IAgileObject ) && !IsEqualGUID( iid, &IID_ICompositionGraphicsDevice ))
+        WARN( "%s not implemented.\n", debugstr_guid( iid ) );
         return E_NOINTERFACE;
     else
         *out = iface;
@@ -13454,7 +13464,7 @@ static HRESULT WINAPI composition_graphics_device_CreateDrawingSurface( IComposi
 {
     struct composition_drawing_surface *impl;
 
-    FIXME( "iface %p, pixels {%f, %f}, format %u, mode %u, result %p.\n",
+    TRACE( "iface %p, pixels {%f, %f}, format %u, mode %u, result %p.\n",
             iface, pixels.Width, pixels.Height, format, mode, result );
     if (!result) return E_POINTER;
     *result = NULL;
@@ -13596,7 +13606,7 @@ static HRESULT WINAPI composition_graphics_device2_CreateVirtualDrawingSurface(
     struct composition_graphics_device *device = impl_from_ICompositionGraphicsDevice2( iface );
     struct composition_drawing_surface *impl;
 
-    FIXME( "iface %p, pixels {%d, %d}, format %u, mode %u, result %p.\n",
+    TRACE( "iface %p, pixels {%d, %d}, format %u, mode %u, result %p.\n",
             iface, pixels.Width, pixels.Height, format, mode, result );
     if (!result) return E_POINTER;
     *result = NULL;
@@ -14034,7 +14044,7 @@ static HRESULT WINAPI compositor_interop_CreateGraphicsDevice( ICompositorIntero
 {
     struct composition_graphics_device *impl;
 
-    FIXME( "iface %p, device %p, result %p.\n", iface, device, result );
+    TRACE( "iface %p, device %p, result %p.\n", iface, device, result );
     if (!result) return E_POINTER;
     *result = NULL;
     if (!device) return E_INVALIDARG;
@@ -14172,7 +14182,7 @@ static HRESULT WINAPI compositor_controller_QueryInterface( ICompositorControlle
 {
     struct compositor_controller *impl = impl_from_ICompositorController( iface );
 
-    FIXME( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
+    TRACE( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
     if (!out) return E_POINTER;
     if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
         IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_ICompositorController ))
@@ -14181,6 +14191,7 @@ static HRESULT WINAPI compositor_controller_QueryInterface( ICompositorControlle
         *out = &impl->IClosable_iface;
     else
     {
+        WARN( "%s not implemented.\n", debugstr_guid( iid ) );
         *out = NULL;
         return E_NOINTERFACE;
     }
@@ -14253,7 +14264,7 @@ static HRESULT WINAPI compositor_controller_get_Compositor( ICompositorControlle
 {
     struct compositor_controller *impl = impl_from_ICompositorController( iface );
 
-    FIXME( "iface %p, value %p.\n", iface, value );
+    TRACE( "iface %p, value %p.\n", iface, value );
     if (!value) return E_POINTER;
     ICompositor_AddRef( impl->compositor );
     *value = impl->compositor;
@@ -14271,7 +14282,7 @@ static HRESULT WINAPI compositor_controller_Commit( ICompositorController *iface
     ULONGLONG started = perf_us();
     unsigned int count = 0;
 
-    FIXME( "iface %p.\n", iface );
+    TRACE( "iface %p.\n", iface );
     LIST_FOR_EACH_ENTRY_SAFE( target, next, &compositor->targets, struct desktop_window_target, entry )
     {
         BOOL window_gone = !IsWindow( target->hwnd );
@@ -14813,7 +14824,7 @@ static inline struct activation_factory *impl_from_IActivationFactory( IActivati
 static HRESULT WINAPI activation_factory_QueryInterface( IActivationFactory *iface,
         REFIID iid, void **out )
 {
-    FIXME( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
+    TRACE( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
     if (!out) return E_POINTER;
     if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
         IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_IActivationFactory ))
@@ -14822,6 +14833,7 @@ static HRESULT WINAPI activation_factory_QueryInterface( IActivationFactory *ifa
         IActivationFactory_AddRef( iface );
         return S_OK;
     }
+    WARN( "%s not implemented.\n", debugstr_guid( iid ) );
     *out = NULL;
     return E_NOINTERFACE;
 }
@@ -14854,7 +14866,7 @@ static HRESULT WINAPI activation_factory_GetTrustLevel( IActivationFactory *ifac
 static HRESULT WINAPI activation_factory_ActivateInstance( IActivationFactory *iface, IInspectable **instance )
 {
     struct activation_factory *impl = impl_from_IActivationFactory( iface );
-    FIXME( "iface %p, instance %p.\n", iface, instance );
+    TRACE( "iface %p, instance %p.\n", iface, instance );
     return impl->create( instance );
 }
 

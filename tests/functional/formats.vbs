@@ -1,6 +1,6 @@
 ' SPDX-License-Identifier: LGPL-2.1-or-later
-' Save in other file formats and open the results again: Word (doc, rtf, htm,
-' odt, pdf, txt), Excel (xls, csv, ods, xml, htm, pdf) and PowerPoint (ppt,
+' Save in other file formats and open the results again: Word (doc, rtf, htm, mht,
+' odt, pdf, txt), Excel (xls, csv, ods, xml, htm, mht, pdf) and PowerPoint (ppt,
 ' odp, pdf). Word opening a PDF converts it through Office's IConverter, which
 ' crashed in the converter until rpcrt4 counted vtable slots correctly.
 ' Usage: cscript //nologo formats.vbs C:\work\dir
@@ -35,8 +35,8 @@ Set wd = CreateObject("Word.Application") : wd.DisplayAlerts = 0
 Set doc = wd.Documents.Add
 doc.Content.Text = "TuxOffice format round trip." & vbCr & "Second paragraph."
 doc.Paragraphs(2).Range.Font.Bold = True
-wf = Array(0, 6, 8, 23, 17, 2)
-we = Array("doc", "rtf", "htm", "odt", "pdf", "txt")
+wf = Array(0, 6, 8, 23, 17, 2, 9)
+we = Array("doc", "rtf", "htm", "odt", "pdf", "txt", "mht")
 For k = 0 To UBound(wf)
   doc.SaveAs2 dir & "\word." & we(k), wf(k) : Check "word saves " & we(k), fso.FileExists(dir & "\word." & we(k))
 Next
@@ -55,8 +55,8 @@ wd.Quit : Check "word quits", True
 Set xl = CreateObject("Excel.Application") : xl.DisplayAlerts = False
 Set wb = xl.Workbooks.Add : Set ws = wb.Worksheets(1)
 For i = 1 To 5 : ws.Cells(i, 1).Value = i : ws.Cells(i, 2).Formula = "=A" & i & "*2" : Next
-xf = Array(56, 6, 60, 46, 44)
-xe = Array("xls", "csv", "ods", "xml", "htm")
+xf = Array(56, 6, 60, 46, 44, 45)
+xe = Array("xls", "csv", "ods", "xml", "htm", "mht")
 For k = 0 To UBound(xf)
   wb.SaveAs dir & "\excel." & xe(k), xf(k) : Check "excel saves " & xe(k), fso.FileExists(dir & "\excel." & xe(k))
 Next

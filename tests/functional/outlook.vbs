@@ -116,6 +116,9 @@ Dim loaded : Set loaded = ns.OpenSharedItem(dir & "\outlook-mail.msg")
 checked = Empty : checked = (loaded.Subject = "Bulk message 7") : Check "open msg", checked
 loaded.Close 1
 Err.Clear
+mail.SaveAs dir & "\outlook-mail.mht", 10
+checked = Empty : checked = (SizeOf(dir & "\outlook-mail.mht") > 500) : Check "save mht", checked
+Err.Clear
 
 Dim att : Set att = app.CreateItem(0)
 att.Subject = "Attachment test"

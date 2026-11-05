@@ -75,6 +75,7 @@ HRESULT MimeBody_create(IUnknown *outer, void **obj);
 HRESULT MimeAllocator_create(IUnknown *outer, void **obj);
 HRESULT MimeMessage_create(IUnknown *outer, void **obj);
 HRESULT MimeSecurity_create(IUnknown *outer, void **obj);
+HRESULT MimePropertySchema_create(IUnknown *outer, void **obj);
 HRESULT VirtualStream_create(IUnknown *outer, void **obj);
 HRESULT MimeHtmlProtocol_create(IUnknown *outer, void **obj);
 

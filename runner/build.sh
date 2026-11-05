@@ -164,14 +164,25 @@ fi
 # not update every prefix (the launcher sets Office up again after an update).
 previous="$OUT/lib/wine/x86_64-windows"
 [[ -d $previous ]] || previous="$base_runner/lib/wine/x86_64-windows"
-new_module=
+# A module's COM classes and other registry entries are its WINE_REGISTRY resources, which
+# prefixes also only apply when they update. Compare those, without their addresses, which
+# move whenever the code does.
+registration() {
+  command -v llvm-readobj >/dev/null || return 0
+  llvm-readobj --coff-resources "$1" 2>/dev/null | sed -n '/Type: WINE_REGISTRY/,$p' | grep -v 'DataRVA'
+}
+new_module= new_registration=
 for d in "${dlls[@]}"; do
   for pe in "dlls/$d/x86_64-windows/"*.{dll,drv,exe}; do
-    [[ -f $pe && ! -e "$previous/$(basename "$pe")" ]] && { new_module=$(basename "$pe"); break 2; }
+    [[ -f $pe ]] || continue
+    if [[ ! -e "$previous/$(basename "$pe")" ]]; then new_module=$(basename "$pe"); break 2; fi
+    [[ -z $new_registration && "$(registration "$pe")" != "$(registration "$previous/$(basename "$pe")")" ]] &&
+      new_registration=$(basename "$pe")
   done
 done
-if [[ -n $new_module ]]; then
-  echo ":: $new_module is new; existing prefixes will update on their next start"
+if [[ -n $new_module || -n $new_registration ]]; then
+  if [[ -n $new_module ]]; then echo ":: $new_module is new; existing prefixes will update on their next start"
+  else echo ":: $new_registration registers new entries; existing prefixes will update on their next start"; fi
   touch "$OUT.tmp/share/wine/wine.inf"
 elif [[ -f "$OUT/share/wine/wine.inf" ]]; then
   touch -r "$OUT/share/wine/wine.inf" "$OUT.tmp/share/wine/wine.inf"

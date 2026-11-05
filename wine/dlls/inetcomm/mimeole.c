@@ -32,6 +32,8 @@
 #include "ole2.h"
 #include "mimeole.h"
 #include "propvarutil.h"
+#include "shlwapi.h"
+#include "wininet.h"
 
 #include "wine/list.h"
 #include "wine/debug.h"
@@ -179,6 +181,8 @@ static inline sub_stream_t *impl_from_IStream(IStream *iface)
     return CONTAINING_RECORD(iface, sub_stream_t, IStream_iface);
 }
 
+static HRESULT create_sub_stream(IStream *stream, ULARGE_INTEGER start, ULARGE_INTEGER length, IStream **out);
+
 static HRESULT WINAPI sub_stream_QueryInterface(IStream *iface, REFIID riid, void **ppv)
 {
     sub_stream_t *This = impl_from_IStream(iface);
@@ -253,8 +257,9 @@ static HRESULT WINAPI sub_stream_Write(
         ULONG cb,
         ULONG *pcbWritten)
 {
-    FIXME("stub\n");
-    return E_NOTIMPL;
+    TRACE("(%p, %lu, %p): read-only stream\n", iface, cb, pcbWritten);
+    if(pcbWritten) *pcbWritten = 0;
+    return STG_E_ACCESSDENIED;
 }
 
 static HRESULT WINAPI sub_stream_Seek(
@@ -296,8 +301,8 @@ static HRESULT WINAPI sub_stream_SetSize(
         IStream* iface,
         ULARGE_INTEGER libNewSize)
 {
-    FIXME("stub\n");
-    return E_NOTIMPL;
+    TRACE("(%p, %s): read-only stream\n", iface, wine_dbgstr_longlong(libNewSize.QuadPart));
+    return STG_E_ACCESSDENIED;
 }
 
 static HRESULT WINAPI sub_stream_CopyTo(
@@ -353,15 +358,16 @@ static HRESULT WINAPI sub_stream_Commit(
         IStream* iface,
         DWORD grfCommitFlags)
 {
-    FIXME("stub\n");
-    return E_NOTIMPL;
+    /* Nothing is ever written, so there is nothing to commit. */
+    TRACE("(%p, %#lx)\n", iface, grfCommitFlags);
+    return S_OK;
 }
 
 static HRESULT WINAPI sub_stream_Revert(
         IStream* iface)
 {
-    FIXME("stub\n");
-    return E_NOTIMPL;
+    TRACE("(%p)\n", iface);
+    return S_OK;
 }
 
 static HRESULT WINAPI sub_stream_LockRegion(
@@ -370,8 +376,8 @@ static HRESULT WINAPI sub_stream_LockRegion(
         ULARGE_INTEGER cb,
         DWORD dwLockType)
 {
-    FIXME("stub\n");
-    return E_NOTIMPL;
+    TRACE("(%p, %#lx)\n", iface, dwLockType);
+    return STG_E_INVALIDFUNCTION;
 }
 
 static HRESULT WINAPI sub_stream_UnlockRegion(
@@ -380,8 +386,8 @@ static HRESULT WINAPI sub_stream_UnlockRegion(
         ULARGE_INTEGER cb,
         DWORD dwLockType)
 {
-    FIXME("stub\n");
-    return E_NOTIMPL;
+    TRACE("(%p, %#lx)\n", iface, dwLockType);
+    return STG_E_INVALIDFUNCTION;
 }
 
 static HRESULT WINAPI sub_stream_Stat(
@@ -390,9 +396,15 @@ static HRESULT WINAPI sub_stream_Stat(
         DWORD grfStatFlag)
 {
     sub_stream_t *This = impl_from_IStream(iface);
-    FIXME("(%p)->(%p, %08lx)\n", This, pstatstg, grfStatFlag);
+
+    TRACE("(%p)->(%p, %08lx)\n", This, pstatstg, grfStatFlag);
+
+    if(!pstatstg) return STG_E_INVALIDPOINTER;
     memset(pstatstg, 0, sizeof(*pstatstg));
+    pstatstg->type = STGTY_STREAM;
     pstatstg->cbSize = This->length;
+    pstatstg->grfMode = STGM_READ | STGM_SHARE_DENY_NONE;
+    pstatstg->grfLocksSupported = 0;
     return S_OK;
 }
 
@@ -400,8 +412,15 @@ static HRESULT WINAPI sub_stream_Clone(
         IStream* iface,
         IStream **ppstm)
 {
-    FIXME("stub\n");
-    return E_NOTIMPL;
+    sub_stream_t *This = impl_from_IStream(iface);
+    HRESULT hr;
+
+    TRACE("(%p)->(%p)\n", This, ppstm);
+
+    if(!ppstm) return STG_E_INVALIDPOINTER;
+    if(SUCCEEDED(hr = create_sub_stream(This->base, This->start, This->length, ppstm)))
+        impl_from_IStream(*ppstm)->pos = This->pos;
+    return hr;
 }
 
 static struct IStreamVtbl sub_stream_vtbl =
@@ -1094,7 +1113,11 @@ static HRESULT WINAPI MimeBody_GetProp(
     {
         TRACE("type %d->%d\n", header->value.vt, pValue->vt);
 
-        hr = PropVariantChangeType(pValue, &header->value, 0,  pValue->vt);
+        /* VT_EMPTY asks for the value as it is stored. */
+        if(pValue->vt == VT_EMPTY)
+            hr = PropVariantCopy(pValue, &header->value);
+        else
+            hr = PropVariantChangeType(pValue, &header->value, 0,  pValue->vt);
         if(FAILED(hr))
             FIXME("Conversion not currently supported (%d->%d)\n", header->value.vt, pValue->vt);
     }
@@ -1271,8 +1294,31 @@ static HRESULT WINAPI MimeBody_QueryProp(
                                 boolean fCaseSensitive)
 {
     MimeBody *This = impl_from_IMimeBody(iface);
-    FIXME("(%p)->(%s, %s, %d, %d) stub\n", This, debugstr_a(pszName), debugstr_a(pszCriteria), fSubString, fCaseSensitive);
-    return E_NOTIMPL;
+    PROPVARIANT value;
+    header_t *header;
+    const char *found;
+    HRESULT hr;
+
+    TRACE("(%p)->(%s, %s, %d, %d)\n", This, debugstr_a(pszName), debugstr_a(pszCriteria), fSubString, fCaseSensitive);
+
+    if(!pszName) return E_INVALIDARG;
+    if(FAILED(hr = find_prop(This, pszName, &header))) return hr;
+    if(!pszCriteria) return S_OK;
+
+    PropVariantInit(&value);
+    value.vt = VT_LPSTR;
+    if(FAILED(hr = PropVariantChangeType(&value, &header->value, 0, VT_LPSTR))) return hr;
+    if(fSubString)
+    {
+        size_t len = strlen(pszCriteria);
+        for(found = value.pszVal; *found; found++)
+            if(!(fCaseSensitive ? strncmp(found, pszCriteria, len) : _strnicmp(found, pszCriteria, len))) break;
+        hr = *found || !len ? S_OK : S_FALSE;
+    }
+    else
+        hr = !(fCaseSensitive ? strcmp(value.pszVal, pszCriteria) : lstrcmpiA(value.pszVal, pszCriteria)) ? S_OK : S_FALSE;
+    PropVariantClear(&value);
+    return hr;
 }
 
 static HRESULT WINAPI MimeBody_GetCharset(
@@ -1693,39 +1739,307 @@ static HRESULT decode_qp(IStream *input, IStream **ret_stream)
     return S_OK;
 }
 
+/* The body's content as it is stored: a view that reads the body's stream when it is read. */
+static HRESULT get_current_data(MimeBody *This, IStream **ret)
+{
+    ULARGE_INTEGER start, size;
+    HRESULT hres;
+
+    start.QuadPart = 0;
+    hres = get_stream_size(This->data, &size);
+    if(SUCCEEDED(hres))
+        hres = create_sub_stream(This->data, start, size, ret);
+    return hres;
+}
+
+static HRESULT decode_uuencode(IStream *input, IStream **ret_stream)
+{
+    STATSTG stat;
+    LARGE_INTEGER pos;
+    char *text, *line, *next;
+    IStream *output;
+    HRESULT hres;
+    BOOL in_body = FALSE;
+
+    pos.QuadPart = 0;
+    if(FAILED(hres = IStream_Stat(input, &stat, STATFLAG_NONAME))) return hres;
+    if(FAILED(hres = IStream_Seek(input, pos, STREAM_SEEK_SET, NULL))) return hres;
+    if(!(text = malloc(stat.cbSize.QuadPart + 1))) return E_OUTOFMEMORY;
+    if(FAILED(hres = IStream_Read(input, text, stat.cbSize.QuadPart, NULL)))
+    {
+        free(text);
+        return hres;
+    }
+    text[stat.cbSize.QuadPart] = 0;
+    if(FAILED(hres = CreateStreamOnHGlobal(NULL, TRUE, &output)))
+    {
+        free(text);
+        return hres;
+    }
+
+    for(line = text; *line; line = next)
+    {
+        unsigned char out[64];
+        int count, n = 0, i;
+
+        next = line + strcspn(line, "\r\n");
+        if(*next == '\r') *next++ = 0;
+        if(*next == '\n') *next++ = 0;
+
+        if(!in_body)
+        {
+            in_body = !strncmp(line, "begin ", 6);
+            continue;
+        }
+        if(!strcmp(line, "end")) break;
+        count = (line[0] - ' ') & 0x3f;
+        if(!count) continue;
+        for(i = 1; n < count && line[i]; i += 4)
+        {
+            unsigned char c[4];
+            int j;
+
+            for(j = 0; j < 4; j++) c[j] = line[i + j] ? (line[i + j] - ' ') & 0x3f : 0;
+            if(n < count) out[n++] = c[0] << 2 | c[1] >> 4;
+            if(n < count) out[n++] = c[1] << 4 | c[2] >> 2;
+            if(n < count) out[n++] = c[2] << 6 | c[3];
+            if(!line[i + 1] || !line[i + 2] || !line[i + 3]) break;
+        }
+        if(FAILED(hres = IStream_Write(output, out, n, NULL))) break;
+    }
+    free(text);
+
+    if(SUCCEEDED(hres))
+        hres = IStream_Seek(output, pos, STREAM_SEEK_SET, NULL);
+    if(FAILED(hres))
+    {
+        IStream_Release(output);
+        return hres;
+    }
+    *ret_stream = output;
+    return S_OK;
+}
+
+/* The body's content with its transfer encoding undone. */
+static HRESULT get_decoded_data(MimeBody *This, IStream **ret)
+{
+    switch(This->encoding)
+    {
+    case IET_BASE64:
+        return decode_base64(This->data, ret);
+    case IET_QP:
+        return decode_qp(This->data, ret);
+    case IET_UUENCODE:
+        return decode_uuencode(This->data, ret);
+    default:
+        /* 7bit, 8bit and binary bodies are stored as they are. */
+        return get_current_data(This, ret);
+    }
+}
+
+static HRESULT read_whole_stream(IStream *stream, unsigned char **data, ULONG *size)
+{
+    LARGE_INTEGER pos;
+    STATSTG stat;
+    HRESULT hres;
+
+    pos.QuadPart = 0;
+    if(FAILED(hres = IStream_Stat(stream, &stat, STATFLAG_NONAME))) return hres;
+    if(FAILED(hres = IStream_Seek(stream, pos, STREAM_SEEK_SET, NULL))) return hres;
+    *size = stat.cbSize.QuadPart;
+    if(!(*data = malloc(*size + 1))) return E_OUTOFMEMORY;
+    if(FAILED(hres = IStream_Read(stream, *data, *size, size)))
+    {
+        free(*data);
+        return hres;
+    }
+    return S_OK;
+}
+
+static HRESULT stream_from_buffer(const void *data, ULONG size, IStream **ret)
+{
+    LARGE_INTEGER pos;
+    HRESULT hres;
+
+    if(FAILED(hres = CreateStreamOnHGlobal(NULL, TRUE, ret))) return hres;
+    pos.QuadPart = 0;
+    if(FAILED(hres = IStream_Write(*ret, data, size, NULL)) ||
+       FAILED(hres = IStream_Seek(*ret, pos, STREAM_SEEK_SET, NULL)))
+    {
+        IStream_Release(*ret);
+        *ret = NULL;
+    }
+    return hres;
+}
+
+/* Base64 in lines of 76 characters, as RFC 2045 asks. */
+static HRESULT encode_base64(const unsigned char *data, ULONG size, IStream **ret)
+{
+    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    char *out, *p;
+    ULONG i, line = 0;
+    HRESULT hres;
+
+    if(!(out = p = malloc((size + 2) / 3 * 4 + (size / 57 + 1) * 2 + 1))) return E_OUTOFMEMORY;
+    for(i = 0; i < size; i += 3)
+    {
+        unsigned int v = data[i] << 16 | (i + 1 < size ? data[i + 1] << 8 : 0) | (i + 2 < size ? data[i + 2] : 0);
+
+        *p++ = alphabet[v >> 18 & 0x3f];
+        *p++ = alphabet[v >> 12 & 0x3f];
+        *p++ = i + 1 < size ? alphabet[v >> 6 & 0x3f] : '=';
+        *p++ = i + 2 < size ? alphabet[v & 0x3f] : '=';
+        if((line += 4) == 76 && i + 3 < size)
+        {
+            *p++ = '\r';
+            *p++ = '\n';
+            line = 0;
+        }
+    }
+    if(size)
+    {
+        *p++ = '\r';
+        *p++ = '\n';
+    }
+    hres = stream_from_buffer(out, p - out, ret);
+    free(out);
+    return hres;
+}
+
+/* Quoted-printable (RFC 2045): line breaks stay hard breaks, lines end in a soft break
+ * before 76 characters, and trailing white space is encoded. */
+static HRESULT encode_qp(const unsigned char *data, ULONG size, IStream **ret)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    char *out, *p;
+    ULONG i, line = 0;
+    HRESULT hres;
+
+    if(!(out = p = malloc(size * 3 + (size / 24 + 1) * 3 + 1))) return E_OUTOFMEMORY;
+    for(i = 0; i < size; i++)
+    {
+        unsigned char c = data[i];
+        BOOL at_eol = i + 1 == size || data[i + 1] == '\r' || data[i + 1] == '\n';
+        int width;
+
+        if(c == '\r' && i + 1 < size && data[i + 1] == '\n')
+        {
+            *p++ = '\r';
+            *p++ = '\n';
+            i++;
+            line = 0;
+            continue;
+        }
+        width = (c == '=' || c >= 127 || (c < 32 && c != '\t') || ((c == ' ' || c == '\t') && at_eol)) ? 3 : 1;
+        if(line + width > 75)
+        {
+            *p++ = '=';
+            *p++ = '\r';
+            *p++ = '\n';
+            line = 0;
+        }
+        if(width == 3)
+        {
+            *p++ = '=';
+            *p++ = hex[c >> 4];
+            *p++ = hex[c & 0xf];
+        }
+        else *p++ = c;
+        line += width;
+    }
+    hres = stream_from_buffer(out, p - out, ret);
+    free(out);
+    return hres;
+}
+
+/* The code page the body's text is in, from the charset of its content type. */
+static CODEPAGEID get_body_codepage(MimeBody *This)
+{
+    IMimeInternational *internat;
+    INETCSETINFO info;
+    HCHARSET charset;
+    header_t *header;
+    param_t *param;
+    CODEPAGEID cp = CP_ACP;
+
+    if(FAILED(find_prop(This, "Content-Type", &header))) return cp;
+    LIST_FOR_EACH_ENTRY(param, &header->params, param_t, entry)
+    {
+        if(lstrcmpiA(param->name, "charset")) continue;
+        if(!lstrcmpiA(param->value, "utf-8")) return CP_UTF8;
+        if(FAILED(MimeOleGetInternat(&internat))) break;
+        if(SUCCEEDED(IMimeInternational_FindCharset(internat, param->value, &charset)) &&
+           SUCCEEDED(IMimeInternational_GetCharsetInfo(internat, charset, &info)))
+            cp = info.cpiWindows;
+        IMimeInternational_Release(internat);
+        break;
+    }
+    return cp;
+}
+
 static HRESULT WINAPI MimeBody_GetData(
                               IMimeBody* iface,
                               ENCODINGTYPE ietEncoding,
                               IStream** ppStream)
 {
     MimeBody *This = impl_from_IMimeBody(iface);
-    ULARGE_INTEGER start, size;
+    unsigned char *data;
+    IStream *decoded;
+    ULONG size;
     HRESULT hres;
 
     TRACE("(%p)->(%d %p)\n", This, ietEncoding, ppStream);
 
-    if(This->encoding != ietEncoding) {
-        switch(This->encoding) {
-        case IET_BASE64:
-            hres = decode_base64(This->data, ppStream);
-            break;
-        case IET_QP:
-            hres = decode_qp(This->data, ppStream);
-            break;
-        default:
-            FIXME("Decoding %d is not supported.\n", This->encoding);
-            hres = S_FALSE;
-        }
-        if(ietEncoding != IET_BINARY)
-            FIXME("Encoding %d is not supported.\n", ietEncoding);
-        if(hres != S_FALSE)
-            return hres;
+    if(!ppStream) return E_INVALIDARG;
+    *ppStream = NULL;
+    if(!This->data) return MIME_E_NO_DATA;
+
+    if(ietEncoding == This->encoding)
+        return get_current_data(This, ppStream);
+
+    switch(ietEncoding)
+    {
+    /* Excel reads each part of a Single File Web Page with IET_CURRENT and parses what it
+     * gets as HTML, without asking for the transfer encoding, so the content comes decoded. */
+    case IET_CURRENT:
+    case IET_BINARY:
+    case IET_7BIT:
+    case IET_8BIT:
+    case IET_INETCSET:
+        return get_decoded_data(This, ppStream);
+    case IET_UNICODE:
+    case IET_BASE64:
+    case IET_QP:
+        break;
+    default:
+        FIXME("Encoding %d is not supported.\n", ietEncoding);
+        return MIME_E_INVALID_ENCTYPE;
     }
 
-    start.QuadPart = 0;
-    hres = get_stream_size(This->data, &size);
-    if(SUCCEEDED(hres))
-        hres = create_sub_stream(This->data, start, size, ppStream);
+    if(FAILED(hres = get_decoded_data(This, &decoded))) return hres;
+    hres = read_whole_stream(decoded, &data, &size);
+    IStream_Release(decoded);
+    if(FAILED(hres)) return hres;
+
+    if(ietEncoding == IET_BASE64)
+        hres = encode_base64(data, size, ppStream);
+    else if(ietEncoding == IET_QP)
+        hres = encode_qp(data, size, ppStream);
+    else
+    {
+        CODEPAGEID cp = get_body_codepage(This);
+        int len = MultiByteToWideChar(cp, 0, (char *)data, size, NULL, 0);
+        WCHAR *text;
+
+        if(!(text = malloc((len + 1) * sizeof(WCHAR)))) hres = E_OUTOFMEMORY;
+        else
+        {
+            MultiByteToWideChar(cp, 0, (char *)data, size, text, len);
+            hres = stream_from_buffer(text, len * sizeof(WCHAR), ppStream);
+            free(text);
+        }
+    }
+    free(data);
     return hres;
 }
 
@@ -2567,6 +2881,82 @@ static HRESULT WINAPI MimeMessage_FindNext(IMimeMessage *iface, FINDBODY *pFindB
     return find_next(This, body, pFindBody, phBody);
 }
 
+/* A string property of a body, or of the root body when body is NULL. */
+static void get_body_string(MimeBody *body, struct list *tree, DWORD id, char *buf, DWORD size)
+{
+    header_t *header;
+
+    buf[0] = 0;
+    if(!body)
+    {
+        if(list_empty(tree)) return;
+        body = LIST_ENTRY(list_head(tree), body_t, entry)->mime_body;
+    }
+    if(FAILED(find_prop(body, PIDTOSTR(id), &header))) return;
+    if(header->value.vt == VT_LPSTR && header->value.pszVal) lstrcpynA(buf, header->value.pszVal, size);
+}
+
+/* A URL in one form for comparing: a DOS path becomes a file: URL, a relative URL is joined
+ * to the base, and the result is canonicalized and unescaped. */
+static HRESULT normalize_url(const char *base, const char *url, char *out, DWORD size)
+{
+    char combined[INTERNET_MAX_URL_LENGTH], from_path[INTERNET_MAX_URL_LENGTH];
+    DWORD len = sizeof(from_path);
+    HRESULT hr;
+
+    if(PathIsURLA(url) || UrlCreateFromPathA(url, from_path, &len, 0) != S_OK)
+        lstrcpynA(from_path, url, sizeof(from_path));
+    len = sizeof(combined);
+    if(base[0] && SUCCEEDED(UrlCombineA(base, from_path, combined, &len, 0)))
+        url = combined;
+    else
+        url = from_path;
+    if(FAILED(hr = UrlCanonicalizeA(url, out, &size, URL_UNESCAPE | URL_FILE_USE_PATHURL)))
+        lstrcpynA(out, url, size);
+    return S_OK;
+}
+
+static HRESULT find_body_by_location(struct list *list, const char *base, const char *target, HBODY *out)
+{
+    char location[INTERNET_MAX_URL_LENGTH], normal[INTERNET_MAX_URL_LENGTH];
+    body_t *body;
+
+    LIST_FOR_EACH_ENTRY(body, list, body_t, entry)
+    {
+        get_body_string(body->mime_body, NULL, PID_HDR_CNTLOC, location, sizeof(location));
+        if(location[0] && SUCCEEDED(normalize_url(base, location, normal, sizeof(normal))) &&
+           !lstrcmpiA(normal, target))
+        {
+            *out = UlongToHandle(body->index);
+            return S_OK;
+        }
+        if(find_body_by_location(&body->children, base, target, out) == S_OK) return S_OK;
+    }
+    return MIME_E_NOT_FOUND;
+}
+
+static HRESULT find_body_by_id(struct list *list, const char *id, HBODY *out)
+{
+    char value[INTERNET_MAX_URL_LENGTH];
+    size_t len = strlen(id);
+    body_t *body;
+
+    LIST_FOR_EACH_ENTRY(body, list, body_t, entry)
+    {
+        const char *cid = value;
+
+        get_body_string(body->mime_body, NULL, PID_HDR_CNTID, value, sizeof(value));
+        if(*cid == '<') cid++;
+        if(*cid && !_strnicmp(cid, id, len) && (!cid[len] || cid[len] == '>'))
+        {
+            *out = UlongToHandle(body->index);
+            return S_OK;
+        }
+        if(find_body_by_id(&body->children, id, out) == S_OK) return S_OK;
+    }
+    return MIME_E_NOT_FOUND;
+}
+
 static HRESULT WINAPI MimeMessage_ResolveURL(
     IMimeMessage *iface,
     HBODY hRelated,
@@ -2575,8 +2965,36 @@ static HRESULT WINAPI MimeMessage_ResolveURL(
     DWORD dwFlags,
     LPHBODY phBody)
 {
-    FIXME("(%p)->(%p, %s, %s, 0x%lx, %p)\n", iface, hRelated, pszBase, pszURL, dwFlags, phBody);
-    return E_NOTIMPL;
+    MimeMessage *This = impl_from_IMimeMessage(iface);
+    char base[INTERNET_MAX_URL_LENGTH], target[INTERNET_MAX_URL_LENGTH];
+    struct list *scope = &This->body_tree;
+    body_t *related = NULL;
+    HRESULT hr;
+
+    TRACE("(%p)->(%p, %s, %s, 0x%lx, %p)\n", iface, hRelated, debugstr_a(pszBase), debugstr_a(pszURL), dwFlags, phBody);
+
+    if(!pszURL || !phBody) return E_INVALIDARG;
+    *phBody = NULL;
+    if(list_empty(&This->body_tree)) return MIME_E_NOT_FOUND;
+
+    if(hRelated)
+    {
+        if(FAILED(hr = find_body(&This->body_tree, hRelated, &related))) return hr;
+        scope = &related->children;
+    }
+
+    /* "cid:" names a body by its Content-ID. */
+    if(!_strnicmp(pszURL, "cid:", 4))
+        return find_body_by_id(scope, pszURL + 4, phBody);
+
+    base[0] = 0;
+    if(!(dwFlags & URL_RESULVE_NO_BASE))
+    {
+        if(pszBase) lstrcpynA(base, pszBase, sizeof(base));
+        else get_body_string(related ? related->mime_body : NULL, &This->body_tree, PID_HDR_CNTBASE, base, sizeof(base));
+    }
+    if(FAILED(hr = normalize_url(base, pszURL, target, sizeof(target)))) return hr;
+    return find_body_by_location(scope, base, target, phBody);
 }
 
 static HRESULT WINAPI MimeMessage_ToMultipart(
@@ -2660,8 +3078,15 @@ static HRESULT WINAPI MimeMessage_QueryBodyProp(
     boolean fSubString,
     boolean fCaseSensitive)
 {
-    FIXME("(%p)->(%p, %s, %s, %s, %s)\n", iface, hBody, pszName, pszCriteria, fSubString ? "TRUE" : "FALSE", fCaseSensitive ? "TRUE" : "FALSE");
-    return E_NOTIMPL;
+    IMimeBody *mime_body;
+    HRESULT hr;
+
+    TRACE("(%p)->(%p, %s, %s, %s, %s)\n", iface, hBody, debugstr_a(pszName), debugstr_a(pszCriteria), fSubString ? "TRUE" : "FALSE", fCaseSensitive ? "TRUE" : "FALSE");
+
+    if(FAILED(hr = IMimeMessage_BindToObject(iface, hBody, &IID_IMimeBody, (void **)&mime_body))) return hr;
+    hr = IMimeBody_QueryProp(mime_body, pszName, pszCriteria, fSubString, fCaseSensitive);
+    IMimeBody_Release(mime_body);
+    return hr;
 }
 
 static HRESULT WINAPI MimeMessage_GetBodyProp(
@@ -2674,7 +3099,7 @@ static HRESULT WINAPI MimeMessage_GetBodyProp(
     HRESULT hr;
     IMimeBody *mime_body;
 
-    TRACE("(%p)->(%p, %s, 0x%lx, %p)\n", iface, hBody, pszName, dwFlags, pValue);
+    TRACE("(%p)->(%p, %s, 0x%lx, %p)\n", iface, hBody, debugstr_a(pszName), dwFlags, pValue);
 
     hr = IMimeMessage_BindToObject(iface, hBody, &IID_IMimeBody, (void**)&mime_body);
     if(hr != S_OK) return hr;
@@ -2692,8 +3117,15 @@ static HRESULT WINAPI MimeMessage_SetBodyProp(
     DWORD dwFlags,
     LPCPROPVARIANT pValue)
 {
-    FIXME("(%p)->(%p, %s, 0x%lx, %p)\n", iface, hBody, pszName, dwFlags, pValue);
-    return E_NOTIMPL;
+    IMimeBody *mime_body;
+    HRESULT hr;
+
+    TRACE("(%p)->(%p, %s, 0x%lx, %p)\n", iface, hBody, debugstr_a(pszName), dwFlags, pValue);
+
+    if(FAILED(hr = IMimeMessage_BindToObject(iface, hBody, &IID_IMimeBody, (void **)&mime_body))) return hr;
+    hr = IMimeBody_SetProp(mime_body, pszName, dwFlags, pValue);
+    IMimeBody_Release(mime_body);
+    return hr;
 }
 
 static HRESULT WINAPI MimeMessage_DeleteBodyProp(
@@ -2701,8 +3133,15 @@ static HRESULT WINAPI MimeMessage_DeleteBodyProp(
     HBODY hBody,
     LPCSTR pszName)
 {
-    FIXME("(%p)->(%p, %s)\n", iface, hBody, pszName);
-    return E_NOTIMPL;
+    IMimeBody *mime_body;
+    HRESULT hr;
+
+    TRACE("(%p)->(%p, %s)\n", iface, hBody, debugstr_a(pszName));
+
+    if(FAILED(hr = IMimeMessage_BindToObject(iface, hBody, &IID_IMimeBody, (void **)&mime_body))) return hr;
+    hr = IMimeBody_DeleteProp(mime_body, pszName);
+    IMimeBody_Release(mime_body);
+    return hr;
 }
 
 static HRESULT WINAPI MimeMessage_SetOption(
@@ -2778,8 +3217,10 @@ static HRESULT WINAPI MimeMessage_GetProp(
     DWORD dwFlags,
     LPPROPVARIANT pValue)
 {
-    FIXME("(%p)->(%s, 0x%lx, %p)\n", iface, pszName, dwFlags, pValue);
-    return E_NOTIMPL;
+    TRACE("(%p)->(%s, 0x%lx, %p)\n", iface, debugstr_a(pszName), dwFlags, pValue);
+
+    /* The message's properties are the headers of its root body. */
+    return IMimeMessage_GetBodyProp(iface, HBODY_ROOT, pszName, dwFlags, pValue);
 }
 
 static HRESULT WINAPI MimeMessage_SetProp(
@@ -2788,16 +3229,16 @@ static HRESULT WINAPI MimeMessage_SetProp(
     DWORD dwFlags,
     LPCPROPVARIANT pValue)
 {
-    FIXME("(%p)->(%s, 0x%lx, %p)\n", iface, pszName, dwFlags, pValue);
-    return E_NOTIMPL;
+    TRACE("(%p)->(%s, 0x%lx, %p)\n", iface, debugstr_a(pszName), dwFlags, pValue);
+    return IMimeMessage_SetBodyProp(iface, HBODY_ROOT, pszName, dwFlags, pValue);
 }
 
 static HRESULT WINAPI MimeMessage_DeleteProp(
     IMimeMessage *iface,
     LPCSTR pszName)
 {
-    FIXME("(%p)->(%s)\n", iface, pszName);
-    return E_NOTIMPL;
+    TRACE("(%p)->(%s)\n", iface, debugstr_a(pszName));
+    return IMimeMessage_DeleteBodyProp(iface, HBODY_ROOT, pszName);
 }
 
 static HRESULT WINAPI MimeMessage_QueryProp(
@@ -2807,8 +3248,8 @@ static HRESULT WINAPI MimeMessage_QueryProp(
     boolean fSubString,
     boolean fCaseSensitive)
 {
-    FIXME("(%p)->(%s, %s, %s, %s)\n", iface, pszName, pszCriteria, fSubString ? "TRUE" : "FALSE", fCaseSensitive ? "TRUE" : "FALSE");
-    return E_NOTIMPL;
+    TRACE("(%p)->(%s, %s, %s, %s)\n", iface, debugstr_a(pszName), debugstr_a(pszCriteria), fSubString ? "TRUE" : "FALSE", fCaseSensitive ? "TRUE" : "FALSE");
+    return IMimeMessage_QueryBodyProp(iface, HBODY_ROOT, pszName, pszCriteria, fSubString, fCaseSensitive);
 }
 
 static HRESULT WINAPI MimeMessage_GetTextBody(
@@ -3639,6 +4080,12 @@ HRESULT WINAPI MimeOleGetPropertySchema(IMimePropertySchema **schema)
     *schema = &This->IMimePropertySchema_iface;
 
     return S_OK;
+}
+
+HRESULT MimePropertySchema_create(IUnknown *outer, void **obj)
+{
+    if (outer) return CLASS_E_NOAGGREGATION;
+    return MimeOleGetPropertySchema((IMimePropertySchema **)obj);
 }
 
 HRESULT WINAPI MimeGetAddressFormatW(REFIID riid, void *object, DWORD addr_type,

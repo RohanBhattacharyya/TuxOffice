@@ -38,7 +38,7 @@ static inline struct interaction_source_collection *collection_from_IComposition
 static HRESULT WINAPI interaction_source_collection_QueryInterface(
         ICompositionInteractionSourceCollection *iface, REFIID iid, void **out )
 {
-    FIXME( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
+    TRACE( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
     if (!out) return E_POINTER;
     if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
         IsEqualGUID( iid, &IID_IAgileObject ) ||
@@ -48,6 +48,7 @@ static HRESULT WINAPI interaction_source_collection_QueryInterface(
         ICompositionInteractionSourceCollection_AddRef( iface );
         return S_OK;
     }
+    WARN( "%s not implemented.\n", debugstr_guid( iid ) );
     *out = NULL;
     return E_NOINTERFACE;
 }
@@ -2396,7 +2397,7 @@ static void interaction_tracker_clear_bindings( struct interaction_tracker *impl
 static HRESULT WINAPI interaction_tracker_QueryInterface( IInteractionTracker *iface,
         REFIID iid, void **out )
 {
-    FIXME( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
+    TRACE( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
     if (!out) return E_POINTER;
     if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
         IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_IInteractionTracker ))
@@ -2411,6 +2412,7 @@ static HRESULT WINAPI interaction_tracker_QueryInterface( IInteractionTracker *i
         *out = &impl_from_IInteractionTracker( iface )->IClosable_iface;
     else
     {
+        WARN( "%s not implemented.\n", debugstr_guid( iid ) );
         *out = NULL;
         return E_NOINTERFACE;
     }
@@ -3758,7 +3760,7 @@ static HRESULT WINAPI interaction_tracker_factory_QueryInterface( IActivationFac
 {
     struct interaction_tracker_factory *impl = tracker_factory_from_IActivationFactory( iface );
 
-    FIXME( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
+    TRACE( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
     if (!out) return E_POINTER;
     if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
         IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_IActivationFactory ))
@@ -3769,6 +3771,7 @@ static HRESULT WINAPI interaction_tracker_factory_QueryInterface( IActivationFac
         *out = &impl->IInteractionTrackerStatics2_iface;
     else
     {
+        WARN( "%s not implemented.\n", debugstr_guid( iid ) );
         *out = NULL;
         return E_NOINTERFACE;
     }
@@ -4108,7 +4111,7 @@ static inline struct visual_interaction_source *visual_interaction_source_from_I
 static HRESULT visual_interaction_source_query_interface( struct visual_interaction_source *impl,
         REFIID iid, void **out )
 {
-    FIXME( "impl %p, iid %s, out %p.\n", impl, debugstr_guid( iid ), out );
+    TRACE( "impl %p, iid %s, out %p.\n", impl, debugstr_guid( iid ), out );
     if (!out) return E_POINTER;
     if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
         IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_IVisualInteractionSource ))
@@ -4125,6 +4128,7 @@ static HRESULT visual_interaction_source_query_interface( struct visual_interact
         *out = &impl->IClosable_iface;
     else
     {
+        WARN( "%s not implemented.\n", debugstr_guid( iid ) );
         *out = NULL;
         return E_NOINTERFACE;
     }
@@ -4573,7 +4577,7 @@ static HRESULT WINAPI visual_interaction_source_factory_QueryInterface( IActivat
 {
     struct visual_interaction_source_factory *impl = factory_from_IActivationFactory( iface );
 
-    FIXME( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
+    TRACE( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
     if (!out) return E_POINTER;
     if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
         IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_IActivationFactory ))
@@ -4582,6 +4586,7 @@ static HRESULT WINAPI visual_interaction_source_factory_QueryInterface( IActivat
         *out = &impl->IVisualInteractionSourceStatics_iface;
     else
     {
+        WARN( "%s not implemented.\n", debugstr_guid( iid ) );
         *out = NULL;
         return E_NOINTERFACE;
     }

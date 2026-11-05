@@ -147,6 +147,7 @@ static const struct IClassFactoryVtbl cf_vtbl =
 static cf mime_body_cf      = { { &cf_vtbl }, MimeBody_create };
 static cf mime_allocator_cf = { { &cf_vtbl }, MimeAllocator_create };
 static cf mime_message_cf   = { { &cf_vtbl }, MimeMessage_create };
+static cf prop_schema_cf    = { { &cf_vtbl }, MimePropertySchema_create };
 static cf mime_security_cf  = { { &cf_vtbl }, MimeSecurity_create };
 static cf virtual_stream_cf = { { &cf_vtbl }, VirtualStream_create };
 static cf mhtml_protocol_cf = { { &cf_vtbl }, MimeHtmlProtocol_create };
@@ -179,6 +180,10 @@ HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID iid, LPVOID *ppv)
     else if( IsEqualCLSID( rclsid, &CLSID_IMimeMessage ))
     {
         cf = &mime_message_cf.IClassFactory_iface;
+    }
+    else if( IsEqualCLSID( rclsid, &CLSID_IMimePropertySchema ))
+    {
+        cf = &prop_schema_cf.IClassFactory_iface;
     }
     else if( IsEqualCLSID( rclsid, &CLSID_IMimeBody ))
     {

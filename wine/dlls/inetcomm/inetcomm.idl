@@ -56,6 +56,13 @@ coclass IVirtualStream { interface IVirtualStream; }
 coclass IMimeMessage { interface IMimeMessage; }
 
 [
+    helpstring("CLSID_IMimePropertySchema"),
+    threading(both),
+    uuid(fd853ced-7f86-11d0-8252-00c04fd85ab4)
+]
+coclass IMimePropertySchema { interface IMimePropertySchema; }
+
+[
     helpstring("CLSID_ISMTPTransport"),
     threading(both),
     uuid(fd853ce6-7f86-11d0-8252-00c04fd85ab4)
