@@ -68,6 +68,31 @@ tbl.Table.Rows(1).Cells(1).TextRange.Text = "Cell"
 checked = Empty : checked = (InStr(tbl.Table.Rows(1).Cells(1).TextRange.Text, "Cell") = 1) : Check "table text", checked
 Dim page2 : Set page2 = doc.Pages.Add(1, 1)
 checked = Empty : checked = (doc.Pages.Count = 2) : Check "add page", checked
+
+' Repeated edits exercise the document undo stack as well as text persistence.
+' The text engine's interactive undo storage has separate coverage in ole32's
+' test_delete_on_release_stat; ordinary automation alone did not expose it.
+Dim i, initialShapes, stressText, stressName
+initialShapes = page2.Shapes.Count
+For i = 1 To 25
+  stressText = "Publisher textbox stress " & i & vbCrLf & String(200, "x")
+  stressName = "TuxOffice stress " & i
+  doc.BeginCustomUndoAction "Textbox stress " & i
+  Set box = page2.Shapes.AddTextbox(1, 30 + (i Mod 5) * 100, 30 + Int((i - 1) / 5) * 100, 90, 90)
+  box.Name = stressName
+  box.TextFrame.TextRange.Text = stressText
+  box.TextFrame.TextRange.Font.Size = 8 + (i Mod 5)
+  box.TextFrame.TextRange.Font.Bold = (i Mod 2 = 0)
+  doc.EndCustomUndoAction
+  checked = Empty : checked = (page2.Shapes.Count = initialShapes + i) : Check "stress add " & i, checked
+  Set box = Nothing
+  doc.Undo
+  checked = Empty : checked = (page2.Shapes.Count = initialShapes + i - 1) : Check "stress undo " & i, checked
+  doc.Redo
+  checked = Empty : checked = (page2.Shapes.Count = initialShapes + i) : Check "stress redo " & i, checked
+  Set box = page2.Shapes(stressName)
+  checked = Empty : checked = (InStr(box.TextFrame.TextRange.Text, "Publisher textbox stress " & i) = 1) : Check "stress text " & i, checked
+Next
 WScript.Sleep 1500
 
 Dim pub, pdf, xps
@@ -77,12 +102,24 @@ doc.SaveAs pub
 checked = Empty : checked = (SizeOf(pub) > 1000) : Check "save pub", checked
 doc.ExportAsFixedFormat 2, pdf
 checked = Empty : checked = (SizeOf(pdf) > 500) : Check "export pdf", checked
+Set box = Nothing : Set shape = Nothing : Set tbl = Nothing
+Set page = Nothing : Set page2 = Nothing
 doc.Close
+Set doc = Nothing
 Err.Clear
 Set doc = app.Open(pub)
 checked = Empty : checked = (doc.Pages.Count = 2) : Check "reopen", checked
 checked = Empty : checked = (PageHasText(doc.Pages(1), "TuxOffice")) : Check "reopen keeps text", checked
+checked = Empty : checked = (doc.Pages(2).Shapes.Count = initialShapes + 25) : Check "reopen keeps stress boxes", checked
+For i = 1 To 25
+  Set box = doc.Pages(2).Shapes("TuxOffice stress " & i)
+  checked = Empty : checked = (InStr(box.TextFrame.TextRange.Text, "Publisher textbox stress " & i) = 1) : Check "reopen stress text " & i, checked
+Next
+Set box = Nothing
 doc.Close
+Set doc = Nothing
 app.Quit
 checked = Empty : checked = (Err.Number = 0) : Check "quit", checked
+Set app = Nothing
 WScript.Echo "RESULT publisher passed=" & passes & " failed=" & fails
+If fails > 0 Then WScript.Quit 1

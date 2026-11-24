@@ -1814,7 +1814,9 @@ static HRESULT WINAPI StorageBaseImpl_Stat(
       &currentEntry,
       grfStatFlag);
 
-    pstatstg->grfMode = This->openFlags;
+    /* DELETEONRELEASE controls the root file's lifetime, not its access mode.
+     * Publisher derives its undo stream's mode from this value. */
+    pstatstg->grfMode = This->openFlags & ~STGM_DELETEONRELEASE;
     pstatstg->grfStateBits = This->stateBits;
   }
 

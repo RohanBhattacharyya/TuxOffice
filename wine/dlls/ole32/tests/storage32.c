@@ -3091,6 +3091,66 @@ static void test_toplevel_stat(void)
     DeleteFileA(filenameA);
 }
 
+static void test_delete_on_release_stat(void)
+{
+    static const WCHAR stream_name[] = L"CONTENTS";
+    static const char contents[] = "Publisher undo storage";
+    IStorage *storage;
+    IStream *stream;
+    STATSTG stat;
+    HRESULT hr;
+    DWORD mode, stream_mode;
+    ULONG size;
+    unsigned int i;
+    char buffer[sizeof(contents)];
+
+    for (i = 0; i < 4; ++i)
+    {
+        mode = STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE | STGM_DELETEONRELEASE;
+        if (i & 1) mode |= STGM_TRANSACTED;
+        hr = StgCreateDocfile(i & 2 ? NULL : filename, mode, 0, &storage);
+        ok(hr == S_OK, "case %u: create failed, hr %#lx\n", i, hr);
+        if (FAILED(hr)) continue;
+
+        hr = IStorage_Stat(storage, &stat, STATFLAG_DEFAULT);
+        ok(hr == S_OK, "case %u: Stat failed, hr %#lx\n", i, hr);
+        if (SUCCEEDED(hr))
+        {
+            ok(stat.grfMode == (mode & ~(STGM_CREATE | STGM_DELETEONRELEASE)),
+               "case %u: unexpected mode %#lx\n", i, stat.grfMode);
+            /* PTXT9 uses the storage mode, removing TRANSACTED and adding CREATE. */
+            stream_mode = (stat.grfMode & ~STGM_TRANSACTED) | STGM_CREATE;
+            hr = IStorage_CreateStream(storage, stream_name, stream_mode, 0, 0, &stream);
+            ok(hr == S_OK, "case %u: create undo stream failed, hr %#lx\n", i, hr);
+            if (SUCCEEDED(hr))
+            {
+                hr = IStream_Write(stream, contents, sizeof(contents), &size);
+                ok(hr == S_OK && size == sizeof(contents), "write failed, hr %#lx, size %lu\n", hr, size);
+                IStream_Release(stream);
+                hr = IStorage_Commit(storage, STGC_DEFAULT);
+                ok(hr == S_OK, "commit failed, hr %#lx\n", hr);
+                hr = IStorage_OpenStream(storage, stream_name, NULL,
+                                         stream_mode & ~STGM_CREATE, 0, &stream);
+                ok(hr == S_OK, "reopen undo stream failed, hr %#lx\n", hr);
+                if (SUCCEEDED(hr))
+                {
+                    memset(buffer, 0, sizeof(buffer));
+                    hr = IStream_Read(stream, buffer, sizeof(buffer), &size);
+                    ok(hr == S_OK && size == sizeof(contents), "read failed, hr %#lx, size %lu\n", hr, size);
+                    ok(!memcmp(buffer, contents, sizeof(contents)), "unexpected stream data\n");
+                    IStream_Release(stream);
+                }
+            }
+            IStorage_Release(storage);
+            /* Stat must not disable deletion of the underlying file. */
+            ok(GetFileAttributesW(stat.pwcsName) == INVALID_FILE_ATTRIBUTES,
+               "case %u: temporary file still exists\n", i);
+            CoTaskMemFree(stat.pwcsName);
+        }
+        else IStorage_Release(storage);
+    }
+}
+
 static void test_substorage_enum(void)
 {
     IStorage *stg, *stg2;
@@ -3976,6 +4036,7 @@ START_TEST(storage32)
     test_copyto_iidexclusions_stream();
     test_rename();
     test_toplevel_stat();
+    test_delete_on_release_stat();
     test_substorage_enum();
     test_copyto_locking();
     test_copyto_recursive();

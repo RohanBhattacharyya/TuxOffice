@@ -143,12 +143,25 @@ Committed after 0.1.5; checked in the isolated session.
 - **Windows whose size has no exact scale** (one size in five at 125%) were shown a pixel
   larger than their image, filled from the buffer beyond it: a white line under Word's
   save prompt. They now take the next smaller surface size and show one to one.
-- **Open: Publisher crashes on the first keystroke into a text box** (seen on another
-  install; the test account's Publisher is read-only, retired from Microsoft 365, so it
-  is not reproduced here). The text engine singleton (`PTXT9.DLL`, created through
-  `QSManager_GetInstance`) failed to initialize without an exception, and the first use
-  dereferences its empty interface (`MSPUB.EXE+0x60F1A4`). Wine's temporary compound file
-  with Publisher's flags (0x4011012) works; the failing step is not found.
+- **Publisher textbox crash fixed (24 November).** The null interface dereferenced at
+  `MSPUB.EXE+0x60F1A4` belongs to the text engine's undo manager; the main
+  `QSManager_GetInstance` singleton initializes successfully. Publisher creates a temporary
+  compound file with mode `0x4011012`, then PTXT9 reads its mode through `IStorage::Stat`,
+  clears `STGM_TRANSACTED`, and creates its `CONTENTS` undo stream. Wine exposed the
+  root-only `STGM_DELETEONRELEASE` flag in Stat, so CreateStream rejected the derived
+  `0x4001012` mode with `STG_E_INVALIDFUNCTION`. Stat now omits that lifetime flag;
+  file deletion on final release still works. Directly invoking Publisher's undo-manager
+  initialization in the isolated process changed from `0x80030001` to `S_OK`.
+  The storage32 regression suite passes 19,036 checks on both architectures (six
+  existing todo results, zero failures); the original runner fails eight assertions in
+  the four new named/unnamed, direct/transacted cases. Publisher automation passes
+  143 checks, including 25 textbox create/format/undo/redo cycles and saved text after
+  reopening, plus PDF export. Interactive typing remains unverified because this test
+  account's Publisher is read-only. The separate, previously recorded automation
+  shutdown hang remains: all checks finish, but cscript/Publisher need timeout cleanup.
+  Shared-storage regressions also pass: Word 11, Excel 17, PowerPoint 8 checks,
+  including document/PDF verification and process exit. Both patched ole32 modules
+  are installed in the user's local runner, which the installed launcher selects.
 - **Sharp text at fractional scales.** At 125% most GPU children (Word's ribbon, panes,
   document) were shown a pixel or two larger than their image, because the driver
   rounded position and size separately; the compositor resampled them. Edges now land on
