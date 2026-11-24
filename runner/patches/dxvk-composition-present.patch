@@ -1,8 +1,8 @@
 diff --git a/src/dxgi/dxgi_swapchain.cpp b/src/dxgi/dxgi_swapchain.cpp
-index 71e69f9..9b164d0 100644
+index 71e69f9..f2cd16c 100644
 --- a/src/dxgi/dxgi_swapchain.cpp
 +++ b/src/dxgi/dxgi_swapchain.cpp
-@@ -373,7 +373,10 @@ namespace dxvk {
+@@ -373,9 +373,21 @@ namespace dxvk {
      std::lock_guard<dxvk::recursive_mutex> lockWin(m_lockWindow);
      HRESULT hr = S_OK;
  
@@ -13,4 +13,15 @@ index 71e69f9..9b164d0 100644
 +    if (wsi::isWindow(m_window)) {
        std::lock_guard<dxvk::mutex> lockBuf(m_lockBuffer);
        hr = m_presenter->Present(SyncInterval, PresentFlags, pPresentParameters);
++    } else if (!m_window && (m_desc.Flags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT)) {
++      // An application waits on this before rendering its next frame; a presented
++      // frame releases it, so do that here.
++      HANDLE event = m_presenter->GetFrameLatencyEvent();
++
++      if (event) {
++        ReleaseSemaphore(event, 1, nullptr);
++        CloseHandle(event);
++      }
      }
+ 
+     if (PresentFlags & DXGI_PRESENT_TEST)
