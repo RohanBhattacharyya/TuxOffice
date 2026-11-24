@@ -140,6 +140,15 @@ Committed after 0.1.5; checked in the isolated session.
   drawn unchanged) through the colour matrix path; `tests/d2d-effects.c` checks each.
   A live 1080p Cameo costs about 0.58 cores, about 0.18 of them ours (conversion,
   PipeWire); PowerPoint's own per-frame work is the rest.
+- **Sharp text at fractional scales.** At 125% most GPU children (Word's ribbon, panes,
+  document) were shown a pixel or two larger than their image, because the driver
+  rounded position and size separately; the compositor resampled them. Edges now land on
+  their device pixels (one position in five at 125% cannot, and is rounded outwards), which
+  also removed white lines along Word's task panes in a restored window. OneNote's page
+  text was smeared because d2d1 drew ClearType's three-samples-a-pixel coverage through a
+  single channel mask; it now uses grayscale coverage. Still seen once: a white line under
+  OneNote's ribbon after dismissing its sync prompt, from a one pixel tall layer; not
+  reproduced since.
 - **Touchpad scrolling.** The Wayland driver sent only discrete wheel steps, so a
   touchpad's two finger scroll did nothing in any window. It now sends high resolution
   wheel steps (`axis_value120`, seat version 8) and turns finger pixels into wheel units
