@@ -250,7 +250,7 @@ update_runner() {
 
 # Settings that older TuxOffice versions did not apply: run once per revision,
 # so an installed Office picks them up on its next start.
-PREFIX_REVISION=1
+PREFIX_REVISION=2
 update_prefix() {
   local stamp="$TUX_CACHE/prefix-revision"
   [[ -f "$OFFICE_ROOT/WINWORD.EXE" || -f "$OFFICE_ROOT/EXCEL.EXE" ]] || return 0
@@ -307,6 +307,17 @@ configure_shell() {
   wreg "$key" /v DllPath /t REG_SZ /d 'C:\windows\system32\windows.ui.dll' /reg:64
   key='HKLM\Software\Microsoft\WindowsRuntime\ActivatableClassId\Windows.Graphics.Capture.GraphicsCaptureItem'
   wreg "$key" /v DllPath /t REG_SZ /d 'C:\windows\system32\graphicscapture.dll' /reg:64
+  # Office's "View in Browser" saves a Single File Web Page (.mht) and opens it.
+  # Linux browsers can't read MHT, so open it through web-archive, which
+  # unpacks it into a page the default browser can show.
+  # Wine's shell reads file classes from HKLM only, not per-user classes.
+  wreg 'HKLM\Software\Classes\mhtmlfile\shell\open\command' /ve /t REG_SZ \
+    /d "\"C:\\windows\\system32\\start.exe\" /unix \"$TUX_SRC/tuxoffice\" web-archive \"%1\""
+}
+
+cmd_web_archive() {
+  [[ $# -eq 1 ]] || die "usage: tuxoffice web-archive FILE"
+  python3 -I "$TUX_SRC/lib/webarchive.py" "$TUX_PREFIX" "$1"
 }
 
 configure_installer_components() {
@@ -989,6 +1000,7 @@ usage: tuxoffice <command> [args]   (TuxOffice $TUX_VERSION)
   cmd [SCRIPT [ARGS...]]    open a Windows command prompt in the Office prefix,
                             or run a batch script (.bat/.cmd) in it
   wine ARGS...              run a command inside the Office prefix (winecfg, regedit, ...)
+  web-archive FILE          open a Single File Web Page (.mht) in the Linux browser
   kill                      stop every process in the Office prefix
 EOF
 }
@@ -1006,6 +1018,7 @@ main() {
     unintegrate) cmd_unintegrate ;;
     doctor) cmd_doctor ;;
     wine) cmd_wine "$@" ;;
+    web-archive) cmd_web_archive "$@" ;;
     cmd) cmd_cmd "$@" ;;
     kill) cmd_kill ;;
     graphics) cmd_graphics "$@" ;;
