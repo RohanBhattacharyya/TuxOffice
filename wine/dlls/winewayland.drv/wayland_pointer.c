@@ -286,52 +286,124 @@ static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
     NtUserSendHardwareInput(get_input_hwnd(hwnd), 0, &input, 0);
 }
 
+/* Scrolling arrives as a frame of axis events. A wheel sends discrete steps
+ * (axis_discrete, or axis_value120 in 1/120ths of a step from version 8, which
+ * high resolution wheels use), a touchpad or other continuous source only
+ * values in logical pixels. Windows gives precision touchpads and high
+ * resolution wheels wheel deltas smaller than WHEEL_DELTA, so send those. A
+ * finger's pixels become wheel units at about the rate a step scrolls an Office
+ * page (WHEEL_DELTA is three lines, about 60 pixels), so the page follows the
+ * fingers. The handlers all run on the thread that reads the Wayland events. */
+#define SCROLL_UNITS_PER_PIXEL 2.0
+
+static struct
+{
+    uint32_t source;
+    BOOL source_set;
+    BOOL has_value[2], has_steps[2], stop[2];
+    double value[2];
+    int steps[2];         /* in 1/120ths of a step */
+    double remainder[2];  /* wheel units not sent yet, continuous sources only */
+} scroll;
+
+static void send_scroll(uint32_t axis, int delta)
+{
+    INPUT input = {0};
+    HWND hwnd;
+
+    if (!delta || !(hwnd = wayland_pointer_get_focused_hwnd())) return;
+
+    input.type = INPUT_MOUSE;
+    if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
+    {
+        input.mi.dwFlags = MOUSEEVENTF_WHEEL;
+        input.mi.mouseData = -delta;
+    }
+    else
+    {
+        input.mi.dwFlags = MOUSEEVENTF_HWHEEL;
+        input.mi.mouseData = delta;
+    }
+
+    TRACE("hwnd=%p axis=%u delta=%d\n", hwnd, axis, delta);
+
+    NtUserSendHardwareInput(get_input_hwnd(hwnd), 0, &input, 0);
+}
+
+static void flush_scroll(void)
+{
+    uint32_t axis;
+
+    for (axis = 0; axis < 2; axis++)
+    {
+        if (scroll.has_steps[axis])
+        {
+            scroll.remainder[axis] = 0;
+            send_scroll(axis, scroll.steps[axis]);
+        }
+        else if (scroll.has_value[axis] &&
+                 (!scroll.source_set || scroll.source != WL_POINTER_AXIS_SOURCE_WHEEL))
+        {
+            double units = scroll.remainder[axis] + scroll.value[axis] * SCROLL_UNITS_PER_PIXEL;
+            int delta = (int)units;
+
+            scroll.remainder[axis] = units - delta;
+            send_scroll(axis, delta);
+        }
+        if (scroll.stop[axis]) scroll.remainder[axis] = 0;
+        scroll.has_value[axis] = scroll.has_steps[axis] = scroll.stop[axis] = FALSE;
+        scroll.value[axis] = 0;
+        scroll.steps[axis] = 0;
+    }
+    scroll.source_set = FALSE;
+}
+
 static void pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
                                 uint32_t time, uint32_t axis, wl_fixed_t value)
 {
+    if (axis > WL_POINTER_AXIS_HORIZONTAL_SCROLL) return;
+    scroll.has_value[axis] = TRUE;
+    scroll.value[axis] += wl_fixed_to_double(value);
+    /* Before version 5 there are no frames: each event stands alone. */
+    if (wl_pointer_get_version(wl_pointer) < WL_POINTER_FRAME_SINCE_VERSION) flush_scroll();
 }
 
 static void pointer_handle_frame(void *data, struct wl_pointer *wl_pointer)
 {
+    flush_scroll();
 }
 
 static void pointer_handle_axis_source(void *data, struct wl_pointer *wl_pointer,
                                        uint32_t axis_source)
 {
+    scroll.source = axis_source;
+    scroll.source_set = TRUE;
 }
 
 static void pointer_handle_axis_stop(void *data, struct wl_pointer *wl_pointer,
                                      uint32_t time, uint32_t axis)
 {
+    if (axis > WL_POINTER_AXIS_HORIZONTAL_SCROLL) return;
+    scroll.stop[axis] = TRUE;
 }
 
 static void pointer_handle_axis_discrete(void *data, struct wl_pointer *wl_pointer,
                                          uint32_t axis, int32_t discrete)
 {
-    INPUT input = {0};
-    HWND hwnd;
-
-    if (!(hwnd = wayland_pointer_get_focused_hwnd())) return;
-
-    input.type = INPUT_MOUSE;
-
-    switch (axis)
-    {
-    case WL_POINTER_AXIS_VERTICAL_SCROLL:
-        input.mi.dwFlags = MOUSEEVENTF_WHEEL;
-        input.mi.mouseData = -WHEEL_DELTA * discrete;
-        break;
-    case WL_POINTER_AXIS_HORIZONTAL_SCROLL:
-        input.mi.dwFlags = MOUSEEVENTF_HWHEEL;
-        input.mi.mouseData = WHEEL_DELTA * discrete;
-        break;
-    default: break;
-    }
-
-    TRACE("hwnd=%p axis=%u discrete=%d\n", hwnd, axis, discrete);
-
-    NtUserSendHardwareInput(get_input_hwnd(hwnd), 0, &input, 0);
+    if (axis > WL_POINTER_AXIS_HORIZONTAL_SCROLL) return;
+    scroll.has_steps[axis] = TRUE;
+    scroll.steps[axis] += WHEEL_DELTA * discrete;
 }
+
+#ifdef WL_POINTER_AXIS_VALUE120_SINCE_VERSION
+static void pointer_handle_axis_value120(void *data, struct wl_pointer *wl_pointer,
+                                         uint32_t axis, int32_t value120)
+{
+    if (axis > WL_POINTER_AXIS_HORIZONTAL_SCROLL) return;
+    scroll.has_steps[axis] = TRUE;
+    scroll.steps[axis] += value120;
+}
+#endif
 
 static const struct wl_pointer_listener pointer_listener =
 {
@@ -343,7 +415,10 @@ static const struct wl_pointer_listener pointer_listener =
     pointer_handle_frame,
     pointer_handle_axis_source,
     pointer_handle_axis_stop,
-    pointer_handle_axis_discrete
+    pointer_handle_axis_discrete,
+#ifdef WL_POINTER_AXIS_VALUE120_SINCE_VERSION
+    pointer_handle_axis_value120,
+#endif
 };
 
 /**********************************************************************
