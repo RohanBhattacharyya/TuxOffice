@@ -32,13 +32,19 @@ OUT="$TUX_HOME/runners/tuxoffice-${SODA_RUNNER#soda-}"
 
 mkdir -p "$BUILD"
 cd "$BUILD"
-if [[ ! -f Makefile || "$SRC/configure" -nt Makefile ]]; then
+# configure leaves out what it can't find, so run it again when the libraries
+# available for optional modules change, as when the build image gains one.
+dependencies=$(for package in sdl2 gstreamer-1.0 gstreamer-video-1.0 libudev wayland-client vulkan dbus-1 libsecret-1; do
+  printf '%s=%s ' "$package" "$(pkg-config --modversion "$package" 2>/dev/null)"; done)
+if [[ ! -f Makefile || "$SRC/configure" -nt Makefile ||
+      "$(cat .tuxoffice-dependencies 2>/dev/null)" != "$dependencies" ]]; then
   if ((FULL)); then
     "$SRC/configure" -q --prefix="$OUT" --enable-archs=i386,x86_64 --with-mingw=clang \
       --disable-tests --with-wayland --with-vulkan
   else
     "$SRC/configure" -q --enable-archs=i386,x86_64 --with-mingw=clang --disable-tests >/dev/null
   fi
+  printf '%s' "$dependencies" >.tuxoffice-dependencies
 fi
 
 install_support_files() {

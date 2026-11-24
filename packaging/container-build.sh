@@ -18,6 +18,7 @@ apt-get install -y -qq --no-install-recommends \
   libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev libxkbregistry-dev libegl-dev libvulkan-dev \
   libfreetype-dev libfontconfig-dev libgnutls28-dev libsecret-1-dev libdbus-1-dev libsystemd-dev \
   libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+  libsdl2-dev \
   libx11-dev libxext-dev libxrandr-dev libxrender-dev libxi-dev libxcursor-dev libxfixes-dev \
   libxcomposite-dev libxinerama-dev libgl-dev >/dev/null
 

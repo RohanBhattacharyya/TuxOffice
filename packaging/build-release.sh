@@ -46,6 +46,7 @@ check winewayland.so libxkbregistry.so.0
 check win32u.so libfreetype.so.6
 check win32u.so libfontconfig.so.1
 check crypt32.so libgnutls.so.30
+check winebus.so libSDL2-2.0.so.0
 check windows.security.authentication.onlineid.so libsecret-1.so.0
 check winegstreamer.so libgstreamer-1.0.so.0
 [[ -x $DIST/runner/bin/tuxoffice-file-dialog ]] || die "the file chooser helper is missing"
