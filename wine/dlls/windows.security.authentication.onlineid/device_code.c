@@ -17,6 +17,10 @@
 #include "winhttp.h"
 #include "unixlib.h"
 #include "eagle_identity_trace.h"
+#include "wine/debug.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(onlineid);
+
 #define IDENTITY_HOST L"login.microsoftonline.com"
 #define MAX_HTTP_RESPONSE (4 * 1024 * 1024)
 
@@ -1513,6 +1517,60 @@ static HRESULT msa_lookup( const char *client, char *record, char **refresh, cha
     return **refresh && **account ? S_OK : E_INVALIDARG;
 }
 
+/* login.live.com refuses the whole grant ("invalid_grant: one or more scopes requested
+ * are unauthorized") when Office's personal account clients ask for offline_access,
+ * but returns a refresh token without it. So ask for exactly what Office asked for,
+ * minus offline_access, and none of the defaults the work account flow adds. */
+static HRESULT msa_scopes( HSTRING service, char **out )
+{
+    static const char skip[] = "offline_access";
+    char *requested = NULL, *cursor, *end;
+    SIZE_T length;
+    HRESULT hr;
+
+    *out = NULL;
+    if (FAILED(hr = hstring_to_utf8( service, &requested ))) return hr;
+    if (!strcmp( requested, "https://events.data.microsoft.com/OneCollector/1.0/" ))
+    {
+        free( requested );
+        return E_INVALIDARG;
+    }
+    if (!(*out = calloc( 1, strlen( requested ) + 1 )))
+    {
+        free( requested );
+        return E_OUTOFMEMORY;
+    }
+    for (cursor = requested; *cursor; cursor = end)
+    {
+        while (*cursor == ' ') ++cursor;
+        if (!(length = strcspn( cursor, " " ))) break;
+        end = cursor + length;
+        if (length == sizeof(skip) - 1 && !memcmp( cursor, skip, length )) continue;
+        if (**out) strcat( *out, " " );
+        strncat( *out, cursor, length );
+    }
+    free( requested );
+    if (**out) return S_OK;
+    free( *out );
+    *out = NULL;
+    return E_INVALIDARG;
+}
+
+/* Logs why login.live.com refused a request; the reply holds no secrets when it is an error. */
+static void msa_warn_error( const char *what, DWORD status, const char *response )
+{
+    char *error = NULL, *description = NULL;
+
+    if (response)
+    {
+        json_string( response, "error", &error );
+        json_string( response, "error_description", &description );
+    }
+    WARN( "%s: status %lu, error %s: %s\n", what, status, debugstr_a( error ), debugstr_a( description ) );
+    free( error );
+    free( description );
+}
+
 HRESULT identity_msa_list_accounts( HSTRING client_id, HANDLE cancel, struct identity_reply *reply )
 {
     char client[17], *record, *refresh, *account, *username;
@@ -1576,7 +1634,7 @@ HRESULT identity_msa_get_token( HSTRING client_id, HSTRING service, HSTRING logi
             goto done;
         }
     }
-    if (FAILED(hr = build_scopes( service, &scopes ))) goto done;
+    if (FAILED(hr = msa_scopes( service, &scopes ))) goto done;
     if (!(encoded_refresh = form_encode( refresh )) || !(encoded_scopes = form_encode( scopes )))
     {
         hr = E_OUTOFMEMORY;
@@ -1593,6 +1651,7 @@ HRESULT identity_msa_get_token( HSTRING client_id, HSTRING service, HSTRING logi
     if (FAILED(hr = http_post_to( MSA_HOST, MSA_TOKEN_PATH, body, cancel, &response, &status ))) goto done;
     if (status != 200)
     {
+        msa_warn_error( "refresh", status, response );
         hr = E_ACCESSDENIED;
         goto done;
     }
@@ -1645,7 +1704,7 @@ HRESULT identity_msa_authorize( HSTRING client_id, HSTRING service, HSTRING logi
         return S_OK;
     }
     identity_reply_clear( reply );
-    if (FAILED(hr = build_scopes( service, &scopes ))) goto done;
+    if (FAILED(hr = msa_scopes( service, &scopes ))) goto done;
     if (!(encoded_scopes = form_encode( scopes )))
     {
         hr = E_OUTOFMEMORY;
@@ -1661,6 +1720,7 @@ HRESULT identity_msa_authorize( HSTRING client_id, HSTRING service, HSTRING logi
     if (FAILED(hr = http_post_to( MSA_HOST, MSA_CONNECT_PATH, body, cancel, &response, &status ))) goto done;
     if (status != 200)
     {
+        msa_warn_error( "device code", status, response );
         hr = E_ACCESSDENIED;
         goto done;
     }
@@ -1705,12 +1765,14 @@ HRESULT identity_msa_authorize( HSTRING client_id, HSTRING service, HSTRING logi
         if (status == 200) break;
         if (FAILED(json_string( response, "error", &error )))
         {
+            msa_warn_error( "device code poll", status, response );
             hr = E_ACCESSDENIED;
             goto done;
         }
         if (!strcmp( error, "slow_down" )) interval += 5;
         else if (strcmp( error, "authorization_pending" ))
         {
+            msa_warn_error( "device code poll", status, response );
             declined = !strcmp( error, "authorization_declined" );
             hr = declined ? HRESULT_FROM_WIN32( ERROR_CANCELLED ) : E_ACCESSDENIED;
             goto done;
