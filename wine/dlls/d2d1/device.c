@@ -2216,6 +2216,13 @@ static void d2d_device_context_draw_glyph_run_bitmap(struct d2d_device_context *
     m._22 = transform->_22 * scale_y;
     m._32 = transform->_32 * scale_y;
 
+    /* The run is drawn through a single channel opacity mask, so it cannot have
+     * ClearType's per channel coverage. A ClearType texture, three samples a
+     * pixel, sampled through the mask blended neighbouring samples into soft,
+     * smeared glyphs (OneNote's page text). Take grayscale coverage instead, as
+     * Direct2D does on targets with alpha. */
+    if (antialias_mode == DWRITE_TEXT_ANTIALIAS_MODE_CLEARTYPE)
+        antialias_mode = DWRITE_TEXT_ANTIALIAS_MODE_GRAYSCALE;
     hr = IDWriteFactory2_CreateGlyphRunAnalysis(dwrite_factory, glyph_run, (DWRITE_MATRIX *)&m,
             rendering_mode, measuring_mode, DWRITE_GRID_FIT_MODE_DEFAULT, antialias_mode,
             baseline_origin.x, baseline_origin.y, &analysis);
