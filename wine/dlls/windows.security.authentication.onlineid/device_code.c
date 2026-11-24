@@ -511,14 +511,16 @@ static HRESULT show_device_prompt( const char *verification_uri, const char *use
     return S_OK;
 }
 
-static HRESULT read_account( const char *id_token, const char *client_id, struct identity_reply *reply )
+/* Decodes the claims of a JSON web token; the signature is not checked. */
+static HRESULT token_claims( const char *id_token, char **out )
 {
     const char *start = strchr( id_token, '.' ), *end;
-    char *encoded = NULL, *claims = NULL, *audience = NULL, *account = NULL, *username = NULL, *name = NULL, *tenant = NULL;
+    char *encoded = NULL, *claims = NULL;
     SIZE_T length, size, i;
     DWORD decoded_size;
     HRESULT hr = E_INVALIDARG;
 
+    *out = NULL;
     if (!start || !(end = strchr( ++start, '.' )) || strchr( end + 1, '.' ) || !end[1]) return hr;
     length = end - start;
     if (!length || length > MAX_HTTP_RESPONSE || length % 4 == 1) return hr;
@@ -544,6 +546,22 @@ static HRESULT read_account( const char *id_token, const char *client_id, struct
     if (!CryptStringToBinaryA( encoded, size, CRYPT_STRING_BASE64, (BYTE *)claims, &decoded_size, NULL, NULL ) ||
         memchr( claims, 0, decoded_size )) goto done;
     claims[decoded_size] = 0;
+    *out = claims;
+    claims = NULL;
+    hr = S_OK;
+
+done:
+    free( encoded );
+    free( claims );
+    return hr;
+}
+
+static HRESULT read_account( const char *id_token, const char *client_id, struct identity_reply *reply )
+{
+    char *claims = NULL, *audience = NULL, *account = NULL, *username = NULL, *name = NULL, *tenant = NULL;
+    HRESULT hr;
+
+    if (FAILED(hr = token_claims( id_token, &claims ))) return hr;
     if (FAILED(hr = json_string( claims, "aud", &audience ))) goto done;
     if (strcmp( audience, client_id ))
     {
@@ -571,7 +589,6 @@ static HRESULT read_account( const char *id_token, const char *client_id, struct
     if (tenant) hr = utf8_to_hstring( tenant, &reply->tenant_id );
 
 done:
-    free( encoded );
     free( claims );
     free( audience );
     free( account );
@@ -1406,11 +1423,66 @@ static HRESULT msa_authority( HSTRING *authority )
     return WindowsCreateString( L"consumers", 9, authority );
 }
 
+/* login.microsoftonline.com returns client_info, base64url of {"uid":oid,"utid":tid}, when asked
+ * (Office asks with x-client-info); Office's token library builds the account from it and fails
+ * with "An unexpected error occurred" (649k9, code 0) without it. login.live.com does not return
+ * one, so build it from the id token's oid and tid, as the work account server would. */
+static HRESULT msa_client_info( const char *id_token, struct identity_reply *reply, char **name_out )
+{
+    static const char format[] = "{\"uid\":\"%s\",\"utid\":\"%s\"}";
+    char *claims = NULL, *oid = NULL, *tid = NULL, *name = NULL, *json = NULL, *encoded = NULL, *cursor;
+    DWORD size = 0;
+    SIZE_T length;
+    HRESULT hr;
+
+    *name_out = NULL;
+    if (FAILED(hr = token_claims( id_token, &claims ))) return hr;
+    if (FAILED(hr = json_string( claims, "oid", &oid )) || FAILED(hr = json_string( claims, "tid", &tid ))) goto done;
+    if (!*oid || !*tid || strchr( oid, '"' ) || strchr( tid, '"' ))
+    {
+        hr = E_INVALIDARG;
+        goto done;
+    }
+    if (SUCCEEDED(json_string( claims, "name", &name )) && *name)
+    {
+        *name_out = name;
+        name = NULL;
+    }
+    length = sizeof(format) + strlen( oid ) + strlen( tid );
+    if (!(json = malloc( length )))
+    {
+        hr = E_OUTOFMEMORY;
+        goto done;
+    }
+    snprintf( json, length, format, oid, tid );
+    if (!CryptBinaryToStringA( (BYTE *)json, strlen( json ), CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, NULL, &size ) ||
+        !(encoded = malloc( size )) ||
+        !CryptBinaryToStringA( (BYTE *)json, strlen( json ), CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, encoded, &size ))
+    {
+        hr = encoded || !size ? E_FAIL : E_OUTOFMEMORY;
+        goto done;
+    }
+    for (cursor = encoded; *cursor && *cursor != '='; ++cursor)
+        if (*cursor == '+') *cursor = '-';
+        else if (*cursor == '/') *cursor = '_';
+    *cursor = 0;
+    hr = utf8_to_hstring( encoded, &reply->client_info );
+
+done:
+    free( claims );
+    free( oid );
+    free( tid );
+    free( name );
+    free( json );
+    free( encoded );
+    return hr;
+}
+
 /* Fills the reply from a token response, and returns the account's id and name. */
 static HRESULT msa_token_reply( const char *response, const char *known_id, const char *known_name,
                                 char **account_out, char **username_out, struct identity_reply *reply )
 {
-    char *access = NULL, *id_token = NULL, *account = NULL, *username = NULL, *scopes = NULL;
+    char *access = NULL, *id_token = NULL, *account = NULL, *username = NULL, *scopes = NULL, *name_from_token = NULL;
     FILETIME now;
     UINT64 seconds;
     UINT32 lifetime = 3600;
@@ -1429,7 +1501,15 @@ static HRESULT msa_token_reply( const char *response, const char *known_id, cons
         goto done;
     }
     if (SUCCEEDED(json_string( response, "id_token", &id_token )) && *id_token)
+    {
+        char *name = NULL;
+
         utf8_to_hstring( id_token, &reply->id_token );
+        if (FAILED(msa_client_info( id_token, reply, &name )))
+            WARN( "no client_info: the id token has no oid or tid\n" );
+        free( name_from_token );
+        name_from_token = name;
+    }
     if (!account || !*account)
     {
         hr = E_INVALIDARG;
@@ -1439,7 +1519,7 @@ static HRESULT msa_token_reply( const char *response, const char *known_id, cons
         FAILED(hr = utf8_to_hstring( account, &reply->account_id ))) goto done;
     if (username && *username &&
         (FAILED(hr = utf8_to_hstring( username, &reply->username )) ||
-         FAILED(hr = utf8_to_hstring( username, &reply->display_name )))) goto done;
+         FAILED(hr = utf8_to_hstring( name_from_token ? name_from_token : username, &reply->display_name )))) goto done;
     if (FAILED(hr = WindowsCreateString( consumer_tenant, ARRAY_SIZE(consumer_tenant) - 1, &reply->tenant_id ))) goto done;
     if (SUCCEEDED(json_string( response, "scope", &scopes )) && scopes)
         utf8_to_hstring( scopes, &reply->scopes );
@@ -1458,6 +1538,7 @@ done:
     free( account );
     free( username );
     free( scopes );
+    free( name_from_token );
     return hr;
 }
 
