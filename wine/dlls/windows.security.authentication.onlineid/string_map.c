@@ -10,6 +10,9 @@
  */
 
 #include "private.h"
+#include "wine/debug.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(onlineid);
 
 struct map_entry
 {
@@ -125,6 +128,8 @@ static HRESULT map_lookup( struct string_map *impl, HSTRING key, HSTRING *value 
     index = map_find( impl, key );
     hr = index < 0 ? E_BOUNDS : WindowsDuplicateString( impl->entries[index].value, value );
     LeaveCriticalSection( &impl->cs );
+    TRACE( "map %p key %s -> %s, %u characters\n", impl, debugstr_hstring( key ), index < 0 ? "missing" : "found",
+           index < 0 ? 0 : WindowsGetStringLen( *value ) );
     return hr;
 }
 
@@ -143,6 +148,7 @@ static HRESULT map_has_key( struct string_map *impl, HSTRING key, boolean *found
     EnterCriticalSection( &impl->cs );
     *found = map_find( impl, key ) >= 0;
     LeaveCriticalSection( &impl->cs );
+    TRACE( "map %p has key %s -> %d\n", impl, debugstr_hstring( key ), *found );
     return S_OK;
 }
 
@@ -221,6 +227,7 @@ static HRESULT WINAPI map_Insert( IMap_HSTRING_HSTRING *iface, HSTRING key, HSTR
     INT32 index;
     HRESULT hr;
 
+    TRACE( "map %p insert %s, %u characters\n", impl, debugstr_hstring( key ), WindowsGetStringLen( value ) );
     if (!replaced) return E_POINTER;
     if (FAILED(hr = WindowsDuplicateString( value, &value_copy ))) return hr;
     EnterCriticalSection( &impl->cs );

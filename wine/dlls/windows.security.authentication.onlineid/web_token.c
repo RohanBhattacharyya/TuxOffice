@@ -11,6 +11,9 @@
 
 #include <stdio.h>
 #include "private.h"
+#include "wine/debug.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(onlineid);
 
 struct web_token_request
 {
@@ -462,6 +465,7 @@ static HRESULT WINAPI response_GetTrustLevel( IWebTokenResponse *iface, TrustLev
 
 static HRESULT WINAPI response_get_Token( IWebTokenResponse *iface, HSTRING *value )
 {
+    TRACE( "response %p token, %u characters\n", iface, WindowsGetStringLen( response_from_IWebTokenResponse( iface )->token ) );
     return WindowsDuplicateString( response_from_IWebTokenResponse( iface )->token, value );
 }
 
@@ -487,6 +491,7 @@ static HRESULT WINAPI response_get_Properties( IWebTokenResponse *iface, IMap_HS
 {
     struct web_token_response *impl = response_from_IWebTokenResponse( iface );
     if (!value) return E_POINTER;
+    TRACE( "response %p properties map %p\n", iface, impl->properties );
     *value = impl->properties;
     IMap_HSTRING_HSTRING_AddRef( *value );
     return S_OK;

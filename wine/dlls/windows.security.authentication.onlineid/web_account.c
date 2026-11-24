@@ -10,6 +10,9 @@
  */
 
 #include "private.h"
+#include "wine/debug.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(onlineid);
 
 struct web_account_provider
 {
@@ -348,6 +351,7 @@ static HRESULT WINAPI account_get_WebAccountProvider( IWebAccount *iface, IWebAc
 
 static HRESULT WINAPI account_get_UserName( IWebAccount *iface, HSTRING *value )
 {
+    TRACE( "account %p user name, %u characters\n", iface, WindowsGetStringLen( account_from_IWebAccount( iface )->username ) );
     return WindowsDuplicateString( account_from_IWebAccount( iface )->username, value );
 }
 
@@ -373,11 +377,13 @@ static const IWebAccountVtbl account_vtbl =
 
 static HRESULT WINAPI account2_get_Id( IWebAccount2 *iface, HSTRING *value )
 {
+    TRACE( "account %p id %s\n", iface, debugstr_hstring( account_from_IWebAccount2( iface )->id ) );
     return WindowsDuplicateString( account_from_IWebAccount2( iface )->id, value );
 }
 
 static HRESULT WINAPI account2_get_Properties( IWebAccount2 *iface, IMapView_HSTRING_HSTRING **value )
 {
+    TRACE( "account %p properties map %p\n", iface, account_from_IWebAccount2( iface )->properties );
     return IMap_HSTRING_HSTRING_GetView( account_from_IWebAccount2( iface )->properties, value );
 }
 
