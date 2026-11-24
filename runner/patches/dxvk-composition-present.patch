@@ -1,0 +1,16 @@
+diff --git a/src/dxgi/dxgi_swapchain.cpp b/src/dxgi/dxgi_swapchain.cpp
+index 71e69f9..9b164d0 100644
+--- a/src/dxgi/dxgi_swapchain.cpp
++++ b/src/dxgi/dxgi_swapchain.cpp
+@@ -373,7 +373,10 @@ namespace dxvk {
+     std::lock_guard<dxvk::recursive_mutex> lockWin(m_lockWindow);
+     HRESULT hr = S_OK;
+ 
+-    if (wsi::isWindow(m_window) || !m_window) {
++    // A swap chain made for composition has no window: there is nothing to present
++    // to, and the compositor reads its buffer. Count the present so that frame
++    // statistics tell the compositor a new frame is ready.
++    if (wsi::isWindow(m_window)) {
+       std::lock_guard<dxvk::mutex> lockBuf(m_lockBuffer);
+       hr = m_presenter->Present(SyncInterval, PresentFlags, pPresentParameters);
+     }

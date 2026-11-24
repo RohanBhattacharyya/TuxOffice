@@ -30,7 +30,8 @@ fi
   echo "DXVK source revision differs from the tested revision" >&2; exit 1;
 }
 git -C "$WORK/source" submodule update --init --recursive --depth 1
-for patch in "$HERE/patches/dxvk-context-state-lock.patch" "$HERE/patches/dxvk-resource-import-lock.patch"; do
+for patch in "$HERE/patches/dxvk-context-state-lock.patch" "$HERE/patches/dxvk-resource-import-lock.patch" \
+    "$HERE/patches/dxvk-composition-present.patch"; do
   if git -C "$WORK/source" apply --check "$patch" 2>/dev/null; then
     git -C "$WORK/source" apply "$patch"
   else
@@ -65,4 +66,5 @@ install -m0644 "$WORK/source/LICENSE" "$DESTINATION/LICENSE"
 printf '%s\n' "DXVK 3.1.1 $REVISION, synchronized state swaps and resource imports, LLVM-MinGW 20261020" \
   > "$DESTINATION/state-lock-v1"
 printf '%s\n' 'Resource imports hold the shared allocation pool mutex' > "$DESTINATION/resource-pool-lock-v1"
+printf '%s\n' 'Composition swap chains count presents without a window' > "$DESTINATION/composition-present-v1"
 echo ":: patched DXVK installed to $DESTINATION"
