@@ -19,4 +19,5 @@ SOURCES = \
 	scheme_handler.c \
 	session.c \
 	topology.c \
-	topology_loader.c
+	topology_loader.c \
+	vidcap.c

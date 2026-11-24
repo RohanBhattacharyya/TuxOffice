@@ -758,6 +758,8 @@ interface IMFSensorActivityMonitor : IUnknown
     HRESULT Stop();
 }
 
+cpp_quote("HRESULT WINAPI MFCreateDeviceSource(IMFAttributes *attributes, IMFMediaSource **source);")
+cpp_quote("HRESULT WINAPI MFCreateDeviceSourceActivate(IMFAttributes *attributes, IMFActivate **activate);")
 cpp_quote("HRESULT WINAPI MFCreateSensorActivityMonitor(IMFSensorActivitiesReportCallback *callback,")
 cpp_quote("        IMFSensorActivityMonitor **monitor);")
 
