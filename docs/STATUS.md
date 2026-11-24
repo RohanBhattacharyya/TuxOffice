@@ -130,10 +130,16 @@ Committed after 0.1.5; checked in the isolated session.
   bundle counts their presents (`runner/patches/dxvk-composition-present.patch`;
   before, every present tried and failed to make a Vulkan swap chain). Runner updates
   now reinstall DXVK in prefixes that use it.
-- **Open: Cameo still shows no picture.** PowerPoint creates the composition swap chain
-  and its surface, reads the camera (892 frames in 30 s, 2D buffers as on Windows) and
-  asks the surface for its swap chain, but never presents to it. No Media Foundation
-  transform is involved; where its rendering stops is not found.
+- **Cameo shows the camera,** in the editing view and in the slide show. Two causes:
+  DXVK reported a composition swap chain's present count from its Vulkan presenter,
+  which never presents one, so the count stayed 0 and the compositor never took
+  PowerPoint's frames (the patch now reports DXGI's own count for windowless swap
+  chains); and the slide show masks the picture with Direct2D's Luminance To Alpha,
+  which d2d1 lacked, so every frame failed with D2DERR_EFFECT_IS_NOT_REGISTERED. d2d1
+  now has it, and draws Grayscale, Saturation and Hue Rotation (registered before but
+  drawn unchanged) through the colour matrix path; `tests/d2d-effects.c` checks each.
+  A live 1080p Cameo costs about 0.58 cores, about 0.18 of them ours (conversion,
+  PipeWire); PowerPoint's own per-frame work is the rest.
 - **Mail and document pictures showing a red X.** Office adds an empty
   `Authorization: Bearer` probe to every picture request; hosts such as
   raw.githubusercontent.com (404) and S3 (400) refuse it. WinHTTP now sends such a
