@@ -94,6 +94,72 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   apply the repair; it is also installed in the regular prefix.
 - Removed tracked `wine/autom4te.cache` output and ignored that directory.
 
+## 23 November: caret, wheel scrolling, Alt+Tab key tips, scrolling placeholders
+
+Not committed and not installed. The installed runner is still the 0.1.1 package
+(`/usr/lib/tuxoffice/runner`); the candidate runner in
+`~/.cache/tuxoffice-validation/candidate` carries these changes. Reported against
+Word, checked in the isolated session.
+
+- **Text caret missing.** Word blinks its caret by starting `Opacity` key frame
+  animations every 550 ms and moves it with `Offset.X` animations. Wine's
+  `Visual.StartAnimation` changed the value without asking for a commit, so the
+  caret stayed in whatever state the last unrelated redraw caught. After typing it
+  was often hidden for seconds and arrow keys moved it invisibly. Measured before:
+  hidden 1.4 s after Ctrl+End, 4.6 s after typing (through four arrow presses).
+  After: solid while typing or moving, 0.5 s blinks when idle, longest gap 0.55 s.
+- **Key frame animations run over time** (`windows.ui/composition.c`). They used
+  to jump to their last key frame. Animations on visual `Opacity`, `IsVisible`,
+  `Offset`, `Scale`, `CenterPoint`, `RotationAxis`, their components, and inset
+  clip insets now keep their key frames, easing (linear, cubic Bézier, steps),
+  delay, duration and iterations. Each commit writes their current values, and a
+  thread timer on the committing thread raises CommitNeeded while any run.
+  Reading a property while it animates returns its value from before the animation,
+  as on Windows. Word reads the caret offset back and adds the glyph advance, and
+  reading the animated value put the caret between pixels. Setting a property or
+  starting another animation on it stops the running one. Scoped batches complete
+  when the animations started inside them end, not inside `End`. Animations with
+  expression key frames still go straight to the end.
+- **Inset clips**: setters now request a commit, and `StartAnimation` applies the
+  animation. It used to be ignored.
+- **Scrolling placeholders.** While a page's tiles are late, Word shows a 30%
+  opacity placeholder (a page image a tenth of the size, stretched) and fades it in
+  over 100 ms. Old content is hidden 100 ms after its replacement arrives
+  (`IsVisible` false at 0.909 of 110 ms). Before the clock, the placeholder appeared
+  at once over finished text and hiding happened at once. The placeholder was also
+  sampled nearest-neighbour: surface brushes defaulted to `NearestNeighbor`, and
+  Windows defaults to `Linear`. Word never sets the mode. Together these produced
+  the grey text with light blocks reported during scrolling. Open: while the
+  scrollbar thumb is held, Word keeps the (now soft) placeholder over the page
+  until release (0.1-0.4 s after). That is Word's own decision; no Windows baseline.
+- **Broken build fixed.** 0eaa329 added `WARN`s inside two unbraced `if`s in
+  `composition.c`. One did not compile; the other would have made drawing surface
+  QueryInterface fail for every interface. windows.ui had not been rebuilt since
+  3 November, so nothing shipped with it.
+- **Wheel scrolling moved the scrollbar but not the page** in the installed
+  0.1.1 runner: Word scrolls with `InteractionTracker.TryUpdatePositionWithAnimation`,
+  which that runner accepted and ignored (dragging uses `TryUpdatePosition`). Fixed
+  on 2 November by 32c12b7, never installed. Checked: 48 px per notch both ways.
+  The scroll still jumps; tracker animations do not run over time yet.
+- **Alt+Tab left Word in key tip mode** (`winewayland.drv/wayland_keyboard.c`). On
+  keyboard leave the driver released the held keys while the window was still
+  foreground, so Word saw Alt down and up, a lone Alt tap, and showed its key tips.
+  The next key typed after coming back ran a command. Leave now deactivates the
+  window first (if focus did not move to another of our surfaces and our window is
+  still foreground), in the window's thread, then releases the keys. The key-up
+  goes to the desktop window, as on Windows. Reproduced with KWin activating
+  another window 100 ms after Alt went down; 0 of 6 after.
+- **Flicker**: not reproduced in synthetic scrolling and typing (flash detector, 0
+  events before and after the clock). The placeholder and early-hide mechanisms
+  above are the candidates found.
+
+Checks after the changes: office-suite 36/36, Outlook functional 28 PASS, chart UI
+round trip 3/3, Word backstage and ribbon switching. Harness: `tests/eis-input.c`
+gained `wheel N` and `smooth DY`. The isolated session's virtual output is
+2048x1280 at 1.25 while Wine draws for 2560 wide, so KWin scales windows by 0.8
+there: a one-pixel caret reads light grey in screenshots. The live display is
+2560x1600 at 1.25 and is not scaled.
+
 ## 4 November, night: placeholders replaced
 
 The DLLs added for Office's imports on 3 November answered "nothing here". They

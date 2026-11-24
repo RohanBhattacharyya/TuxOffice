@@ -7,6 +7,8 @@
  *   move X Y        absolute pointer position in logical pixels
  *   button CODE 0|1 Linux input button code (272 left, 273 right), release/press
  *   key CODE 0|1    Linux input key code (125 left Meta), release/press
+ *   wheel N         N mouse wheel steps (120 units each), positive scrolls down
+ *   smooth DY       touchpad-style scroll of DY logical pixels, then stop
  *   sleep MS
  * Every command is sent as its own frame, as a real device would.
  *
@@ -61,7 +63,7 @@ static void dispatch(struct ei *ei, int timeout)
         {
         case EI_EVENT_SEAT_ADDED:
             ei_seat_bind_capabilities(ei_event_get_seat(event), EI_DEVICE_CAP_POINTER_ABSOLUTE,
-                                      EI_DEVICE_CAP_BUTTON, EI_DEVICE_CAP_KEYBOARD, NULL);
+                                      EI_DEVICE_CAP_BUTTON, EI_DEVICE_CAP_SCROLL, EI_DEVICE_CAP_KEYBOARD, NULL);
             break;
         case EI_EVENT_DEVICE_RESUMED:
             if (ei_device_has_capability(device, EI_DEVICE_CAP_POINTER_ABSOLUTE) && !pointer)
@@ -121,6 +123,18 @@ int main(void)
         {
             ei_device_keyboard_key(keyboard, code, value);
             ei_device_frame(keyboard, ei_now(ei));
+        }
+        else if (sscanf(line, "wheel %d", &value) == 1)
+        {
+            ei_device_scroll_discrete(pointer, 0, value * 120);
+            ei_device_frame(pointer, ei_now(ei));
+        }
+        else if (sscanf(line, "smooth %lf", &y) == 1)
+        {
+            ei_device_scroll_delta(pointer, 0, y);
+            ei_device_frame(pointer, ei_now(ei));
+            ei_device_scroll_stop(pointer, false, true);
+            ei_device_frame(pointer, ei_now(ei));
         }
         else if (sscanf(line, "sleep %d", &ms) == 1)
         {
