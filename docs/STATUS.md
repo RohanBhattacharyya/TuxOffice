@@ -96,7 +96,21 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## 24 November: personal account sign-in, and the runner update that never finished
 
-Released in 0.1.3.
+Released in 0.1.3 (scopes, update hang) and 0.1.4 (client_info). Outlook now signs in to
+a personal Microsoft account on the live install and opens the mailbox.
+
+- **Personal account tokens had no client_info.** With the scopes fixed, the broker
+  got a token and Outlook then showed "An unexpected error occurred", tag 649k9,
+  code 0. Office's request sets `x-client-info` and `oauth2_batch`, and builds the
+  account from `client_info` (base64url of `{"uid":oid,"utid":tid}`), which
+  `login.microsoftonline.com` returns and `login.live.com` does not. The personal
+  account id token is a v2 token from `https://login.live.com` with `oid`, `tid`
+  (the consumer tenant), `preferred_username` and `name`; the broker now builds
+  `client_info` from `oid` and `tid`. Signing in from a saved refresh token works
+  too (no device code the second time). `+onlineid` now traces the property keys
+  and account fields Office reads, without values.
+- Open: Outlook's teaching callout ("Relaxed or tighter layout?") draws its
+  shadow offset from the callout.
 
 - **Personal Microsoft accounts could not sign in, in any app.** Adding an
   Outlook.com account in Outlook opened the device code page, the user approved
@@ -113,8 +127,7 @@ Released in 0.1.3.
   offline_access`, are refused. Sign-in and refresh now send Office's scopes
   minus `offline_access`, and log the server's error (`WINEDEBUG=warn+onlineid`)
   when it refuses. The refresh path had the same scopes, so a sign-in that had
-  worked would have failed at its first refresh; refresh itself has not run yet.
-  Not yet checked: Outlook getting through to the mailbox on the fixed build.
+  worked would have failed at its first refresh.
 - **The first start after a runner upgrade could hang forever.** `wineboot -u`
   registers the 32-bit `mscoree.dll` again; with .NET 4.8 in the prefix that is
   Microsoft's shim, which shows a modal "This application could not be started"
