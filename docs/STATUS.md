@@ -94,12 +94,38 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   apply the repair; it is also installed in the regular prefix.
 - Removed tracked `wine/autom4te.cache` output and ignored that directory.
 
+## 24 November: personal account sign-in, and the runner update that never finished
+
+Released in 0.1.3.
+
+- **Personal Microsoft accounts could not sign in, in any app.** Adding an
+  Outlook.com account in Outlook opened the device code page, the user approved
+  it, and Outlook then showed "Something went wrong [7q6ca]", code 2147942405
+  (0x80070005). That code was ours: the personal account flow in
+  `onlineid/device_code.c` sent the work account defaults (`openid profile email
+  offline_access`) with Office's scopes, and `login.live.com` refuses
+  `offline_access` from Office's personal account client (`00000000480728C5`)
+  with `invalid_grant` ("one or more scopes requested are unauthorized") once the
+  code is approved. It returns a refresh token without it. Replayed against the
+  server with that client: `service::outlook.office.com::MBI_SSL` alone and
+  Outlook's own `service::outlook.office.com::MBI_SSL openid profile` are granted
+  (access, refresh, id token); either with `offline_access`, and `openid profile
+  offline_access`, are refused. Sign-in and refresh now send Office's scopes
+  minus `offline_access`, and log the server's error (`WINEDEBUG=warn+onlineid`)
+  when it refuses. The refresh path had the same scopes, so a sign-in that had
+  worked would have failed at its first refresh; refresh itself has not run yet.
+  Not yet checked: Outlook getting through to the mailbox on the fixed build.
+- **The first start after a runner upgrade could hang forever.** `wineboot -u`
+  registers the 32-bit `mscoree.dll` again; with .NET 4.8 in the prefix that is
+  Microsoft's shim, which shows a modal "This application could not be started"
+  box, and wineboot waits on it. The launcher now runs the update with
+  `COMPlus_NoGuiFromShim=1`; the same update finishes in 13 s instead of hanging
+  past 600 s.
+
 ## 23 November: caret, wheel scrolling, Alt+Tab key tips, scrolling placeholders
 
-Not committed and not installed. The installed runner is still the 0.1.1 package
-(`/usr/lib/tuxoffice/runner`); the candidate runner in
-`~/.cache/tuxoffice-validation/candidate` carries these changes. Reported against
-Word, checked in the isolated session.
+Released in 0.1.2 and installed the same night. Reported against Word, checked in
+the isolated session.
 
 - **Text caret missing.** Word blinks its caret by starting `Opacity` key frame
   animations every 550 ms and moves it with `Offset.X` animations. Wine's
