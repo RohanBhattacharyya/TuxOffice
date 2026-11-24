@@ -224,7 +224,7 @@
 @ stub NdrMesSimpleTypeAlignSize
 @ stub NdrMesSimpleTypeDecode
 @ stub NdrMesSimpleTypeEncode
-@ stub NdrMesTypeAlignSize2
+@ stdcall NdrMesTypeAlignSize2(ptr ptr ptr ptr ptr)
 @ stub NdrMesTypeAlignSize
 @ stdcall NdrMesTypeDecode2(ptr ptr ptr ptr ptr)
 @ stub NdrMesTypeDecode

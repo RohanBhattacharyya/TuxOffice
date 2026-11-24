@@ -2920,6 +2920,147 @@ static void test_NdrGetUserMarshalInfo(void)
         "NdrGetUserMarshalInfo should have failed with RPC_S_INVALID_ARG instead of %ld\n", status);
 }
 
+static void test_MesTypeEncodeDecode(void)
+{
+    static const MIDL_TYPE_PICKLING_INFO info = {0x33205054, 3, {0}};
+    static const unsigned char fmtstr_simple[] =
+    {
+        0x15, 0x3,      /* FC_STRUCT [align 4] */
+        NdrFcShort( 0x8 ), /* [size 8] */
+        0x8,            /* FC_LONG */
+        0x6,            /* FC_SHORT */
+        0x6,            /* FC_SHORT */
+        0x5b,           /* FC_END */
+    };
+    static const unsigned char fmtstr_pointer_struct[] =
+    {
+#ifdef _WIN64
+        0x1a,   /* FC_BOGUS_STRUCT */
+        0x3,    /* 3 */
+        NdrFcShort(0x18),       /* [size 24] */
+        NdrFcShort(0x0),
+        NdrFcShort(0x8),        /* Offset= 8 */
+        0x08,   /* FC_LONG */
+        0x39,   /* FC_ALIGNM8 */
+        0x36,   /* FC_POINTER */
+        0x36,   /* FC_POINTER */
+        0x5c,   /* FC_PAD */
+        0x5b,   /* FC_END */
+        0x12, 0x8,      /* FC_UP [simple_pointer] */
+        0x08,   /* FC_LONG */
+        0x5c,   /* FC_PAD */
+        0x12, 0x8,      /* FC_UP [simple_pointer] */
+        0x02,   /* FC_CHAR */
+        0x5c,   /* FC_PAD */
+#else
+        0x16, 0x3,      /* FC_PSTRUCT [align 4] */
+        NdrFcShort( 0xc ),      /* [size 12] */
+        0x4b,           /* FC_PP */
+        0x5c,           /* FC_PAD */
+        0x46,           /* FC_NO_REPEAT */
+        0x5c,           /* FC_PAD */
+        NdrFcShort( 0x4 ),      /* 4 */
+        NdrFcShort( 0x4 ),      /* 4 */
+        0x13, 0x8,      /* FC_OP [simple_pointer] */
+        0x8,            /* FC_LONG */
+        0x5c,           /* FC_PAD */
+        0x46,           /* FC_NO_REPEAT */
+        0x5c,           /* FC_PAD */
+        NdrFcShort( 0x8 ),      /* 8 */
+        NdrFcShort( 0x8 ),      /* 8 */
+        0x13, 0x8,      /* FC_OP [simple_pointer] */
+        0x2,            /* FC_CHAR */
+        0x5c,           /* FC_PAD */
+        0x5b,           /* FC_END */
+        0x8,            /* FC_LONG */
+        0x8,            /* FC_LONG */
+        0x8,            /* FC_LONG */
+        0x5c,           /* FC_PAD */
+        0x5b,           /* FC_END */
+#endif
+    };
+    struct simple { LONG l; SHORT s1, s2; } in = {0x11223344, 0x5566, 0x7788}, out, in2 = {-1, 1, 2};
+    ULONGLONG buffer[16];
+    unsigned char *bytes = (unsigned char *)buffer;
+    MIDL_STUB_DESC desc = Object_StubDesc;
+    ULONG encoded_size = 0;
+    RPC_STATUS status;
+    handle_t handle;
+    ps1_t ps, ps_out;
+    LONG l = 0xcafebabe;
+    char c = 'x';
+    SIZE_T size;
+
+    /* simple struct: common header, private header, 8 bytes of data */
+    desc.pFormatTypes = fmtstr_simple;
+    memset(buffer, 0xaa, sizeof(buffer));
+    status = MesEncodeFixedBufferHandleCreate((char *)buffer, sizeof(buffer), &encoded_size, &handle);
+    ok(status == RPC_S_OK, "got %ld\n", status);
+    size = NdrMesTypeAlignSize2(handle, &info, &desc, fmtstr_simple, &in);
+    ok(size == 24, "got size %Iu\n", size);
+    NdrMesTypeEncode2(handle, &info, &desc, fmtstr_simple, &in);
+    ok(encoded_size == 24, "got encoded size %lu\n", encoded_size);
+    ok(bytes[0] == 0x01 && bytes[1] == 0x10 && *(WORD *)(bytes + 2) == 8, "bad common header %02x %02x %04x\n",
+       bytes[0], bytes[1], *(WORD *)(bytes + 2));
+    ok(*(ULONG *)(bytes + 8) == 8, "got object length %lu\n", *(ULONG *)(bytes + 8));
+    ok(!memcmp(bytes + 16, &in, sizeof(in)), "wrong data\n");
+    /* a second object in the same stream only gets a private header */
+    NdrMesTypeEncode2(handle, &info, &desc, fmtstr_simple, &in2);
+    ok(encoded_size == 40, "got encoded size %lu\n", encoded_size);
+    ok(*(ULONG *)(bytes + 24) == 8, "got object length %lu\n", *(ULONG *)(bytes + 24));
+    MesHandleFree(handle);
+
+    status = MesDecodeBufferHandleCreate((char *)buffer, encoded_size, &handle);
+    ok(status == RPC_S_OK, "got %ld\n", status);
+    memset(&out, 0, sizeof(out));
+    NdrMesTypeDecode2(handle, &info, &desc, fmtstr_simple, &out);
+    ok(!memcmp(&out, &in, sizeof(in)), "got %lx %x %x\n", out.l, out.s1, out.s2);
+    memset(&out, 0, sizeof(out));
+    NdrMesTypeDecode2(handle, &info, &desc, fmtstr_simple, &out);
+    ok(!memcmp(&out, &in2, sizeof(in2)), "got %lx %x %x\n", out.l, out.s1, out.s2);
+    MesHandleFree(handle);
+
+    /* a buffer without a type serialization header is rejected */
+    memset(buffer, 0, sizeof(buffer));
+    bytes[0] = 0x02;
+    status = MesDecodeBufferHandleCreate((char *)buffer, 32, &handle);
+    ok(status == RPC_S_OK, "got %ld\n", status);
+    status = 0;
+    RpcTryExcept
+        NdrMesTypeDecode2(handle, &info, &desc, fmtstr_simple, &out);
+    RpcExcept(TRUE)
+        status = RpcExceptionCode();
+    RpcEndExcept
+    ok(status == RPC_X_WRONG_ES_VERSION, "got %ld\n", status);
+    MesHandleFree(handle);
+
+    /* embedded pointers are allocated on decode and released by NdrMesTypeFree2 */
+    desc.pFormatTypes = fmtstr_pointer_struct;
+    memset(&ps, 0, sizeof(ps));
+    ps.l1 = 0xdeadbeef;
+    ps.pl1 = &l;
+    ps.pc1 = &c;
+    encoded_size = 0;
+    status = MesEncodeFixedBufferHandleCreate((char *)buffer, sizeof(buffer), &encoded_size, &handle);
+    ok(status == RPC_S_OK, "got %ld\n", status);
+    NdrMesTypeEncode2(handle, &info, &desc, fmtstr_pointer_struct, &ps);
+    ok(encoded_size && !(encoded_size % 8), "got encoded size %lu\n", encoded_size);
+    MesHandleFree(handle);
+
+    status = MesDecodeBufferHandleCreate((char *)buffer, encoded_size, &handle);
+    ok(status == RPC_S_OK, "got %ld\n", status);
+    memset(&ps_out, 0, sizeof(ps_out));
+    my_alloc_called = my_free_called = 0;
+    NdrMesTypeDecode2(handle, &info, &desc, fmtstr_pointer_struct, &ps_out);
+    ok(ps_out.l1 == 0xdeadbeef, "got %lx\n", ps_out.l1);
+    ok(ps_out.pl1 && ps_out.pl1 != &l && *ps_out.pl1 == l, "got %p\n", ps_out.pl1);
+    ok(ps_out.pc1 && ps_out.pc1 != &c && *ps_out.pc1 == c, "got %p\n", ps_out.pc1);
+    ok(my_alloc_called == 2, "got %d allocations\n", my_alloc_called);
+    NdrMesTypeFree2(handle, &info, &desc, fmtstr_pointer_struct, &ps_out);
+    ok(my_free_called == 2, "got %d frees\n", my_free_called);
+    MesHandleFree(handle);
+}
+
 static void test_MesEncodeFixedBufferHandleCreate(void)
 {
     ULONG encoded_size;
@@ -3054,6 +3195,7 @@ START_TEST( ndr_marshall )
     test_NdrMapCommAndFaultStatus();
     test_NdrGetUserMarshalInfo();
     test_MesEncodeFixedBufferHandleCreate();
+    test_MesTypeEncodeDecode();
     test_NdrCorrelationInitialize();
     test_pointer_validation();
 }

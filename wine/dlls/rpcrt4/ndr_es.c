@@ -514,20 +514,225 @@ void WINAPIV NdrMesProcEncodeDecode(handle_t Handle, const MIDL_STUB_DESC * pStu
         NdrFullPointerXlatFree(pEsMsg->StubMsg.FullPtrXlatTables);
 }
 
-void RPC_ENTRY NdrMesTypeDecode2(handle_t Handle, const MIDL_TYPE_PICKLING_INFO *pPicklingInfo,
-    const MIDL_STUB_DESC *pStubDesc, PFORMAT_STRING pFormatString, void *pObject)
+/* Type serialization version 1 (MS-RPCE 2.2.6): a common header once per stream, then
+ * a private header and the 8-byte padded NDR data for each object. */
+#define MES_TYPE_HEADER_DONE 0x01
+#define MES_TYPE_TABLE_MASK 127
+
+static const BYTE mes_type_common_header[8] = {0x01, 0x10, 0x08, 0x00, 0xcc, 0xcc, 0xcc, 0xcc};
+
+static void mes_type_init(MIDL_ES_MESSAGE *pEsMsg, RPC_MESSAGE *rpcMsg, const MIDL_TYPE_PICKLING_INFO *pPicklingInfo,
+                          const MIDL_STUB_DESC *pStubDesc, PFORMAT_STRING pFormat)
 {
-    FIXME("(%p, %p, %p, %p, %p)\n", Handle, pPicklingInfo, pStubDesc, pFormatString, pObject);
+    if (pPicklingInfo && pPicklingInfo->Version != 0x33205054)
+        FIXME("unknown pickling version %#lx, flags %#lx\n", pPicklingInfo->Version, pPicklingInfo->Flags);
+    if (pStubDesc->Version > 0x50002)
+    {
+        FIXME("Incompatible stub description version: 0x%lx\n", pStubDesc->Version);
+        RpcRaiseException(RPC_X_WRONG_STUB_VERSION);
+    }
+    if (pEsMsg->Operation == MES_ENCODE_NDR64)
+    {
+        FIXME("NDR64 type serialization is not supported\n");
+        RpcRaiseException(RPC_S_UNSUPPORTED_TRANS_SYN);
+    }
+    memset(rpcMsg, 0, sizeof(*rpcMsg));
+    pEsMsg->StubMsg.RpcMsg = rpcMsg;
+    pEsMsg->StubMsg.StubDesc = pStubDesc;
+    pEsMsg->StubMsg.pfnAllocate = pStubDesc->pfnAllocate;
+    pEsMsg->StubMsg.pfnFree = pStubDesc->pfnFree;
+    pEsMsg->StubMsg.IsClient = TRUE;
+    pEsMsg->StubMsg.FullPtrXlatTables = NdrFullPointerXlatInit(0, XLAT_CLIENT);
+    TRACE("type %#x\n", *pFormat);
 }
 
+static void mes_type_done(MIDL_ES_MESSAGE *pEsMsg)
+{
+    NdrFullPointerXlatFree(pEsMsg->StubMsg.FullPtrXlatTables);
+    pEsMsg->StubMsg.FullPtrXlatTables = NULL;
+}
+
+static ULONG mes_type_data_size(MIDL_ES_MESSAGE *pEsMsg, PFORMAT_STRING pFormat, const void *pObject)
+{
+    NDR_BUFFERSIZE sizer = NdrBufferSizer[*pFormat & MES_TYPE_TABLE_MASK];
+
+    if (!sizer) RpcRaiseException(RPC_X_BAD_STUB_DATA);
+    pEsMsg->StubMsg.BufferLength = 0;
+    sizer(&pEsMsg->StubMsg, (unsigned char *)pObject, pFormat);
+    if (pEsMsg->StubMsg.BufferLength > ~0u - 7) RpcRaiseException(RPC_S_INVALID_BOUND);
+    return (pEsMsg->StubMsg.BufferLength + 7) & ~7;
+}
+
+static ULONG mes_type_header_size(const MIDL_ES_MESSAGE *pEsMsg)
+{
+    return (pEsMsg->HandleFlags & MES_TYPE_HEADER_DONE ? 0 : sizeof(mes_type_common_header)) + 8;
+}
+
+/***********************************************************************
+ *            NdrMesTypeAlignSize2 [RPCRT4.@]
+ */
+SIZE_T RPC_ENTRY NdrMesTypeAlignSize2(handle_t Handle, const MIDL_TYPE_PICKLING_INFO *pPicklingInfo,
+    const MIDL_STUB_DESC *pStubDesc, PFORMAT_STRING pFormatString, const void *pObject)
+{
+    MIDL_ES_MESSAGE *pEsMsg = Handle;
+    RPC_MESSAGE rpcMsg;
+    SIZE_T size;
+
+    TRACE("(%p, %p, %p, %p, %p)\n", Handle, pPicklingInfo, pStubDesc, pFormatString, pObject);
+
+    mes_type_init(pEsMsg, &rpcMsg, pPicklingInfo, pStubDesc, pFormatString);
+    size = mes_type_header_size(pEsMsg) + mes_type_data_size(pEsMsg, pFormatString, pObject);
+    mes_type_done(pEsMsg);
+    return size;
+}
+
+/***********************************************************************
+ *            NdrMesTypeEncode2 [RPCRT4.@]
+ */
 void RPC_ENTRY NdrMesTypeEncode2(handle_t Handle, const MIDL_TYPE_PICKLING_INFO *pPicklingInfo,
     const MIDL_STUB_DESC *pStubDesc, PFORMAT_STRING pFormatString, const void *pObject)
 {
-    FIXME("(%p, %p, %p, %p, %p)\n", Handle, pPicklingInfo, pStubDesc, pFormatString, pObject);
+    MIDL_ES_MESSAGE *pEsMsg = Handle;
+    NDR_MARSHALL marshaller = NdrMarshaller[*pFormatString & MES_TYPE_TABLE_MASK];
+    unsigned char *start;
+    RPC_MESSAGE rpcMsg;
+    ULONG header, data, total;
+
+    TRACE("(%p, %p, %p, %p, %p)\n", Handle, pPicklingInfo, pStubDesc, pFormatString, pObject);
+
+    if (pEsMsg->Operation != MES_ENCODE) RpcRaiseException(RPC_X_INVALID_ES_ACTION);
+    if (!marshaller) RpcRaiseException(RPC_X_BAD_STUB_DATA);
+    mes_type_init(pEsMsg, &rpcMsg, pPicklingInfo, pStubDesc, pFormatString);
+    header = mes_type_header_size(pEsMsg);
+    data = mes_type_data_size(pEsMsg, pFormatString, pObject);
+    if (data > ~0u - header) RpcRaiseException(RPC_S_INVALID_BOUND);
+    total = header + data;
+
+    if (pEsMsg->HandleStyle == MES_DYNAMIC_BUFFER_HANDLE)
+    {
+        unsigned char *buffer, *old = *pEsMsg->pDynBuffer;
+        ULONG used = old ? *pEsMsg->pEncodedSize : 0;
+
+        if (total > ~0u - used) RpcRaiseException(RPC_S_INVALID_BOUND);
+        if (!(buffer = pEsMsg->StubMsg.pfnAllocate(used + total))) RpcRaiseException(RPC_S_OUT_OF_MEMORY);
+        if (old)
+        {
+            memcpy(buffer, old, used);
+            pEsMsg->StubMsg.pfnFree(old);
+        }
+        else *pEsMsg->pEncodedSize = 0;
+        *pEsMsg->pDynBuffer = buffer;
+        pEsMsg->StubMsg.Buffer = buffer + used;
+        pEsMsg->StubMsg.RpcMsg->Buffer = pEsMsg->StubMsg.BufferStart = pEsMsg->StubMsg.Buffer;
+    }
+    else
+    {
+        if (pEsMsg->HandleStyle == MES_FIXED_BUFFER_HANDLE && total > pEsMsg->BufferSize)
+            RpcRaiseException(RPC_S_BUFFER_TOO_SMALL);
+        es_data_alloc(pEsMsg, total);
+    }
+    start = pEsMsg->StubMsg.Buffer;
+    pEsMsg->StubMsg.RpcMsg->Buffer = pEsMsg->StubMsg.BufferStart = start;
+    pEsMsg->StubMsg.RpcMsg->BufferLength = pEsMsg->StubMsg.BufferLength = total;
+    pEsMsg->StubMsg.BufferEnd = start + total;
+    memset(start, 0, total);
+
+    if (!(pEsMsg->HandleFlags & MES_TYPE_HEADER_DONE))
+    {
+        memcpy(pEsMsg->StubMsg.Buffer, mes_type_common_header, sizeof(mes_type_common_header));
+        pEsMsg->StubMsg.Buffer += sizeof(mes_type_common_header);
+    }
+    *(ULONG *)pEsMsg->StubMsg.Buffer = data;
+    *(ULONG *)(pEsMsg->StubMsg.Buffer + 4) = 0xcccccccc;
+    pEsMsg->StubMsg.Buffer += 8;
+
+    marshaller(&pEsMsg->StubMsg, (unsigned char *)pObject, pFormatString);
+    mes_type_done(pEsMsg);
+    pEsMsg->HandleFlags |= MES_TYPE_HEADER_DONE;
+
+    pEsMsg->StubMsg.BufferStart = start;
+    if (pEsMsg->HandleStyle == MES_INCREMENTAL_HANDLE) es_data_write(pEsMsg, total);
+    else
+    {
+        *pEsMsg->pEncodedSize += total;
+        if (pEsMsg->HandleStyle == MES_FIXED_BUFFER_HANDLE)
+        {
+            pEsMsg->Buffer += total;
+            pEsMsg->BufferSize -= total;
+        }
+    }
 }
 
+/***********************************************************************
+ *            NdrMesTypeDecode2 [RPCRT4.@]
+ */
+void RPC_ENTRY NdrMesTypeDecode2(handle_t Handle, const MIDL_TYPE_PICKLING_INFO *pPicklingInfo,
+    const MIDL_STUB_DESC *pStubDesc, PFORMAT_STRING pFormatString, void *pObject)
+{
+    MIDL_ES_MESSAGE *pEsMsg = Handle;
+    NDR_UNMARSHALL unmarshaller = NdrUnmarshaller[*pFormatString & MES_TYPE_TABLE_MASK];
+    unsigned char *memory = pObject;
+    RPC_MESSAGE rpcMsg;
+    ULONG size;
+
+    TRACE("(%p, %p, %p, %p, %p)\n", Handle, pPicklingInfo, pStubDesc, pFormatString, pObject);
+
+    if (pEsMsg->Operation != MES_DECODE) RpcRaiseException(RPC_X_INVALID_ES_ACTION);
+    if (!unmarshaller) RpcRaiseException(RPC_X_BAD_STUB_DATA);
+    mes_type_init(pEsMsg, &rpcMsg, pPicklingInfo, pStubDesc, pFormatString);
+
+    /* A private header starts with a length that is a multiple of 8, so its first byte is
+     * never the common header's version 1. */
+    if (pEsMsg->HandleStyle != MES_INCREMENTAL_HANDLE && pEsMsg->BufferSize < 8)
+        RpcRaiseException(RPC_X_INVALID_BUFFER);
+    es_data_read(pEsMsg, 8);
+    if (pEsMsg->StubMsg.Buffer[0] == mes_type_common_header[0])
+    {
+        if (pEsMsg->StubMsg.Buffer[1] != 0x10)
+        {
+            FIXME("unsupported data representation %#x\n", pEsMsg->StubMsg.Buffer[1]);
+            RpcRaiseException(RPC_X_WRONG_ES_VERSION);
+        }
+        if (*(WORD *)(pEsMsg->StubMsg.Buffer + 2) != 8)
+        {
+            ERR("bad common header length %#x\n", *(WORD *)(pEsMsg->StubMsg.Buffer + 2));
+            RpcRaiseException(RPC_X_WRONG_ES_VERSION);
+        }
+        pEsMsg->HandleFlags |= MES_TYPE_HEADER_DONE;
+        if (pEsMsg->HandleStyle != MES_INCREMENTAL_HANDLE && pEsMsg->BufferSize < 8)
+            RpcRaiseException(RPC_X_INVALID_BUFFER);
+        es_data_read(pEsMsg, 8);
+    }
+    else if (!(pEsMsg->HandleFlags & MES_TYPE_HEADER_DONE))
+    {
+        ERR("no type serialization header, version %#x\n", pEsMsg->StubMsg.Buffer[0]);
+        RpcRaiseException(RPC_X_WRONG_ES_VERSION);
+    }
+    size = *(ULONG *)pEsMsg->StubMsg.Buffer;
+    TRACE("object size %lu\n", size);
+    if (size & 7) RpcRaiseException(RPC_X_INVALID_BUFFER);
+    if (pEsMsg->HandleStyle != MES_INCREMENTAL_HANDLE && size > pEsMsg->BufferSize)
+        RpcRaiseException(RPC_X_INVALID_BUFFER);
+    es_data_read(pEsMsg, size);
+    pEsMsg->StubMsg.RpcMsg->BufferLength = size;
+
+    unmarshaller(&pEsMsg->StubMsg, &memory, pFormatString, FALSE);
+    mes_type_done(pEsMsg);
+}
+
+/***********************************************************************
+ *            NdrMesTypeFree2 [RPCRT4.@]
+ */
 void RPC_ENTRY NdrMesTypeFree2(handle_t Handle, const MIDL_TYPE_PICKLING_INFO *pPicklingInfo,
     const MIDL_STUB_DESC *pStubDesc, PFORMAT_STRING pFormatString, void *pObject)
 {
-    FIXME("(%p, %p, %p, %p, %p)\n", Handle, pPicklingInfo, pStubDesc, pFormatString, pObject);
+    MIDL_ES_MESSAGE *pEsMsg = Handle;
+    NDR_FREE freer = NdrFreer[*pFormatString & MES_TYPE_TABLE_MASK];
+    RPC_MESSAGE rpcMsg;
+
+    TRACE("(%p, %p, %p, %p, %p)\n", Handle, pPicklingInfo, pStubDesc, pFormatString, pObject);
+
+    mes_type_init(pEsMsg, &rpcMsg, pPicklingInfo, pStubDesc, pFormatString);
+    if (freer) freer(&pEsMsg->StubMsg, pObject, pFormatString);
+    mes_type_done(pEsMsg);
 }
