@@ -123,18 +123,26 @@ Committed after 0.1.5; checked in the isolated session.
   a discontinuity). `tests/capture-fixture.sh` starts a private PipeWire with no
   hardware, a tone microphone and PipeWire's test pattern camera; `tests/mf-capture.c`
   passes 34 of 34 against it. PowerPoint's Cameo opens the camera and pulls frames.
-- **Open: Cameo shows no picture.** PowerPoint draws the live feed through a
-  composition swapchain: DXVK's `CreateSwapChainForComposition` and our
-  `CreateCompositionSurfaceForSwapChain` are both unimplemented (746 failed calls in a
-  short run). Needs an offscreen swapchain in DXVK that exposes its last presented
-  frame, and a composition surface drawing it.
-- **Open: some mail images show a red X.** Office fetches linked pictures through its
-  own WinHTTP stack and adds an empty `Authorization: Bearer` with `Accept-Auth` to
-  every image request; hosts such as raw.githubusercontent.com (404) and S3 (400)
-  refuse that, while Google ignores it. Wine's zone (Internet, 3) and credential policy
-  (0x20000) for those URLs match Windows. Since S3-hosted newsletter images display on
-  Windows, Windows either does not send this probe or retries without it; which Office
-  module adds the header, and on what condition, is not found yet.
+- **Composition swap chains.** `CreateCompositionSurfaceForSwapChain` makes a surface
+  that draws the swap chain's latest frame (copied into a drawable texture, since the
+  buffers are render targets only; presents found by polling the present count on the
+  animation timer). DXVK's composition swap chains are enabled by the launcher when its
+  bundle counts their presents (`runner/patches/dxvk-composition-present.patch`;
+  before, every present tried and failed to make a Vulkan swap chain). Runner updates
+  now reinstall DXVK in prefixes that use it.
+- **Open: Cameo still shows no picture.** PowerPoint creates the composition swap chain
+  and its surface, reads the camera (892 frames in 30 s, 2D buffers as on Windows) and
+  asks the surface for its swap chain, but never presents to it. No Media Foundation
+  transform is involved; where its rendering stops is not found.
+- **Mail and document pictures showing a red X.** Office adds an empty
+  `Authorization: Bearer` probe to every picture request; hosts such as
+  raw.githubusercontent.com (404) and S3 (400) refuse it. WinHTTP now sends such a
+  request once more without the probe when it is refused without a challenge (a 401 or
+  `WWW-Authenticate` still goes to authentication). Whether Windows retries the same way
+  is not known; the pictures do show there, and now show here (Word page and Outlook
+  mail checked).
+- `tests/functional/outlook.vbs` purges its leftover folders from Deleted Items, which
+  had filled after about twenty runs and failed "add folder" on every runner: 28 of 28.
 
 ## 24 November: personal account sign-in, and the runner update that never finished
 
