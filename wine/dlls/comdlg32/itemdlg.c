@@ -2849,6 +2849,7 @@ static HRESULT show_native_dialog(FileDialogImpl *This, HWND parent)
 {
     WCHAR helper[MAX_PATH];
     HWND owner = parent ? GetAncestor(parent, GA_ROOT) : NULL;
+    HWND focus = GetFocus();
     BOOL disabled = FALSE;
     DWORD len;
     HRESULT hr;
@@ -2875,6 +2876,13 @@ static HRESULT show_native_dialog(FileDialogImpl *This, HWND parent)
 
     if (disabled) EnableWindow(owner, TRUE);
     if (owner) SetForegroundWindow(owner);
+    /* Activating the portal's window clears the Windows keyboard focus.
+     * Re-activating the owner alone focuses its top-level window, leaving
+     * typing and context-dependent commands detached from the original edit
+     * control. As with a modal dialog, restore the caller's surviving child. */
+    if (owner && IsWindowEnabled(owner) && IsWindow(focus) &&
+        (focus == owner || IsChild(owner, focus)))
+        SetFocus(focus);
     if (hr == S_OK || hr == HRESULT_FROM_WIN32(ERROR_CANCELLED))
         TRACE("desktop file chooser returned %#lx\n", hr);
     return hr;

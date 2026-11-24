@@ -18,3 +18,4 @@ winegcc -b x86_64-windows -mconsole -o "$destination/office-functional.exe" "$HE
 winegcc -b x86_64-windows -mconsole -o "$destination/caption-buttons.exe" "$HERE/caption-buttons.c" -luser32 -lgdi32
 winegcc -b x86_64-windows -mconsole -o "$destination/msgbox-close.exe" "$HERE/msgbox-close.c" -luser32
 winegcc -b x86_64-windows -mconsole -municode -o "$destination/file-dialog-probe.exe" "$HERE/file-dialog-probe.c" -lole32 -lshell32 -luuid
+winegcc -b x86_64-windows -mconsole -o "$destination/native-dialog-focus.exe" "$HERE/native-dialog-focus.c" -lole32 -luuid -luser32

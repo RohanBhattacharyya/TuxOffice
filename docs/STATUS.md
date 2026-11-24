@@ -28,6 +28,15 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Native chooser keyboard focus:** cancelling the real KDE picker left a
+  caller's edit control unfocused; only its top-level window was activated.
+  The common item dialog now saves the caller's focus and restores it after
+  the picker returns, provided the control still exists within the owner.
+  `tests/native-dialog-focus.py` reproduces the failure before the fix and
+  passes three real picker cancellations afterwards. Helper-failure fallback
+  checks and Publisher's three-round inline picture test still pass.
+  This is an independently verified integration fix; the actual Pictures
+  ribbon cancel/reopen error still occurs and requires further diagnosis.
 - **Publisher picture-source loading:** fixed Web Services deserialization of
   a present, empty string element. `get_text()` treated `<Scope/>` as an absent
   field, so an optional `WS_WSZ_TYPE` became NULL. Microsoft's service catalog
