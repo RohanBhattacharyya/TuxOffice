@@ -43,8 +43,12 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   a file. Portal request creation has a 30-second limit; the user's response
   is still unlimited. All three helper-failure probes pass (successful exit
   without a result, failed exit, nonexistent executable). A direct Publisher
-  picture insertion passed typing, cancellation, save/reopen and PDF pixel
-  checks with the attached native chooser.
+  picture insertion passed three rounds (12 assertions, six chooser dialogs),
+  typing, cancellation, save/reopen and PDF pixel checks with the attached
+  native chooser. `tests/publisher-ui.py OUTDIR 3 inline` reproduces this;
+  its default ribbon mode preserves the unresolved Pictures-button regression.
+  A standalone WebView2 probe also completes navigation successfully while
+  displaying a blank window, so the presentation defect is not Publisher-only.
 - Access's object-model baseline remains 41/43 (XML export and compaction
   after using its ADO connection fail). Outlook passed 28/28 local-profile
   checks with networking disabled. These are bounded regression checks,

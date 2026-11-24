@@ -4,7 +4,9 @@ import json
 import os
 from pathlib import Path
 
-classes={"word":"winword.exe","excel":"excel.exe","powerpoint":"powerpnt.exe"}
+classes={"word":"winword.exe","excel":"excel.exe","powerpoint":"powerpnt.exe",
+         "publisher":"mspub.exe","access":"msaccess.exe","outlook":"outlook.exe",
+         "onenote":"onenote.exe"}
 
 
 def prefix_pids(app=None):
