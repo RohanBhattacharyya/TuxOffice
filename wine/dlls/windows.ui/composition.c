@@ -75,6 +75,180 @@ static void animation_timer_arm(void);
 static inline struct compositor *impl_from_ICompositor( ICompositor *iface );
 static HRESULT completed_action_create( IAsyncAction **operation );
 
+/* Swap chain surfaces (ICompositorInterop::CreateCompositionSurfaceForSwapChain): the
+ * application presents to a swap chain made for composition, and visuals show its
+ * latest frame. PowerPoint's camera (Cameo) draws this way. Presents are noticed by
+ * polling the present count on the animation timer, which raises CommitNeeded. */
+struct swapchain_surface
+{
+    ICompositionSurface ICompositionSurface_iface;
+    LONG ref;
+    IDXGISwapChain1 *swapchain;
+    ICompositor *compositor;
+    UINT present_count;
+    LONG version;
+    ID2D1DeviceContext *bitmap_context;
+    ID2D1Bitmap1 *bitmap;
+    /* Swap chain buffers are render targets only: frames are copied here to be drawn. */
+    ID3D11Texture2D *copy;
+    LONG copied_version;
+    struct list entry;
+};
+
+static CRITICAL_SECTION swapchain_surfaces_cs;
+static CRITICAL_SECTION_DEBUG swapchain_surfaces_cs_debug =
+{
+    0, 0, &swapchain_surfaces_cs,
+    { &swapchain_surfaces_cs_debug.ProcessLocksList, &swapchain_surfaces_cs_debug.ProcessLocksList },
+    0, 0, { (DWORD_PTR)(__FILE__ ": swapchain_surfaces_cs") }
+};
+static CRITICAL_SECTION swapchain_surfaces_cs = { &swapchain_surfaces_cs_debug, -1, 0, 0, 0, 0 };
+static struct list swapchain_surfaces = LIST_INIT( swapchain_surfaces );
+static const ICompositionSurfaceVtbl swapchain_surface_vtbl;
+
+static struct swapchain_surface *swapchain_surface_from_composition_surface( ICompositionSurface *surface )
+{
+    if (!surface || surface->lpVtbl != &swapchain_surface_vtbl) return NULL;
+    return CONTAINING_RECORD( surface, struct swapchain_surface, ICompositionSurface_iface );
+}
+
+static BOOL swapchain_surfaces_active(void)
+{
+    BOOL active;
+
+    EnterCriticalSection( &swapchain_surfaces_cs );
+    active = !list_empty( &swapchain_surfaces );
+    LeaveCriticalSection( &swapchain_surfaces_cs );
+    return active;
+}
+
+/* Adds the compositors whose swap chains presented since the last poll. */
+static UINT swapchain_surfaces_poll( ICompositor **compositors, UINT count, UINT max )
+{
+    struct swapchain_surface *surface;
+    DXGI_FRAME_STATISTICS stats;
+    UINT present, i;
+
+    EnterCriticalSection( &swapchain_surfaces_cs );
+    LIST_FOR_EACH_ENTRY( surface, &swapchain_surfaces, struct swapchain_surface, entry )
+    {
+        if (SUCCEEDED(IDXGISwapChain1_GetFrameStatistics( surface->swapchain, &stats ))) present = stats.PresentCount;
+        else if (FAILED(IDXGISwapChain1_GetLastPresentCount( surface->swapchain, &present ))) continue;
+        TRACE_(uirender)( "swap chain %p present count %u, was %u.\n", surface->swapchain, present, surface->present_count );
+        if (present == surface->present_count) continue;
+        surface->present_count = present;
+        InterlockedIncrement( &surface->version );
+        for (i = 0; i < count; ++i) if (compositors[i] == surface->compositor) break;
+        if (i < count || count == max) continue;
+        ICompositor_AddRef( (compositors[count++] = surface->compositor) );
+    }
+    LeaveCriticalSection( &swapchain_surfaces_cs );
+    return count;
+}
+
+/* Copies the swap chain's latest frame into a texture that can be drawn from. Called
+ * with swapchain_surfaces_cs held. */
+static HRESULT swapchain_surface_copy_frame( struct swapchain_surface *surface )
+{
+    LONG version = InterlockedCompareExchange( &surface->version, 0, 0 );
+    D3D11_TEXTURE2D_DESC desc, copy_desc;
+    ID3D11DeviceContext *immediate;
+    ID3D11Multithread *multithread;
+    ID3D11Texture2D *buffer;
+    ID3D11Device *device;
+    HRESULT hr;
+
+    if (surface->copy && surface->copied_version == version) return S_OK;
+    if (FAILED(hr = IDXGISwapChain1_GetBuffer( surface->swapchain, 0, &IID_ID3D11Texture2D, (void **)&buffer )))
+        return hr;
+    ID3D11Texture2D_GetDesc( buffer, &desc );
+    if (surface->copy)
+    {
+        ID3D11Texture2D_GetDesc( surface->copy, &copy_desc );
+        if (copy_desc.Width != desc.Width || copy_desc.Height != desc.Height || copy_desc.Format != desc.Format)
+        {
+            if (surface->bitmap) ID2D1Bitmap1_Release( surface->bitmap );
+            surface->bitmap = NULL;
+            ID3D11Texture2D_Release( surface->copy );
+            surface->copy = NULL;
+        }
+    }
+    ID3D11Texture2D_GetDevice( buffer, &device );
+    if (!surface->copy)
+    {
+        copy_desc = desc;
+        copy_desc.MipLevels = copy_desc.ArraySize = 1;
+        copy_desc.SampleDesc.Count = 1;
+        copy_desc.SampleDesc.Quality = 0;
+        copy_desc.Usage = D3D11_USAGE_DEFAULT;
+        copy_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        copy_desc.CPUAccessFlags = 0;
+        copy_desc.MiscFlags = 0;
+        hr = ID3D11Device_CreateTexture2D( device, &copy_desc, NULL, &surface->copy );
+    }
+    if (SUCCEEDED(hr))
+    {
+        /* The application's device: take its lock where it has one. */
+        ID3D11Device_GetImmediateContext( device, &immediate );
+        if (FAILED(ID3D11DeviceContext_QueryInterface( immediate, &IID_ID3D11Multithread, (void **)&multithread )))
+            multithread = NULL;
+        if (multithread) ID3D11Multithread_Enter( multithread );
+        ID3D11DeviceContext_CopyResource( immediate, (ID3D11Resource *)surface->copy, (ID3D11Resource *)buffer );
+        ID3D11DeviceContext_Flush( immediate );
+        if (multithread)
+        {
+            ID3D11Multithread_Leave( multithread );
+            ID3D11Multithread_Release( multithread );
+        }
+        ID3D11DeviceContext_Release( immediate );
+        surface->copied_version = version;
+    }
+    ID3D11Device_Release( device );
+    ID3D11Texture2D_Release( buffer );
+    return hr;
+}
+
+/* The swap chain's latest frame as a bitmap of the rendering context, which must use
+ * the swap chain's device. */
+static ID2D1Bitmap1 *swapchain_surface_bitmap( struct swapchain_surface *surface, ID2D1DeviceContext *context )
+{
+    D2D1_BITMAP_PROPERTIES1 properties = {{0}};
+    DXGI_SWAP_CHAIN_DESC1 desc;
+    ID2D1Bitmap1 *bitmap = NULL;
+    IDXGISurface *copy;
+    HRESULT hr;
+
+    EnterCriticalSection( &swapchain_surfaces_cs );
+    if (FAILED(hr = swapchain_surface_copy_frame( surface ))) goto done;
+    if (surface->bitmap && surface->bitmap_context == context)
+    {
+        ID2D1Bitmap1_AddRef( (bitmap = surface->bitmap) );
+        goto done;
+    }
+    if (surface->bitmap) ID2D1Bitmap1_Release( surface->bitmap );
+    if (surface->bitmap_context) ID2D1DeviceContext_Release( surface->bitmap_context );
+    surface->bitmap = NULL;
+    surface->bitmap_context = NULL;
+    if (SUCCEEDED(hr = IDXGISwapChain1_GetDesc1( surface->swapchain, &desc )) &&
+            SUCCEEDED(hr = ID3D11Texture2D_QueryInterface( surface->copy, &IID_IDXGISurface, (void **)&copy )))
+    {
+        properties.pixelFormat.format = desc.Format;
+        properties.pixelFormat.alphaMode = desc.AlphaMode == DXGI_ALPHA_MODE_PREMULTIPLIED ?
+                D2D1_ALPHA_MODE_PREMULTIPLIED : D2D1_ALPHA_MODE_IGNORE;
+        properties.dpiX = properties.dpiY = 96.0f;
+        if (SUCCEEDED(hr = ID2D1DeviceContext_CreateBitmapFromDxgiSurface( context, copy, &properties, &bitmap )))
+        {
+            ID2D1Bitmap1_AddRef( (surface->bitmap = bitmap) );
+            ID2D1DeviceContext_AddRef( (surface->bitmap_context = context) );
+        }
+        IDXGISurface_Release( copy );
+    }
+done:
+    if (FAILED(hr)) WARN( "swap chain %p not drawable here, hr %#lx.\n", surface->swapchain, hr );
+    LeaveCriticalSection( &swapchain_surfaces_cs );
+    return bitmap;
+}
+
 struct compositor2_vtbl
 {
     HRESULT (WINAPI *QueryInterface)( struct compositor2_iface *iface, REFIID iid, void **out );
@@ -5593,7 +5767,8 @@ static BOOL running_animations_tick(void)
     }
     running = !list_empty( &running_animations );
     LeaveCriticalSection( &running_animations_cs );
-    return running;
+    /* Swap chains present on their own: keep polling for their frames. */
+    return running || swapchain_surfaces_active();
 }
 
 static void CALLBACK animation_timer_proc( HWND hwnd, UINT msg, UINT_PTR id, DWORD time );
@@ -5624,13 +5799,14 @@ static void CALLBACK animation_timer_proc( HWND hwnd, UINT msg, UINT_PTR id, DWO
     }
     LeaveCriticalSection( &running_animations_cs );
 
+    count = swapchain_surfaces_poll( compositors, count, ARRAY_SIZE(compositors) );
     batches = scoped_batches_fire_due( animation_now() );
     for (i = 0; i < count; ++i)
     {
         compositor_notify_commit_needed( impl_from_ICompositor( compositors[i] ) );
         ICompositor_Release( compositors[i] );
     }
-    if (batches) animation_timer_arm();
+    if (batches || swapchain_surfaces_active()) animation_timer_arm();
 }
 
 /* Run a key frame animation on a property. Returns FALSE when it should instead go
@@ -12160,13 +12336,30 @@ static void draw_surface_brush_content( ID2D1DeviceContext *context, struct surf
     D2D1_RECT_F clip;
     RECT *rects;
     DWORD bytes, i;
+    struct swapchain_surface *chain;
+    ID2D1Bitmap1 *chain_bitmap = NULL;
+    BOOL virtual_surface;
 
-    if (!surface) return;
-    bitmap = surface->virtual ? surface->bitmap : surface->committed_bitmap;
-    if (!surface->virtual && !bitmap) return;
+    if (surface)
+    {
+        virtual_surface = surface->virtual;
+        bitmap = virtual_surface ? surface->bitmap : surface->committed_bitmap;
+    }
+    else if ((chain = swapchain_surface_from_composition_surface( brush->surface )) &&
+            (chain_bitmap = swapchain_surface_bitmap( chain, context )))
+    {
+        virtual_surface = FALSE;
+        bitmap = chain_bitmap;
+    }
+    else return;
+    if (!virtual_surface && !bitmap) return;
     bitmap_size = bitmap ? ID2D1Bitmap1_GetSize( bitmap ) : (D2D1_SIZE_F){0.0f, 0.0f};
-    size = surface->virtual ? (D2D1_SIZE_F){surface->size.Width, surface->size.Height} : bitmap_size;
-    if (size.width <= 0.0f || size.height <= 0.0f) return;
+    size = virtual_surface ? (D2D1_SIZE_F){surface->size.Width, surface->size.Height} : bitmap_size;
+    if (size.width <= 0.0f || size.height <= 0.0f)
+    {
+        if (chain_bitmap) ID2D1Bitmap1_Release( chain_bitmap );
+        return;
+    }
     source_rect = (D2D1_RECT_F){0.0f, 0.0f, bitmap_size.width, bitmap_size.height};
     dest_rect = *bounds;
 
@@ -12202,7 +12395,7 @@ static void draw_surface_brush_content( ID2D1DeviceContext *context, struct surf
         surface_brush_transform( brush, &dest_rect, &outer_transform, &brush_transform );
         ID2D1DeviceContext_SetTransform( context, &brush_transform );
     }
-    if (surface->virtual)
+    if (virtual_surface)
     {
         scale_x = (dest_rect.right - dest_rect.left) / size.width;
         scale_y = (dest_rect.bottom - dest_rect.top) / size.height;
@@ -12235,6 +12428,7 @@ static void draw_surface_brush_content( ID2D1DeviceContext *context, struct surf
                 opacity, interpolation, &source_rect, NULL );
     if (transformed) ID2D1DeviceContext_SetTransform( context, &outer_transform );
     ID2D1DeviceContext_PopAxisAlignedClip( context );
+    if (chain_bitmap) ID2D1Bitmap1_Release( chain_bitmap );
 }
 
 static void draw_surface_brush( ID2D1DeviceContext *context, struct surface_brush *brush,
@@ -13296,6 +13490,14 @@ static void snapshot_brush( struct target_snapshot *snap, ICompositionBrush *bru
             SNAPSHOT_FIELD( snap, surface->bitmap_offset );
             if (surface->drawing) snapshot_dynamic( snap, "surface drawing" );
         }
+        else if (swapchain_surface_from_composition_surface( copy.surface ))
+        {
+            struct swapchain_surface *chain = swapchain_surface_from_composition_surface( copy.surface );
+            LONG version = InterlockedCompareExchange( &chain->version, 0, 0 );
+
+            SNAPSHOT_FIELD( snap, chain->swapchain );
+            SNAPSHOT_FIELD( snap, version );
+        }
         if (copy.surface) ICompositionSurface_Release( copy.surface );
     }
     else if (brush->lpVtbl == &nine_grid_composition_brush_vtbl)
@@ -14241,12 +14443,111 @@ static HRESULT WINAPI compositor_interop_CreateCompositionSurfaceForHandle( ICom
     return E_NOTIMPL;
 }
 
+static HRESULT WINAPI swapchain_surface_QueryInterface( ICompositionSurface *iface, REFIID iid, void **out )
+{
+    TRACE( "iface %p, iid %s, out %p.\n", iface, debugstr_guid( iid ), out );
+
+    if (IsEqualGUID( iid, &IID_IUnknown ) || IsEqualGUID( iid, &IID_IInspectable ) ||
+            IsEqualGUID( iid, &IID_IAgileObject ) || IsEqualGUID( iid, &IID_ICompositionSurface ))
+    {
+        ICompositionSurface_AddRef( (*out = iface) );
+        return S_OK;
+    }
+    /* PowerPoint finds the swap chain to present to through the surface. */
+    if (IsEqualGUID( iid, &IID_IDXGISwapChain ) || IsEqualGUID( iid, &IID_IDXGISwapChain1 ) ||
+            IsEqualGUID( iid, &IID_IDXGIDeviceSubObject ) || IsEqualGUID( iid, &IID_IDXGIObject ))
+        return IDXGISwapChain1_QueryInterface( swapchain_surface_from_composition_surface( iface )->swapchain, iid, out );
+    WARN( "%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid( iid ) );
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI swapchain_surface_AddRef( ICompositionSurface *iface )
+{
+    struct swapchain_surface *impl = swapchain_surface_from_composition_surface( iface );
+    return InterlockedIncrement( &impl->ref );
+}
+
+static ULONG WINAPI swapchain_surface_Release( ICompositionSurface *iface )
+{
+    struct swapchain_surface *impl = swapchain_surface_from_composition_surface( iface );
+    ULONG ref = InterlockedDecrement( &impl->ref );
+
+    if (!ref)
+    {
+        EnterCriticalSection( &swapchain_surfaces_cs );
+        list_remove( &impl->entry );
+        LeaveCriticalSection( &swapchain_surfaces_cs );
+        if (impl->bitmap) ID2D1Bitmap1_Release( impl->bitmap );
+        if (impl->bitmap_context) ID2D1DeviceContext_Release( impl->bitmap_context );
+        if (impl->copy) ID3D11Texture2D_Release( impl->copy );
+        IDXGISwapChain1_Release( impl->swapchain );
+        ICompositor_Release( impl->compositor );
+        free( impl );
+    }
+    return ref;
+}
+
+static HRESULT WINAPI swapchain_surface_GetIids( ICompositionSurface *iface, ULONG *count, IID **iids )
+{
+    if (!count || !iids) return E_POINTER;
+    if (!(*iids = CoTaskMemAlloc( sizeof(**iids) ))) return E_OUTOFMEMORY;
+    (*iids)[0] = IID_ICompositionSurface;
+    *count = 1;
+    return S_OK;
+}
+
+static HRESULT WINAPI swapchain_surface_GetRuntimeClassName( ICompositionSurface *iface, HSTRING *name )
+{
+    if (!name) return E_POINTER;
+    *name = NULL;
+    return S_OK;
+}
+
+static HRESULT WINAPI swapchain_surface_GetTrustLevel( ICompositionSurface *iface, TrustLevel *level )
+{
+    if (!level) return E_POINTER;
+    *level = BaseTrust;
+    return S_OK;
+}
+
+static const ICompositionSurfaceVtbl swapchain_surface_vtbl =
+{
+    swapchain_surface_QueryInterface,
+    swapchain_surface_AddRef,
+    swapchain_surface_Release,
+    swapchain_surface_GetIids,
+    swapchain_surface_GetRuntimeClassName,
+    swapchain_surface_GetTrustLevel,
+};
+
 static HRESULT WINAPI compositor_interop_CreateCompositionSurfaceForSwapChain( ICompositorInterop *iface,
         IUnknown *swapchain, ICompositionSurface **result )
 {
-    FIXME( "iface %p, swapchain %p, result %p.\n", iface, swapchain, result );
-    if (result) *result = NULL;
-    return E_NOTIMPL;
+    struct compositor *compositor = compositor_from_ICompositorInterop( iface );
+    struct swapchain_surface *impl;
+    HRESULT hr;
+
+    TRACE( "iface %p, swapchain %p, result %p.\n", iface, swapchain, result );
+
+    if (!result) return E_POINTER;
+    *result = NULL;
+    if (!swapchain) return E_INVALIDARG;
+    if (!(impl = calloc( 1, sizeof(*impl) ))) return E_OUTOFMEMORY;
+    if (FAILED(hr = IUnknown_QueryInterface( swapchain, &IID_IDXGISwapChain1, (void **)&impl->swapchain )))
+    {
+        free( impl );
+        return hr;
+    }
+    impl->ICompositionSurface_iface.lpVtbl = &swapchain_surface_vtbl;
+    impl->ref = 1;
+    ICompositor_AddRef( (impl->compositor = &compositor->ICompositor_iface) );
+    EnterCriticalSection( &swapchain_surfaces_cs );
+    list_add_tail( &swapchain_surfaces, &impl->entry );
+    LeaveCriticalSection( &swapchain_surfaces_cs );
+    /* The next commit arms the poll on the committing thread, which pumps messages. */
+    *result = &impl->ICompositionSurface_iface;
+    return S_OK;
 }
 
 static inline struct composition_graphics_device *impl_from_ICompositionGraphicsDeviceInterop(
