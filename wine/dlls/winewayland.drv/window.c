@@ -162,6 +162,8 @@ static void wayland_win_data_get_config(struct wayland_win_data *data,
 
     conf->rect = data->rects.window;
     conf->client_rect = data->rects.client;
+    conf->region_clip = data->region_clip;
+    conf->region_clipped = data->region_clipped;
     /* Win32u gives child rectangles in parent-client coordinates. Wayland
      * subsurface placement subtracts the root's screen rectangle, so first
      * express a child's rectangles in that same coordinate system. Keep the
@@ -535,6 +537,54 @@ static HWND find_mso_border_parent(HWND hwnd, HWND active, const RECT *border)
 /***********************************************************************
  *           WAYLAND_WindowPosChanged
  */
+/* Windows clips child windows, and so their GPU contents, to their toplevel's
+ * window region. A Wayland subsurface can only be cropped to a rectangle: use
+ * the region's largest one. Office's callouts trim an 11 pixel strip from their
+ * region and shape a beak in it; their DirectUI child drew the whole window,
+ * so the trimmed strips showed as solid bands. */
+static BOOL get_region_clip(HWND hwnd, const RECT *window, RECT *clip)
+{
+    HRGN region;
+    RGNDATA *data = NULL;
+    INT64 best = 0, area;
+    UINT dpi, raw_dpi, i;
+    RECT *rects;
+    int type;
+
+    if (!(region = NtGdiCreateRectRgn(0, 0, 0, 0))) return FALSE;
+    type = NtUserGetWindowRgnEx(hwnd, region, 0);
+    if ((type == SIMPLEREGION || type == COMPLEXREGION) && (data = get_region_data(region)))
+    {
+        rects = (RECT *)data->Buffer;
+        for (i = 0; i < data->rdh.nCount; i++)
+        {
+            area = (INT64)(rects[i].right - rects[i].left) * (rects[i].bottom - rects[i].top);
+            if (area > best)
+            {
+                best = area;
+                *clip = rects[i];
+            }
+        }
+        free(data);
+    }
+    NtGdiDeleteObjectApp(region);
+    if (!best) return FALSE;
+
+    /* The region is in the window's DPI, the rectangles in raw pixels. */
+    dpi = NtUserGetDpiForWindow(hwnd);
+    raw_dpi = NtUserGetWinMonitorDpi(hwnd, MDT_RAW_DPI);
+    if (dpi && raw_dpi && dpi != raw_dpi)
+    {
+        clip->left = (INT64)clip->left * raw_dpi / dpi;
+        clip->top = (INT64)clip->top * raw_dpi / dpi;
+        clip->right = (INT64)clip->right * raw_dpi / dpi;
+        clip->bottom = (INT64)clip->bottom * raw_dpi / dpi;
+    }
+    /* A region covering the window needs no clipping. */
+    return clip->left > 0 || clip->top > 0 || clip->right < window->right - window->left ||
+           clip->bottom < window->bottom - window->top;
+}
+
 void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UINT swp_flags,
                               const struct window_rects *new_rects, struct window_surface *surface)
 {
@@ -548,9 +598,13 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
     BOOL managed, orphan_border, moved_only;
     BOOL border_effect = is_mso_border_effect_window(hwnd);
     BOOL fullscreen = swp_flags & WINE_SWP_FULLSCREEN;
+    RECT region_clip = {0};
+    BOOL region_clipped;
 
     TRACE("hwnd %p new_rects %s after %p flags %08x\n", hwnd,
           debugstr_window_rects(new_rects), insert_after, swp_flags);
+    region_clipped = toplevel == hwnd && get_region_clip(hwnd, &new_rects->window, &region_clip);
+    if (region_clipped) TRACE("hwnd %p clips GPU children to %s\n", hwnd, wine_dbgstr_rect(&region_clip));
 
     /* Get the managed state with win_data unlocked, as is_window_managed
      * may need to query win_data information about other HWNDs and thus
@@ -586,6 +640,8 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
     data->is_fullscreen = fullscreen;
     data->managed = managed;
     data->mso_border_effect = border_effect;
+    data->region_clip = region_clip;
+    data->region_clipped = region_clipped;
 
     /* A GPU child already belongs to the root's client-surface stack. Do
      * not create an extra SHM subsurface for it on a position change: that

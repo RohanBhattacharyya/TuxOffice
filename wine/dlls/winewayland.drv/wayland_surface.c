@@ -978,6 +978,14 @@ static void wayland_surface_reconfigure_client(struct wayland_surface *surface,
     visible_top = max(client_y, 0);
     visible_right = min(client_x + client_width, window_width);
     visible_bottom = min(client_y + client_height, window_height);
+    /* Children are clipped to the toplevel's window region as well. */
+    if (window->region_clipped)
+    {
+        visible_left = max(visible_left, (int)window->region_clip.left);
+        visible_top = max(visible_top, (int)window->region_clip.top);
+        visible_right = min(visible_right, (int)window->region_clip.right);
+        visible_bottom = min(visible_bottom, (int)window->region_clip.bottom);
+    }
     crop = client->wl_subsurface && client_width > 0 && client_height > 0 &&
            (visible_left != client_x || visible_top != client_y ||
             visible_right != client_x + client_width || visible_bottom != client_y + client_height);

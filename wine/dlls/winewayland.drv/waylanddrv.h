@@ -238,6 +238,9 @@ struct wayland_window_config
 {
     RECT rect;
     RECT client_rect;
+    /* largest rectangle of the window region, relative to the window */
+    RECT region_clip;
+    BOOL region_clipped;
     enum wayland_surface_config_state state;
     /* The scale (i.e., normalized dpi) the window is rendering at. */
     double scale;
@@ -402,6 +405,9 @@ struct wayland_win_data
     BOOL is_fullscreen;
     BOOL managed;
     BOOL mso_border_effect;
+    /* largest rectangle of the window region, relative to the window */
+    RECT region_clip;
+    BOOL region_clipped;
     BOOL layered_attribs_set;
     /* the client surfaces and popups of this toplevel need restacking */
     BOOL restack_pending;
