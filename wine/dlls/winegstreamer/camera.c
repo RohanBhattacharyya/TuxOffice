@@ -110,7 +110,7 @@ struct camera_source
     char id[128];
     wg_camera_t camera;
     HANDLE thread, quit;
-    UINT32 frame_size;
+    UINT32 frame_size, width, height, fourcc;
     UINT64 frame_duration;
     LONGLONG last_time;
     BOOL discontinuity;
@@ -216,7 +216,9 @@ static DWORD WINAPI capture_thread(void *arg)
 
     while (WaitForSingleObject(source->quit, 0) == WAIT_TIMEOUT)
     {
-        if (!buffer && FAILED(MFCreateMemoryBuffer(source->frame_size, &buffer))) break;
+        /* Cameras deliver 2D buffers on Windows, and video consumers lock them as such. */
+        if (!buffer && FAILED(MFCreate2DMediaBuffer(source->width, source->height, source->fourcc, FALSE, &buffer)))
+            break;
         if (FAILED(IMFMediaBuffer_Lock(buffer, &data, NULL, NULL))) break;
         params.data = (UINT_PTR)data;
         params.size = source->frame_size;
@@ -311,6 +313,9 @@ static HRESULT start_camera(struct camera_source *source)
     }
     source->camera = params.camera;
     source->frame_size = (UINT64)width * height * camera_formats[i].bits / 8;
+    source->width = width;
+    source->height = height;
+    source->fourcc = subtype.Data1;
     source->frame_duration = MFllMulDiv(10000000, d, n, 0);
     source->last_time = -(LONGLONG)source->frame_duration;
     source->discontinuity = TRUE;
