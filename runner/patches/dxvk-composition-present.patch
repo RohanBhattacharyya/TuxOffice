@@ -1,8 +1,28 @@
 diff --git a/src/dxgi/dxgi_swapchain.cpp b/src/dxgi/dxgi_swapchain.cpp
-index 71e69f9..f2cd16c 100644
+index 71e69f9..d51a0db 100644
 --- a/src/dxgi/dxgi_swapchain.cpp
 +++ b/src/dxgi/dxgi_swapchain.cpp
-@@ -373,9 +373,21 @@ namespace dxvk {
+@@ -227,7 +227,9 @@ namespace dxvk {
+     frameStatistics.PresentCount = m_presentId;
+     frameStatistics.PresentQPCTime = t1Counter;
+ 
+-    if (m_presenter1 != nullptr)
++    // A composition swap chain is never presented to Vulkan, so only its own
++    // count shows that the application presented.
++    if (m_presenter1 != nullptr && m_window)
+       m_presenter1->GetFrameStatistics(&frameStatistics);
+ 
+     // Fill in actual DXGI statistics, using monitor data to help compute
+@@ -322,7 +324,7 @@ namespace dxvk {
+ 
+     UINT64 presentId = m_presentId;
+ 
+-    if (m_presenter1 != nullptr)
++    if (m_presenter1 != nullptr && m_window)
+       m_presenter1->GetLastPresentCount(&presentId);
+ 
+     *pLastPresentCount = UINT(presentId);
+@@ -373,9 +375,21 @@ namespace dxvk {
      std::lock_guard<dxvk::recursive_mutex> lockWin(m_lockWindow);
      HRESULT hr = S_OK;
  
