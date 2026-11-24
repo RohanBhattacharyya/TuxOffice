@@ -1361,6 +1361,23 @@ static HRESULT __stdcall grayscale_factory(IUnknown **effect)
     return d2d_effect_create_impl(effect, NULL, 0);
 }
 
+static const WCHAR luminance_to_alpha_description[] =
+L"<?xml version='1.0'?>                                                   \
+  <Effect>                                                                \
+    <Property name='DisplayName' type='string' value='Luminance To Alpha'/> \
+    <Property name='Author'      type='string' value='The Wine Project'/> \
+    <Property name='Category'    type='string' value='Color'/>            \
+    <Property name='Description' type='string' value='Luminance To Alpha'/> \
+    <Inputs >                                                             \
+      <Input name='Source'/>                                              \
+    </Inputs>                                                             \
+  </Effect>";
+
+static HRESULT __stdcall luminance_to_alpha_factory(IUnknown **effect)
+{
+    return d2d_effect_create_impl(effect, NULL, 0);
+}
+
 static const WCHAR color_matrix_description[] =
 L"<?xml version='1.0'?>                                                   \
   <Effect>                                                                \
@@ -1837,6 +1854,7 @@ void d2d_effects_init_builtins(struct d2d_factory *factory)
         { &CLSID_D2D1Crop, X2(crop) },
         { &CLSID_D2D1Shadow, X2(shadow) },
         { &CLSID_D2D1Grayscale, X(grayscale) },
+        { &CLSID_D2D1LuminanceToAlpha, X(luminance_to_alpha) },
         { &CLSID_D2D1ColorMatrix, X2(color_matrix) },
         { &CLSID_D2D1Flood, X2(flood) },
         { &CLSID_D2D1GaussianBlur, X2(gaussian_blur) },

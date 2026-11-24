@@ -3973,32 +3973,24 @@ done:
     return hr;
 }
 
-static HRESULT d2d_device_context_draw_color_matrix(struct d2d_device_context *context, ID2D1Effect *effect,
+/* Draws the effect's input through a colour matrix: the Color Matrix effect, and the
+ * effects that are one (Grayscale, Saturation, Hue Rotation, Luminance To Alpha). */
+static HRESULT d2d_device_context_draw_matrix(struct d2d_device_context *context, ID2D1Effect *effect,
+        D2D1_MATRIX_5X4_F matrix, D2D1_COLORMATRIX_ALPHA_MODE alpha_mode, BOOL clamp,
         const D2D1_POINT_2F *offset, const D2D1_RECT_F *image_rect, D2D1_INTERPOLATION_MODE interpolation_mode,
         const struct d2d_effect_frame *parent)
 {
     struct d2d_effect_frame frame = {effect, parent};
     const struct d2d_effect_frame *ancestor;
-    D2D1_COLORMATRIX_ALPHA_MODE alpha_mode;
-    D2D1_MATRIX_5X4_F matrix;
     ID2D1Bitmap *bitmap = NULL;
     ID2D1Image *input;
     D2D1_RECT_F source, destination;
     D2D1_RECT_F bounds;
-    BOOL clamp;
     float dpi_x, dpi_y;
     HRESULT hr;
 
     for (ancestor = parent; ancestor; ancestor = ancestor->parent)
         if (ancestor->effect == effect) return D2DERR_CYCLIC_GRAPH;
-    if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_COLORMATRIX_PROP_COLOR_MATRIX,
-            D2D1_PROPERTY_TYPE_MATRIX_5X4, (BYTE *)&matrix, sizeof(matrix)))) return hr;
-    if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_COLORMATRIX_PROP_ALPHA_MODE,
-            D2D1_PROPERTY_TYPE_ENUM, (BYTE *)&alpha_mode, sizeof(alpha_mode)))) return hr;
-    if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_COLORMATRIX_PROP_CLAMP_OUTPUT,
-            D2D1_PROPERTY_TYPE_BOOL, (BYTE *)&clamp, sizeof(clamp)))) return hr;
-    if (alpha_mode != D2D1_COLORMATRIX_ALPHA_MODE_PREMULTIPLIED
-            && alpha_mode != D2D1_COLORMATRIX_ALPHA_MODE_STRAIGHT) return E_INVALIDARG;
     ID2D1Effect_GetInput(effect, 0, &input);
     if (!input) return D2DERR_WRONG_STATE;
     hr = d2d_effect_input_bitmap(context, input, &frame, &bitmap, &bounds);
@@ -4038,6 +4030,95 @@ static HRESULT d2d_device_context_draw_color_matrix(struct d2d_device_context *c
     }
     ID2D1Bitmap_Release(bitmap);
     return hr;
+}
+
+static HRESULT d2d_device_context_draw_color_matrix(struct d2d_device_context *context, ID2D1Effect *effect,
+        const D2D1_POINT_2F *offset, const D2D1_RECT_F *image_rect, D2D1_INTERPOLATION_MODE interpolation_mode,
+        const struct d2d_effect_frame *parent)
+{
+    D2D1_COLORMATRIX_ALPHA_MODE alpha_mode;
+    D2D1_MATRIX_5X4_F matrix;
+    BOOL clamp;
+    HRESULT hr;
+
+    if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_COLORMATRIX_PROP_COLOR_MATRIX,
+            D2D1_PROPERTY_TYPE_MATRIX_5X4, (BYTE *)&matrix, sizeof(matrix)))) return hr;
+    if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_COLORMATRIX_PROP_ALPHA_MODE,
+            D2D1_PROPERTY_TYPE_ENUM, (BYTE *)&alpha_mode, sizeof(alpha_mode)))) return hr;
+    if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_COLORMATRIX_PROP_CLAMP_OUTPUT,
+            D2D1_PROPERTY_TYPE_BOOL, (BYTE *)&clamp, sizeof(clamp)))) return hr;
+    if (alpha_mode != D2D1_COLORMATRIX_ALPHA_MODE_PREMULTIPLIED
+            && alpha_mode != D2D1_COLORMATRIX_ALPHA_MODE_STRAIGHT) return E_INVALIDARG;
+    return d2d_device_context_draw_matrix(context, effect, matrix, alpha_mode, clamp,
+            offset, image_rect, interpolation_mode, parent);
+}
+
+/* The colour effects that are a fixed matrix over red, green and blue, with the
+ * coefficients Direct2D documents (the SVG feColorMatrix ones). The matrix maps the
+ * row vector (r, g, b, a, 1), so m[i][j] is input channel i's part of output j. */
+static HRESULT d2d_device_context_draw_color_effect(struct d2d_device_context *context, ID2D1Effect *effect,
+        const CLSID *clsid, const D2D1_POINT_2F *offset, const D2D1_RECT_F *image_rect,
+        D2D1_INTERPOLATION_MODE interpolation_mode, const struct d2d_effect_frame *parent)
+{
+    D2D1_COLORMATRIX_ALPHA_MODE alpha_mode = D2D1_COLORMATRIX_ALPHA_MODE_PREMULTIPLIED;
+    D2D1_MATRIX_5X4_F matrix = {0};
+    float rgb[3][3], value;
+    unsigned int i, j;
+    HRESULT hr;
+
+    if (IsEqualGUID(clsid, &CLSID_D2D1LuminanceToAlpha))
+    {
+        /* Black, with the input's luminance as its alpha. */
+        matrix.m[0][3] = 0.2125f;
+        matrix.m[1][3] = 0.7154f;
+        matrix.m[2][3] = 0.0721f;
+        return d2d_device_context_draw_matrix(context, effect, matrix, D2D1_COLORMATRIX_ALPHA_MODE_STRAIGHT,
+                TRUE, offset, image_rect, interpolation_mode, parent);
+    }
+    if (IsEqualGUID(clsid, &CLSID_D2D1Grayscale))
+    {
+        for (j = 0; j < 3; ++j)
+        {
+            rgb[j][0] = 0.299f;
+            rgb[j][1] = 0.587f;
+            rgb[j][2] = 0.114f;
+        }
+    }
+    else if (IsEqualGUID(clsid, &CLSID_D2D1Saturation))
+    {
+        if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_SATURATION_PROP_SATURATION,
+                D2D1_PROPERTY_TYPE_FLOAT, (BYTE *)&value, sizeof(value)))) return hr;
+        value = min(max(value, 0.0f), 1.0f);
+        rgb[0][0] = 0.213f + 0.787f * value; rgb[0][1] = 0.715f - 0.715f * value; rgb[0][2] = 0.072f - 0.072f * value;
+        rgb[1][0] = 0.213f - 0.213f * value; rgb[1][1] = 0.715f + 0.285f * value; rgb[1][2] = 0.072f - 0.072f * value;
+        rgb[2][0] = 0.213f - 0.213f * value; rgb[2][1] = 0.715f - 0.715f * value; rgb[2][2] = 0.072f + 0.928f * value;
+    }
+    else
+    {
+        float c, s;
+
+        if (FAILED(hr = ID2D1Effect_GetValue(effect, D2D1_HUEROTATION_PROP_ANGLE,
+                D2D1_PROPERTY_TYPE_FLOAT, (BYTE *)&value, sizeof(value)))) return hr;
+        c = cosf(value * (float)M_PI / 180.0f);
+        s = sinf(value * (float)M_PI / 180.0f);
+        rgb[0][0] = 0.213f + 0.787f * c - 0.213f * s;
+        rgb[0][1] = 0.715f - 0.715f * c - 0.715f * s;
+        rgb[0][2] = 0.072f - 0.072f * c + 0.928f * s;
+        rgb[1][0] = 0.213f - 0.213f * c + 0.143f * s;
+        rgb[1][1] = 0.715f + 0.285f * c + 0.140f * s;
+        rgb[1][2] = 0.072f - 0.072f * c - 0.283f * s;
+        rgb[2][0] = 0.213f - 0.213f * c - 0.787f * s;
+        rgb[2][1] = 0.715f - 0.715f * c + 0.715f * s;
+        rgb[2][2] = 0.072f + 0.928f * c + 0.072f * s;
+    }
+    /* Each output colour is a weighted sum of the inputs with no offset, which is the
+     * same on premultiplied colour, so no conversion is needed. */
+    for (i = 0; i < 3; ++i)
+        for (j = 0; j < 3; ++j)
+            matrix.m[i][j] = rgb[j][i];
+    matrix.m[3][3] = 1.0f;
+    return d2d_device_context_draw_matrix(context, effect, matrix, alpha_mode, TRUE,
+            offset, image_rect, interpolation_mode, parent);
 }
 
 static HRESULT d2d_device_context_draw_affine(struct d2d_device_context *context, ID2D1Effect *effect,
@@ -4986,6 +5067,10 @@ static HRESULT d2d_device_context_draw_effect(struct d2d_device_context *context
         return d2d_device_context_draw_shadow(context, effect, offset, image_rect, interpolation_mode, parent);
     if (IsEqualGUID(&clsid, &CLSID_D2D1ColorMatrix))
         return d2d_device_context_draw_color_matrix(context, effect, offset, image_rect, interpolation_mode, parent);
+    if (IsEqualGUID(&clsid, &CLSID_D2D1LuminanceToAlpha) || IsEqualGUID(&clsid, &CLSID_D2D1Grayscale)
+            || IsEqualGUID(&clsid, &CLSID_D2D1Saturation) || IsEqualGUID(&clsid, &CLSID_D2D1HueRotation))
+        return d2d_device_context_draw_color_effect(context, effect, &clsid, offset, image_rect,
+                interpolation_mode, parent);
     if (IsEqualGUID(&clsid, &CLSID_D2D1GaussianBlur))
         return d2d_device_context_draw_blur(context, effect, offset, image_rect, interpolation_mode, parent);
     if (IsEqualGUID(&clsid, &CLSID_D2D1DirectionalBlur))
