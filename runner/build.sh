@@ -149,7 +149,7 @@ missing=()
 for d in "${dlls[@]}"; do
   # configure disables a module whose libraries are missing; shipping Soda's
   # unpatched copy instead would go unnoticed, so stop.
-  ls "dlls/$d/x86_64-windows/"*.{dll,drv,exe,sys} >/dev/null 2>&1 || missing+=("$d")
+  ls "dlls/$d/x86_64-windows/"*.{dll,drv,exe,sys} 2>/dev/null | grep -q . || missing+=("$d")
   for arch in x86_64 i386; do
     pe=$(ls "dlls/$d/$arch-windows/"*.{dll,drv,exe,sys} 2>/dev/null | head -1) || true
     [[ -n $pe ]] && install -m 0644 "$pe" "$OUT.tmp/lib/wine/$arch-windows/$(basename "$pe")"
