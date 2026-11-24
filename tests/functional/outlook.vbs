@@ -95,15 +95,28 @@ t.Subject = "TuxOffice task"
 t.Save
 checked = Empty : checked = (tasks.Items.Find("[Subject] = 'TuxOffice task'").Subject = "TuxOffice task") : Check "task", checked
 
-' A run stopped between these steps leaves the folder behind; start without it.
-Dim leftover : For Each leftover In inbox.Folders
-  If leftover.Name = "TuxTest" Then leftover.Delete
+' Deleting a folder moves it to Deleted Items as "TuxTest (n)"; after about twenty runs
+' Outlook moves no more there, the inbox keeps its TuxTest and adding it fails. Purge
+' leftovers from both, deleting from Deleted Items for good.
+Dim deleted : Set deleted = ns.GetDefaultFolder(3)
+For i = deleted.Folders.Count To 1 Step -1
+  If Left(deleted.Folders(i).Name, 7) = "TuxTest" Then deleted.Folders(i).Delete
+Next
+For i = inbox.Folders.Count To 1 Step -1
+  If Left(inbox.Folders(i).Name, 7) = "TuxTest" Then inbox.Folders(i).Delete
+Next
+For i = deleted.Folders.Count To 1 Step -1
+  If Left(deleted.Folders(i).Name, 7) = "TuxTest" Then deleted.Folders(i).Delete
 Next
 Err.Clear
 Dim sub1 : Set sub1 = inbox.Folders.Add("TuxTest")
 checked = Empty : checked = (inbox.Folders("TuxTest").Name = "TuxTest") : Check "add folder", checked
 sub1.Delete
 checked = Empty : checked = (Err.Number = 0) : Check "delete folder", checked
+For i = deleted.Folders.Count To 1 Step -1
+  If Left(deleted.Folders(i).Name, 7) = "TuxTest" Then deleted.Folders(i).Delete
+Next
+Err.Clear
 
 Set mail = inbox.Items.Find("[Subject] = 'Bulk message 7'")
 mail.UnRead = False
