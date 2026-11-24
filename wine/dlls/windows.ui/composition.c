@@ -12458,6 +12458,16 @@ static void draw_surface_brush_content( ID2D1DeviceContext *context, struct surf
 
     interpolation = brush->interpolation_mode == CompositionBitmapInterpolationMode_NearestNeighbor ?
             D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR : D2D1_INTERPOLATION_MODE_LINEAR;
+    if (TRACE_ON(uisurface))
+    {
+        D2D1_MATRIX_3X2_F m;
+        ID2D1DeviceContext_GetTransform( context, &m );
+        TRACE_(uisurface)( "surface %p virtual %d size %.2fx%.2f bitmap %.2fx%.2f dest %.2f,%.2f-%.2f,%.2f "
+                "transform %.4f,%.4f,%.4f,%.4f,%.3f,%.3f stretch %d brush transform %d\n", surface, virtual_surface,
+                size.width, size.height, bitmap_size.width, bitmap_size.height, dest_rect.left, dest_rect.top,
+                dest_rect.right, dest_rect.bottom, m._11, m._12, m._21, m._22, m._31, m._32, brush->stretch,
+                surface_brush_has_transform( brush ) );
+    }
     ID2D1DeviceContext_PushAxisAlignedClip( context, bounds, D2D1_ANTIALIAS_MODE_ALIASED );
     if ((transformed = surface_brush_has_transform( brush )))
     {
