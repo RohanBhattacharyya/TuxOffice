@@ -140,6 +140,19 @@ Committed after 0.1.5; checked in the isolated session.
   drawn unchanged) through the colour matrix path; `tests/d2d-effects.c` checks each.
   A live 1080p Cameo costs about 0.58 cores, about 0.18 of them ours (conversion,
   PipeWire); PowerPoint's own per-frame work is the rest.
+- **Touchpad scrolling.** The Wayland driver sent only discrete wheel steps, so a
+  touchpad's two finger scroll did nothing in any window. It now sends high resolution
+  wheel steps (`axis_value120`, seat version 8) and turns finger pixels into wheel units
+  (2 a pixel, carried until the axis stops), and continues a flick with decaying speed
+  (0.3 s time constant) as Windows does for precision touchpads.
+- **Partial composition redraws.** Idle Word redrew its whole document 12 times a second
+  for the fading caret (2-4 ms each). Frames where only appearance changed now redraw
+  where the changed visuals were; idle Word went from about 80 to 31 ms/s.
+- **Not done: cross-process COM speed.** An `Invoke` on automation Excel takes a median of
+  600 us (Windows: about 100). Event and message wakeups are cheap here (3.5 and 16 us);
+  the cost is Excel's own per-call UI work, about 103 wineserver requests a call (19
+  `GetProp` of one atom, hook chains, CLSID registry reads for two WIC factories). A
+  property cache needs a shared-memory serial, a server protocol change.
 - **Mail and document pictures showing a red X.** Office adds an empty
   `Authorization: Bearer` probe to every picture request; hosts such as
   raw.githubusercontent.com (404) and S3 (400) refuse it. WinHTTP now sends such a
