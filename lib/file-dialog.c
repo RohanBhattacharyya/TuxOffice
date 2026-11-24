@@ -8,6 +8,7 @@
  * Usage: tuxoffice-file-dialog --out FILE [--save|--open|--folder] [--multiple]
  *            [--title TEXT] [--accept LABEL] [--name NAME] [--current-folder DIR]
  *            [--filter "NAME<TAB>PATTERN;PATTERN"]... [--filter-index N] [--parent PID]
+ *            [--parent-window PORTAL_WINDOW_ID]
  * The dialog closes by itself when process PID (the Windows program, which
  * is not this helper's parent: Wine detaches spawned programs) exits.
  * OUT is written once, atomically, when the dialog closes:
@@ -304,6 +305,7 @@ static bool parent_gone(pid_t parent, int parent_fd)
 int main(int argc, char **argv)
 {
     const char *title = "", *accept = NULL, *name = NULL, *folder = NULL;
+    const char *parent_window = "";
     bool save = false, directory = false, multiple = false;
     sd_bus_error error = SD_BUS_ERROR_NULL;
     struct response response = { .filter = -1 };
@@ -333,6 +335,7 @@ int main(int argc, char **argv)
             else if (!strcmp(arg, "--current-folder")) folder = value;
             else if (!strcmp(arg, "--filter-index")) filter_index = atoi(value);
             else if (!strcmp(arg, "--parent")) parent = atoi(value);
+            else if (!strcmp(arg, "--parent-window")) parent_window = value;
             else if (!strcmp(arg, "--filter") && filter_count < MAX_FILTERS)
             {
                 char *tab, *copy = strdup(value);
@@ -374,7 +377,7 @@ int main(int argc, char **argv)
     if ((r = sd_bus_message_new_method_call(bus, &m, "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
                                             "org.freedesktop.portal.FileChooser", save ? "SaveFile" : "OpenFile")) < 0)
         return fail("cannot create the portal call");
-    sd_bus_message_append(m, "ss", "", title);
+    sd_bus_message_append(m, "ss", parent_window, title);
     sd_bus_message_open_container(m, 'a', "{sv}");
     sd_bus_message_append(m, "{sv}", "handle_token", "s", token);
     sd_bus_message_append(m, "{sv}", "modal", "b", 1);
@@ -414,8 +417,9 @@ int main(int argc, char **argv)
     }
     if ((r = sd_bus_message_close_container(m)) < 0) return fail("cannot build the portal call");
 
-    /* Wait as long as the user takes. */
-    if ((r = sd_bus_call(bus, m, UINT64_MAX, &error, &reply)) < 0)
+    /* The method only creates a request; the user answers it asynchronously.
+     * Do not wait forever for a broken portal to create that request. */
+    if ((r = sd_bus_call(bus, m, 30000000, &error, &reply)) < 0)
         return fail(error.message ? error.message : "the file chooser portal is not available");
     if ((r = sd_bus_message_read(reply, "o", &handle)) < 0) return fail("bad portal reply");
     if (strcmp(handle, request_path))

@@ -28,6 +28,30 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- Publisher/Access/Outlook parity audit (24 November, in disposable prefixes):
+  the actual Home → Pictures button hangs when WebView2 is absent, leaving
+  Publisher disabled without a visible dialog. Installing the current runtime
+  exposes a blank WebView2 dialog instead; the browser path remains under
+  investigation. A direct picture-file command does reach the native chooser.
+  Do not treat successful object-model picture insertion as coverage of this
+  ribbon button.
+- Fixed two independently reproduced native chooser defects. The portal now
+  receives the owner's exported Wayland handle, so its modal chooser stays
+  above Publisher when Publisher is activated again. Wine now waits for the
+  helper process while dispatching window messages; if that helper exits
+  without a result, it opens the Wine fallback instead of waiting forever for
+  a file. Portal request creation has a 30-second limit; the user's response
+  is still unlimited. All three helper-failure probes pass (successful exit
+  without a result, failed exit, nonexistent executable). A direct Publisher
+  picture insertion passed typing, cancellation, save/reopen and PDF pixel
+  checks with the attached native chooser.
+- Access's object-model baseline remains 41/43 (XML export and compaction
+  after using its ADO connection fail). Outlook passed 28/28 local-profile
+  checks with networking disabled. These are bounded regression checks,
+  not full parity claims; no matched Windows performance baseline exists.
+- Functional automation now requires its final RESULT marker and a successful
+  process exit, preventing an early client failure from being reported as a
+  passing run simply because no FAIL line was printed.
 - Fixed the left-click spelling card fail-fast. The failing Office routine
   was `AirSpace::BackEnd::LayerWinComp::ApplyRoundedRectangleGeometryClip`.
   Wine now implements rounded rectangle geometry, composition paths and

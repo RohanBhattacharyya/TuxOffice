@@ -100,7 +100,9 @@ summary = {
     "failed": [line for line in lines if line.startswith("FAIL")],
     "times": [line for line in lines if line.startswith("TIME")],
     "unhandled": faults[:10],
+    "completed": any(line.startswith(f"RESULT {app} ") for line in lines) if app != "onenote" else process.returncode == 0,
+    "exit_code": process.returncode,
 }
 (out / f"{app}.json").write_text(json.dumps(summary, indent=2) + "\n")
 print(json.dumps(summary, indent=2))
-sys.exit(1 if timed_out or summary["failed"] or faults else 0)
+sys.exit(1 if timed_out or summary["failed"] or faults or not summary["completed"] or process.returncode else 0)

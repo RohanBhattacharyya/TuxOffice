@@ -2608,7 +2608,20 @@ static char *read_native_result(const WCHAR *path)
     return data;
 }
 
-static HRESULT run_native_dialog(FileDialogImpl *This, const WCHAR *helper)
+struct native_dialog_spawn
+{
+    char **argv;
+    NTSTATUS status;
+};
+
+static DWORD WINAPI native_dialog_spawn_thread(void *arg)
+{
+    struct native_dialog_spawn *spawn = arg;
+    spawn->status = __wine_unix_spawnvp(spawn->argv, TRUE);
+    return 0;
+}
+
+static HRESULT run_native_dialog(FileDialogImpl *This, const WCHAR *helper, HWND owner)
 {
     WCHAR temp_dir[MAX_PATH], result_path[MAX_PATH], name[MAX_PATH], ext[MAX_PATH];
     UINT argc = 0, i, path_count = 0, new_filter = This->filetypeindex;
@@ -2618,6 +2631,12 @@ static HRESULT run_native_dialog(FileDialogImpl *This, const WCHAR *helper)
     HRESULT hr = S_FALSE;
     char index[16];
     ULONG unix_pid;
+    struct native_dialog_spawn spawn;
+    HANDLE thread;
+    WCHAR handle[256];
+    ATOM atom;
+    BOOL quit = FALSE;
+    WPARAM quit_code = 0;
     MSG msg;
 
     if (!GetTempPathW(ARRAY_SIZE(temp_dir), temp_dir) || !GetTempFileNameW(temp_dir, L"tfd", 0, result_path))
@@ -2687,6 +2706,22 @@ static HRESULT run_native_dialog(FileDialogImpl *This, const WCHAR *helper)
         argv[argc++] = strdup("--parent");
         argv[argc++] = strdup(index);
     }
+    /* The Wayland driver exports each top-level surface through xdg-foreign.
+     * Give the portal its real parent so the chooser stays above the disabled
+     * Office window, including when that window is activated from the taskbar. */
+    atom = LOWORD(HandleToULong(GetPropW(owner, L"__wine_wayland_xdg_foreign_handle")));
+    if (atom && GlobalGetAtomNameW(atom, handle, ARRAY_SIZE(handle)))
+    {
+        char *handle_utf8 = utf8_from_wstr(handle);
+        if (handle_utf8)
+        {
+            argv[argc++] = strdup("--parent-window");
+            if ((argv[argc] = malloc(strlen(handle_utf8) + sizeof("wayland:"))))
+                sprintf(argv[argc], "wayland:%s", handle_utf8);
+            argc++;
+            free(handle_utf8);
+        }
+    }
     argv[argc] = NULL;
 
     for (i = 0; i < argc; i++)
@@ -2697,27 +2732,33 @@ static HRESULT run_native_dialog(FileDialogImpl *This, const WCHAR *helper)
     }
 
     TRACE("running %s\n", debugstr_a(argv[0]));
-    if (__wine_unix_spawnvp(argv, FALSE))
+    spawn.argv = argv;
+    if (!(thread = CreateThread(NULL, 0, native_dialog_spawn_thread, &spawn, 0, NULL)))
     {
         WARN("could not start %s\n", debugstr_a(argv[0]));
         goto done;
     }
 
-    while (GetFileAttributesW(result_path) == INVALID_FILE_ATTRIBUTES)
+    /* Wait for the process, not just its result file: an exited or crashed
+     * helper must fall back to Wine's dialog instead of leaving Office modal
+     * forever. The thread owns argv until it has reaped the Unix child. */
+    while (MsgWaitForMultipleObjects(1, &thread, FALSE, INFINITE, QS_ALLINPUT) != WAIT_OBJECT_0)
     {
-        MsgWaitForMultipleObjects(0, NULL, FALSE, 100, QS_ALLINPUT);
         while (PeekMessageW(&msg, 0, 0, 0, PM_REMOVE))
         {
             if (msg.message == WM_QUIT)
             {
-                /* Leave it for the application's own loop once the chooser closes. */
-                PostQuitMessage(msg.wParam);
-                break;
+                quit = TRUE;
+                quit_code = msg.wParam;
+                continue;
             }
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
     }
+    CloseHandle(thread);
+    if (quit) PostQuitMessage(quit_code);
+    if (spawn.status) WARN("file chooser helper exited with status %#lx\n", spawn.status);
 
     result = read_native_result(result_path);
     DeleteFileW(result_path);
@@ -2827,7 +2868,7 @@ static HRESULT show_native_dialog(FileDialogImpl *This, HWND parent)
     /* An application refusing the choice in OnFileOk keeps the dialog open on Windows. */
     for (attempt = 0; attempt < 10; attempt++)
     {
-        hr = run_native_dialog(This, helper);
+        hr = run_native_dialog(This, helper, owner);
         if (hr != S_OK || events_OnFileOk(This) == S_OK) break;
         hr = HRESULT_FROM_WIN32(ERROR_CANCELLED);
     }
