@@ -69,6 +69,7 @@ enum wayland_window_message
     WM_WAYLAND_INIT_DISPLAY_DEVICES = WM_WINE_FIRST_DRIVER_MSG,
     WM_WAYLAND_CONFIGURE,
     WM_WAYLAND_SET_FOREGROUND,
+    WM_WAYLAND_KEYBOARD_LEAVE,
     WM_WAYLAND_ACTIVATE_FOREIGN,
     WM_WAYLAND_FOREIGN_PARENT_CHANGED,
 };
@@ -426,6 +427,7 @@ void ensure_window_surface_contents(HWND hwnd);
  */
 
 void wayland_keyboard_init(struct wl_keyboard *wl_keyboard);
+void wayland_keyboard_leave_window(HWND hwnd);
 void wayland_keyboard_deinit(void);
 const KBDTABLES *WAYLAND_KbdLayerDescriptor(HKL hkl);
 void WAYLAND_ReleaseKbdTables(const KBDTABLES *);

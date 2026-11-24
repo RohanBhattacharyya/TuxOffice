@@ -819,6 +819,9 @@ LRESULT WAYLAND_WindowMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_WAYLAND_SET_FOREGROUND:
         NtUserSetForegroundWindowInternal(hwnd);
         return 0;
+    case WM_WAYLAND_KEYBOARD_LEAVE:
+        wayland_keyboard_leave_window(hwnd);
+        return 0;
     case WM_WAYLAND_ACTIVATE_FOREIGN:
         wayland_surface_activate_from_token(hwnd);
         return 0;

@@ -813,11 +813,43 @@ static void keyboard_handle_leave(void *data, struct wl_keyboard *wl_keyboard,
         keyboard->focused_hwnd = NULL;
     pthread_mutex_unlock(&keyboard->mutex);
 
+    /* Deactivating and releasing the keys happen in the window's thread, see below. */
+    NtUserPostMessage(hwnd, WM_WAYLAND_KEYBOARD_LEAVE, 0, 0);
+}
+
+/***********************************************************************
+ *          wayland_keyboard_leave_window
+ *
+ * Keyboard focus left hwnd for a surface that is not ours: another application,
+ * or the compositor's window switcher. As on Windows, the window stops being the
+ * foreground window, then the keys still held are released.
+ *
+ * The order matters. Alt+Tab presses Alt in the window being left, and the
+ * compositor keeps the Tab press. Releasing Alt while the window was still in
+ * the foreground gave it a lone Alt tap, which Office takes as a request for
+ * its key tips: they covered the ribbon, and the next key typed after coming
+ * back ran a command. On Windows the release goes to the next window instead.
+ */
+void wayland_keyboard_leave_window(HWND hwnd)
+{
+    struct wayland_keyboard *keyboard = &process_wayland.keyboard;
+    HWND focused, foreground;
+
+    pthread_mutex_lock(&keyboard->mutex);
+    focused = keyboard->focused_hwnd;
+    pthread_mutex_unlock(&keyboard->mutex);
+
+    /* Focus went to another of our surfaces, such as a popup, or came back. */
+    if (!focused && (foreground = NtUserGetForegroundWindow()) &&
+        NtUserGetAncestor(hwnd, GA_ROOT) == NtUserGetAncestor(foreground, GA_ROOT))
+    {
+        TRACE("hwnd=%p foreground=%p: deactivating\n", hwnd, foreground);
+        NtUserSetForegroundWindowInternal(NtUserGetDesktopWindow());
+    }
+
     /* The spec for the leave event tells us to treat all keys as released,
      * and for any key repetition to stop. */
     release_all_keys(hwnd);
-
-    /* FIXME: update foreground window as well */
 }
 
 static void send_right_control(HWND hwnd, uint32_t state)
