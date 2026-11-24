@@ -9,6 +9,8 @@
  *   key CODE 0|1    Linux input key code (125 left Meta), release/press
  *   wheel N         N mouse wheel steps (120 units each), positive scrolls down
  *   smooth DY       touchpad-style scroll of DY logical pixels, then stop
+ *   scroll DY       touchpad-style scroll of DY logical pixels, fingers still down
+ *   scrollstop      the fingers lift: ends a run of scroll commands
  *   sleep MS
  * Every command is sent as its own frame, as a real device would.
  *
@@ -133,6 +135,16 @@ int main(void)
         {
             ei_device_scroll_delta(pointer, 0, y);
             ei_device_frame(pointer, ei_now(ei));
+            ei_device_scroll_stop(pointer, false, true);
+            ei_device_frame(pointer, ei_now(ei));
+        }
+        else if (sscanf(line, "scroll %lf", &y) == 1)
+        {
+            ei_device_scroll_delta(pointer, 0, y);
+            ei_device_frame(pointer, ei_now(ei));
+        }
+        else if (!strncmp(line, "scrollstop", 10))
+        {
             ei_device_scroll_stop(pointer, false, true);
             ei_device_frame(pointer, ei_now(ei));
         }

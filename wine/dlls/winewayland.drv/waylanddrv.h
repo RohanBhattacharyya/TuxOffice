@@ -443,6 +443,7 @@ void WAYLAND_ReleaseKbdTables(const KBDTABLES *);
  */
 
 void wayland_pointer_init(struct wl_pointer *wl_pointer);
+NTSTATUS wayland_scroll_inertia(void *arg);
 void wayland_pointer_deinit(void);
 void wayland_pointer_clear_constraint(void);
 

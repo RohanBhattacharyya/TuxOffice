@@ -27,6 +27,12 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(waylanddrv);
 
+static DWORD WINAPI wayland_scroll_inertia_thread(void *arg)
+{
+    WAYLANDDRV_UNIX_CALL(scroll_inertia, NULL);
+    return 0;
+}
+
 static DWORD WINAPI wayland_read_events_thread(void *arg)
 {
     WAYLANDDRV_UNIX_CALL(read_events, NULL);
@@ -107,6 +113,8 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
 
     /* Read wayland events from a dedicated thread. */
     CloseHandle(CreateThread(NULL, 0, wayland_read_events_thread, NULL, 0, &tid));
+    /* Continue touchpad scrolls after the fingers lift. */
+    CloseHandle(CreateThread(NULL, 0, wayland_scroll_inertia_thread, NULL, 0, &tid));
     /* Handle clipboard events in a dedicated thread, if needed. */
     if (!WAYLANDDRV_UNIX_CALL(init_clipboard, NULL))
         CloseHandle(CreateThread(NULL, 0, clipboard_thread, NULL, 0, &tid));

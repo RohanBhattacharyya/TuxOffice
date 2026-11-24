@@ -28,6 +28,7 @@
 #undef SW_MAX /* Also defined in winuser.rh */
 #include <math.h>
 #include <stdlib.h>
+#include <time.h>
 
 #define OEMRESOURCE
 
@@ -108,6 +109,8 @@ static const struct
     {ole32_cursors, {'o','l','e','3','2','.','d','l','l',0}},
     {riched20_cursors, {'r','i','c','h','e','d','2','0','.','d','l','l',0}}
 };
+
+static void stop_inertia(void);
 
 static HWND wayland_pointer_get_focused_hwnd(void)
 {
@@ -233,6 +236,7 @@ static void pointer_handle_leave(void *data, struct wl_pointer *wl_pointer,
 
     TRACE("hwnd=%p\n", wl_surface_get_user_data(wl_surface));
 
+    stop_inertia();
     pthread_mutex_lock(&pointer->mutex);
     pointer->focused_hwnd = NULL;
     pointer->enter_serial = 0;
@@ -248,6 +252,7 @@ static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
     HWND hwnd;
 
     InterlockedExchange(&process_wayland.input_serial, serial);
+    stop_inertia();
 
     if (!(hwnd = wayland_pointer_get_focused_hwnd())) return;
 
@@ -304,7 +309,49 @@ static struct
     double value[2];
     int steps[2];         /* in 1/120ths of a step */
     double remainder[2];  /* wheel units not sent yet, continuous sources only */
+    uint32_t last_time;   /* of the last finger scroll frame, in ms */
+    uint32_t time;        /* of the current frame's axis events */
+    /* The finger's recent movement, to measure its speed when it lifts. */
+    struct { uint32_t time; double units[2]; } samples[16];
+    unsigned int sample_count, sample_next;
 } scroll;
+
+#define INERTIA_WINDOW_MS 100
+
+/* Windows continues a precision touchpad's scroll after the fingers lift, slowing
+ * it down; Wayland leaves that to clients. Do it here: when a finger scroll stops
+ * while moving fast enough, a thread keeps scrolling with exponentially decaying
+ * speed. A new scroll, a button or the pointer leaving the window ends it. */
+#define INERTIA_MIN_START 600.0   /* wheel units a second, about 300 pixels a second */
+#define INERTIA_MIN_SPEED 40.0
+#define INERTIA_TIME_CONSTANT 0.3 /* seconds */
+#define INERTIA_INTERVAL_MS 8
+
+static pthread_mutex_t inertia_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t inertia_cond = PTHREAD_COND_INITIALIZER;
+static double inertia_velocity[2];
+static unsigned int inertia_generation;
+
+static void stop_inertia(void)
+{
+    pthread_mutex_lock(&inertia_mutex);
+    if (inertia_velocity[0] || inertia_velocity[1])
+    {
+        inertia_velocity[0] = inertia_velocity[1] = 0;
+        inertia_generation++;
+    }
+    pthread_mutex_unlock(&inertia_mutex);
+}
+
+static void start_inertia(const double velocity[2])
+{
+    pthread_mutex_lock(&inertia_mutex);
+    inertia_velocity[0] = velocity[0];
+    inertia_velocity[1] = velocity[1];
+    inertia_generation++;
+    pthread_cond_signal(&inertia_cond);
+    pthread_mutex_unlock(&inertia_mutex);
+}
 
 static void send_scroll(uint32_t axis, int delta)
 {
@@ -332,10 +379,32 @@ static void send_scroll(uint32_t axis, int delta)
 
 static void flush_scroll(void)
 {
+    /* Touchpads send finger; some compositors send continuous for them, or no source. */
+    BOOL finger = !scroll.source_set || scroll.source == WL_POINTER_AXIS_SOURCE_FINGER ||
+                  scroll.source == WL_POINTER_AXIS_SOURCE_CONTINUOUS;
+    BOOL stopped = FALSE, moved = FALSE;
     uint32_t axis;
+
+    if (scroll.has_value[0] || scroll.has_value[1] || scroll.has_steps[0] || scroll.has_steps[1])
+        stop_inertia();
+
+    if (finger && !scroll.has_steps[0] && !scroll.has_steps[1] &&
+        (scroll.has_value[0] || scroll.has_value[1]))
+    {
+        unsigned int i = scroll.sample_next;
+
+        if (scroll.time - scroll.last_time > INERTIA_WINDOW_MS) scroll.sample_count = 0;
+        scroll.samples[i].time = scroll.time;
+        for (axis = 0; axis < 2; axis++)
+            scroll.samples[i].units[axis] = scroll.value[axis] * SCROLL_UNITS_PER_PIXEL;
+        scroll.sample_next = (i + 1) % ARRAY_SIZE(scroll.samples);
+        if (scroll.sample_count < ARRAY_SIZE(scroll.samples)) scroll.sample_count++;
+        moved = TRUE;
+    }
 
     for (axis = 0; axis < 2; axis++)
     {
+        if (scroll.stop[axis]) stopped = TRUE;
         if (scroll.has_steps[axis])
         {
             scroll.remainder[axis] = 0;
@@ -355,13 +424,104 @@ static void flush_scroll(void)
         scroll.value[axis] = 0;
         scroll.steps[axis] = 0;
     }
+    if (moved) scroll.last_time = scroll.time;
+    if (stopped)
+    {
+        /* The speed is the distance moved in the last moments before the fingers
+         * lifted, over the time from the first of those moves to the lift: frames
+         * can arrive bunched, so the time between two of them says little. */
+        double velocity[2] = {0}, span;
+        uint32_t first = scroll.time;
+        unsigned int i, n = 0;
+
+        for (i = 0; i < scroll.sample_count; i++)
+        {
+            unsigned int index = (scroll.sample_next + ARRAY_SIZE(scroll.samples) - 1 - i) % ARRAY_SIZE(scroll.samples);
+            if (scroll.time - scroll.samples[index].time > INERTIA_WINDOW_MS) break;
+            first = scroll.samples[index].time;
+            velocity[0] += scroll.samples[index].units[0];
+            velocity[1] += scroll.samples[index].units[1];
+            n++;
+        }
+        /* The first move is the distance covered before its time: count the time
+         * before it as one frame's worth. */
+        span = (scroll.time - first) + (n ? (scroll.time - first) / (double)n : 0);
+        if (n >= 2 && span >= 10)
+        {
+            velocity[0] *= 1000.0 / span;
+            velocity[1] *= 1000.0 / span;
+        }
+        else velocity[0] = velocity[1] = 0;
+        TRACE("scroll stopped: %u moves over %.0f ms, velocity %.0f,%.0f\n", n, span, velocity[0], velocity[1]);
+        if (hypot(velocity[0], velocity[1]) >= INERTIA_MIN_START) start_inertia(velocity);
+        scroll.sample_count = 0;
+    }
     scroll.source_set = FALSE;
+}
+
+NTSTATUS wayland_scroll_inertia(void *arg)
+{
+    for (;;)
+    {
+        double velocity[2], remainder[2] = {0}, decay;
+        struct timespec now, last, delay = {0, INERTIA_INTERVAL_MS * 1000000};
+        unsigned int generation, axis;
+
+        pthread_mutex_lock(&inertia_mutex);
+        while (!inertia_velocity[0] && !inertia_velocity[1])
+            pthread_cond_wait(&inertia_cond, &inertia_mutex);
+        generation = inertia_generation;
+        velocity[0] = inertia_velocity[0];
+        velocity[1] = inertia_velocity[1];
+        pthread_mutex_unlock(&inertia_mutex);
+
+        clock_gettime(CLOCK_MONOTONIC, &last);
+        for (;;)
+        {
+            double dt;
+
+            nanosleep(&delay, NULL);
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            dt = (now.tv_sec - last.tv_sec) + (now.tv_nsec - last.tv_nsec) / 1e9;
+            last = now;
+            decay = exp(-dt / INERTIA_TIME_CONSTANT);
+
+            pthread_mutex_lock(&inertia_mutex);
+            if (generation != inertia_generation)
+            {
+                pthread_mutex_unlock(&inertia_mutex);
+                break;
+            }
+            pthread_mutex_unlock(&inertia_mutex);
+
+            for (axis = 0; axis < 2; axis++)
+            {
+                /* The distance covered while slowing from v to v * decay. */
+                double units = remainder[axis] + velocity[axis] * INERTIA_TIME_CONSTANT * (1 - decay);
+                int delta = (int)units;
+
+                remainder[axis] = units - delta;
+                velocity[axis] *= decay;
+                send_scroll(axis, delta);
+            }
+            if (hypot(velocity[0], velocity[1]) < INERTIA_MIN_SPEED)
+            {
+                pthread_mutex_lock(&inertia_mutex);
+                if (generation == inertia_generation)
+                    inertia_velocity[0] = inertia_velocity[1] = 0;
+                pthread_mutex_unlock(&inertia_mutex);
+                break;
+            }
+        }
+    }
+    return 0;
 }
 
 static void pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
                                 uint32_t time, uint32_t axis, wl_fixed_t value)
 {
     if (axis > WL_POINTER_AXIS_HORIZONTAL_SCROLL) return;
+    scroll.time = time;
     scroll.has_value[axis] = TRUE;
     scroll.value[axis] += wl_fixed_to_double(value);
     /* Before version 5 there are no frames: each event stands alone. */
@@ -384,7 +544,10 @@ static void pointer_handle_axis_stop(void *data, struct wl_pointer *wl_pointer,
                                      uint32_t time, uint32_t axis)
 {
     if (axis > WL_POINTER_AXIS_HORIZONTAL_SCROLL) return;
+    scroll.time = time;
     scroll.stop[axis] = TRUE;
+    /* Some compositors end a scroll with a stop alone, in a frame of its own. */
+    if (wl_pointer_get_version(wl_pointer) < WL_POINTER_FRAME_SINCE_VERSION) flush_scroll();
 }
 
 static void pointer_handle_axis_discrete(void *data, struct wl_pointer *wl_pointer,

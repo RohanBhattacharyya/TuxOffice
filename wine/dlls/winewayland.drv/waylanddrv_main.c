@@ -127,6 +127,7 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
     waylanddrv_unix_init,
     waylanddrv_unix_read_events,
     waylanddrv_unix_init_clipboard,
+    wayland_scroll_inertia,
 };
 
 C_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == waylanddrv_unix_func_count);
@@ -138,6 +139,7 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
     waylanddrv_unix_init,
     waylanddrv_unix_read_events,
     waylanddrv_unix_init_clipboard,
+    wayland_scroll_inertia,
 };
 
 C_ASSERT(ARRAYSIZE(__wine_unix_call_wow64_funcs) == waylanddrv_unix_func_count);
