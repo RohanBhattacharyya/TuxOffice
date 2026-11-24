@@ -1285,6 +1285,11 @@ NTSTATUS sdl_bus_stop(void *args)
 
 #else
 
+BOOL is_sdl_ignored_device(WORD vid, WORD pid)
+{
+    return FALSE;
+}
+
 NTSTATUS sdl_bus_init(void *args)
 {
     WARN("SDL support not compiled in!\n");
