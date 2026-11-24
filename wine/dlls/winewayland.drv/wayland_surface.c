@@ -801,6 +801,9 @@ void wayland_surface_attach_shm(struct wayland_surface *surface,
 
     win_width = surface->window.rect.right - surface->window.rect.left;
     win_height = surface->window.rect.bottom - surface->window.rect.top;
+    /* Show the window's pixels one to one, see wayland_surface_size_from_window(). */
+    win_width = wayland_surface_device_size(surface, win_width);
+    win_height = wayland_surface_device_size(surface, win_height);
 
     /* It is an error to specify a wp_viewporter source rectangle that
      * is partially or completely outside of the wl_buffe.
@@ -1183,8 +1186,8 @@ BOOL wayland_surface_reconfigure(struct wayland_surface *surface)
     win_width = surface->window.rect.right - surface->window.rect.left;
     win_height = surface->window.rect.bottom - surface->window.rect.top;
 
-    wayland_surface_coords_from_window(surface, win_width, win_height,
-                                       &width, &height);
+    width = wayland_surface_size_from_window(surface, win_width);
+    height = wayland_surface_size_from_window(surface, win_height);
 
     TRACE("hwnd=%p window=%dx%d,%#x processing=%dx%d,%#x current=%dx%d,%#x\n",
           surface->hwnd, win_width, win_height, window->state,
@@ -1448,6 +1451,34 @@ void wayland_surface_coords_from_window(struct wayland_surface *surface,
 {
     *surface_x = round(window_x / surface->window.scale);
     *surface_y = round(window_y / surface->window.scale);
+}
+
+/**********************************************************************
+ *          wayland_surface_size_from_window
+ *
+ * The surface size for a window size. The compositor shows a surface at the
+ * nearest device pixels, so under a fractional scale some window sizes have
+ * no surface size that shows them exactly (one in five at 125%). Rounding
+ * then showed the window a pixel larger than its image, and the compositor
+ * filled that pixel from the buffer past the image (a white line under Word's
+ * dialogs) or stretched the image. Take the exact size, or else the next
+ * smaller one, which hides the window's last row or column instead.
+ */
+int wayland_surface_size_from_window(struct wayland_surface *surface, int window)
+{
+    double scale = surface->window.scale;
+    int size = floor(window / scale) + 1;
+
+    if (window <= 0) return 0;
+    while (size > 1 && (int)round(size * scale) > window) size--;
+    return size;
+}
+
+/* The window pixels a surface of the size above shows. */
+int wayland_surface_device_size(struct wayland_surface *surface, int window)
+{
+    if (window <= 0) return window;
+    return min(window, (int)round(wayland_surface_size_from_window(surface, window) * surface->window.scale));
 }
 
 /**********************************************************************

@@ -355,6 +355,8 @@ BOOL wayland_surface_config_is_compatible(struct wayland_surface_config *conf,
 void wayland_surface_coords_from_window(struct wayland_surface *surface,
                                         int window_x, int window_y,
                                         int *surface_x, int *surface_y);
+int wayland_surface_size_from_window(struct wayland_surface *surface, int window);
+int wayland_surface_device_size(struct wayland_surface *surface, int window);
 void wayland_surface_coords_to_window(struct wayland_surface *surface,
                                       double surface_x, double surface_y,
                                       int *window_x, int *window_y);
