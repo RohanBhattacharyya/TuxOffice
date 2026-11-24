@@ -94,6 +94,48 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   apply the repair; it is also installed in the regular prefix.
 - Removed tracked `wine/autom4te.cache` output and ignored that directory.
 
+## 24 November, later: browser view, callouts, capture devices
+
+Committed after 0.1.5; checked in the isolated session.
+
+- **"View in a web browser" said "Invalid Handle" (Outlook).** Outlook saves the
+  mail as a Single File Web Page (`.mht`) and shell-executes it; `mhtmlfile` had no
+  open command, so Wine tried to run the file. `lib/webarchive.py` unpacks the archive
+  into a private folder under `XDG_RUNTIME_DIR` (references to its parts rewritten, a
+  content policy that blocks scripts and forms) and opens it with `xdg-open`; the
+  launcher registers it (`web-archive`, in HKLM: Wine's shell does not read per-user
+  classes) and `PREFIX_REVISION` 2 applies it to existing prefixes.
+  `tests/webarchive-test.py`.
+- **The runner update could still hang**: 0.1.3's `COMPlus_NoGuiFromShim` covered
+  `run` and `wine` only; `repair` waited over 10 minutes on the .NET dialog. Every
+  command now runs the update first (`runner_env`).
+- **White bands around teaching callouts** ("Relaxed or tighter layout?",
+  "Introducing Dark Mode"). A callout's window region trims an 11 pixel strip and
+  shapes its beak; its DirectUI child draws the whole client area on a GPU surface,
+  which Windows clips to the region and a Wayland subsurface does not. winewayland
+  now crops GPU children to the region's largest rectangle: the bands are gone (9 px
+  of white before), the beak with them. Outlook's main window has a full-window
+  region and is not cropped.
+- **Capture devices for PowerPoint.** `mf` makes microphone sources (live, mix format
+  and 16-bit PCM) and implements `MFCreateDeviceSource(Activate)`; winegstreamer lists
+  cameras through GStreamer's device monitor and makes camera sources (each size,
+  largest first, up to 30 fps, NV12/YUY2/RGB32; newest frames kept, older dropped with
+  a discontinuity). `tests/capture-fixture.sh` starts a private PipeWire with no
+  hardware, a tone microphone and PipeWire's test pattern camera; `tests/mf-capture.c`
+  passes 34 of 34 against it. PowerPoint's Cameo opens the camera and pulls frames.
+- **Open: Cameo shows no picture.** PowerPoint draws the live feed through a
+  composition swapchain: DXVK's `CreateSwapChainForComposition` and our
+  `CreateCompositionSurfaceForSwapChain` are both unimplemented (746 failed calls in a
+  short run). Needs an offscreen swapchain in DXVK that exposes its last presented
+  frame, and a composition surface drawing it.
+- **Open: some mail images show a red X.** Office fetches linked pictures through its
+  own WinHTTP stack and adds an empty `Authorization: Bearer` with `Accept-Auth` to
+  every image request; hosts such as raw.githubusercontent.com (404) and S3 (400)
+  refuse that, while Google ignores it. Wine's zone (Internet, 3) and credential policy
+  (0x20000) for those URLs match Windows. Since S3-hosted newsletter images display on
+  Windows, Windows either does not send this probe or retries without it; which Office
+  module adds the header, and on what condition, is not found yet.
+
 ## 24 November: personal account sign-in, and the runner update that never finished
 
 Released in 0.1.3 (scopes, update hang) and 0.1.4 (client_info). Outlook now signs in to
