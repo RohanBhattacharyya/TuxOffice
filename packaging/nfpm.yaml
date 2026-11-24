@@ -57,6 +57,8 @@ overrides:
       - libpulse0
       - libx11-6
       - libxext6
+      - gstreamer1.0-plugins-base
+      - gstreamer1.0-plugins-good
   rpm:
     # File and library dependencies resolve on Fedora and openSUSE alike.
     depends:
@@ -82,6 +84,8 @@ overrides:
     recommends:
       - xdg-desktop-portal
       - libpulse.so.0()(64bit)
+      - libgstreamer-1.0.so.0()(64bit)
+      - libgstapp-1.0.so.0()(64bit)
   archlinux:
     depends:
       - bash
