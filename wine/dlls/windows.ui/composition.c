@@ -66,6 +66,12 @@ struct compositor_controller;
 struct nine_grid_brush_iface;
 
 static void compositor_notify_commit_needed( struct compositor *compositor );
+static BOOL running_animation_start( ICompositor *compositor, IUnknown *owner,
+        ICompositionAnimation *animation, FLOAT *field, boolean *flag, UINT components );
+static void running_animations_cancel( const void *field, SIZE_T size );
+static void running_animations_static_value( const void *field, SIZE_T size, void *out );
+static BOOL running_animations_tick(void);
+static void animation_timer_arm(void);
 static inline struct compositor *impl_from_ICompositor( ICompositor *iface );
 static HRESULT completed_action_create( IAsyncAction **operation );
 
@@ -1387,12 +1393,17 @@ static HRESULT WINAPI inset_clip_GetTrustLevel( IInsetClip *iface, TrustLevel *l
     static HRESULT WINAPI inset_clip_get_##name( IInsetClip *iface, FLOAT *value ) \
     { \
         if (!value) return E_POINTER; \
-        *value = impl_from_IInsetClip( iface )->field; \
+        running_animations_static_value( &impl_from_IInsetClip( iface )->field, sizeof(*value), value ); \
         return S_OK; \
     } \
     static HRESULT WINAPI inset_clip_put_##name( IInsetClip *iface, FLOAT value ) \
     { \
-        impl_from_IInsetClip( iface )->field = value; \
+        struct inset_clip *impl = impl_from_IInsetClip( iface ); \
+        TRACE( "iface %p, value %f.\n", iface, value ); \
+        running_animations_cancel( &impl->field, sizeof(impl->field) ); \
+        if (impl->field == value) return S_OK; \
+        impl->field = value; \
+        compositor_notify_commit_needed( impl_from_ICompositor( impl->compositor ) ); \
         return S_OK; \
     }
 
@@ -1532,17 +1543,59 @@ static HRESULT WINAPI inset_clip_composition_object_get_Properties( IComposition
     return S_OK;
 }
 
+/* Inset animations run over time like those on visuals; ones that cannot go
+ * straight to their final key frame. Ignoring them left Word's clips at whatever
+ * insets they had before, so content meant to be clipped away stayed on screen. */
 static HRESULT WINAPI inset_clip_composition_object_StartAnimation( ICompositionObject *iface,
         HSTRING name, ICompositionAnimation *animation )
 {
+    struct inset_clip *impl = inset_clip_from_ICompositionObject( iface );
+    const WCHAR *property;
+    FLOAT value, *field;
+
     TRACE( "iface %p, name %s, animation %p.\n", iface, debugstr_hstring( name ), animation );
+    if (!name || !animation) return E_INVALIDARG;
+    property = WindowsGetStringRawBuffer( name, NULL );
+    if (!wcscmp( property, L"LeftInset" )) field = &impl->left;
+    else if (!wcscmp( property, L"TopInset" )) field = &impl->top;
+    else if (!wcscmp( property, L"RightInset" )) field = &impl->right;
+    else if (!wcscmp( property, L"BottomInset" )) field = &impl->bottom;
+    else
+    {
+        FIXME( "unsupported property %s.\n", debugstr_w( property ) );
+        return S_OK;
+    }
+    if (running_animation_start( impl->compositor, (IUnknown *)&impl->IInsetClip_iface, animation,
+            field, NULL, 1 ))
+    {
+        compositor_notify_commit_needed( impl_from_ICompositor( impl->compositor ) );
+        return S_OK;
+    }
+    if (FAILED(scalar_key_frame_animation_get_final_value( animation, &value )))
+    {
+        FIXME( "unsupported animation for %s.\n", debugstr_w( property ) );
+        return S_OK;
+    }
+    TRACE( "%s -> %f.\n", debugstr_w( property ), value );
+    running_animations_cancel( field, sizeof(*field) );
+    *field = value;
+    compositor_notify_commit_needed( impl_from_ICompositor( impl->compositor ) );
     return S_OK;
 }
 
 static HRESULT WINAPI inset_clip_composition_object_StopAnimation( ICompositionObject *iface,
         HSTRING name )
 {
+    struct inset_clip *impl = inset_clip_from_ICompositionObject( iface );
+    const WCHAR *property;
+
     TRACE( "iface %p, name %s.\n", iface, debugstr_hstring( name ) );
+    if (!name) return E_INVALIDARG;
+    property = WindowsGetStringRawBuffer( name, NULL );
+    if (!wcscmp( property, L"LeftInset" )) running_animations_cancel( &impl->left, sizeof(FLOAT) );
+    else if (!wcscmp( property, L"TopInset" )) running_animations_cancel( &impl->top, sizeof(FLOAT) );
+    else if (!wcscmp( property, L"RightInset" )) running_animations_cancel( &impl->right, sizeof(FLOAT) );
+    else if (!wcscmp( property, L"BottomInset" )) running_animations_cancel( &impl->bottom, sizeof(FLOAT) );
     return S_OK;
 }
 
@@ -1962,10 +2015,28 @@ static UINT visual_component_index( const WCHAR *name )
     return i;
 }
 
+static HRESULT sprite_visual_start_animation( struct sprite_visual *impl, HSTRING name,
+        ICompositionAnimation *animation );
+
+/* Animations change what the visual shows just as property setters do, so they
+ * need a commit too. Office blinks and moves its text caret only with Opacity and
+ * Offset animations: without this the caret was drawn in whatever state the last
+ * unrelated redraw caught, often hidden, until the next keystroke repainted it. */
 static HRESULT WINAPI sprite_visual_composition_object_StartAnimation( ICompositionObject *iface,
         HSTRING name, ICompositionAnimation *animation )
 {
     struct sprite_visual *impl = sprite_visual_from_ICompositionObject( iface );
+    HRESULT hr;
+
+    TRACE( "iface %p, name %s, animation %p.\n", iface, debugstr_hstring( name ), animation );
+    hr = sprite_visual_start_animation( impl, name, animation );
+    if (SUCCEEDED(hr)) compositor_notify_commit_needed( impl_from_ICompositor( impl->compositor ) );
+    return hr;
+}
+
+static HRESULT sprite_visual_start_animation( struct sprite_visual *impl, HSTRING name,
+        ICompositionAnimation *animation )
+{
     const WCHAR *property;
     IExpressionAnimation **binding = NULL, *expression, *copy;
     HRESULT hr;
@@ -1974,7 +2045,6 @@ static HRESULT WINAPI sprite_visual_composition_object_StartAnimation( IComposit
     FLOAT value;
     UINT component;
 
-    TRACE( "iface %p, name %s, animation %p.\n", iface, debugstr_hstring( name ), animation );
     if (!name || !animation) return E_INVALIDARG;
     property = WindowsGetStringRawBuffer( name, NULL );
     component = visual_component_index( property );
@@ -1989,10 +2059,18 @@ static HRESULT WINAPI sprite_visual_composition_object_StartAnimation( IComposit
         }
         else
         {
-            if (FAILED(hr = scalar_key_frame_animation_get_final_value( animation, &value ))) return hr;
+            FLOAT *field = (FLOAT *)((BYTE *)impl + visual_components[component].offset);
+
             copy = NULL;
-            *(FLOAT *)((BYTE *)impl + visual_components[component].offset) = value;
+            if (!running_animation_start( impl->compositor, (IUnknown *)&impl->IVisual_iface,
+                    animation, field, NULL, 1 ))
+            {
+                if (FAILED(hr = scalar_key_frame_animation_get_final_value( animation, &value ))) return hr;
+                running_animations_cancel( field, sizeof(*field) );
+                *field = value;
+            }
         }
+        if (copy) running_animations_cancel( (BYTE *)impl + visual_components[component].offset, sizeof(FLOAT) );
         binding = &impl->component_expressions[component];
         if (*binding) IExpressionAnimation_Release( *binding );
         *binding = copy;
@@ -2016,18 +2094,41 @@ static HRESULT WINAPI sprite_visual_composition_object_StartAnimation( IComposit
         }
     }
 
-    if (!wcscmp( property, L"Opacity" ) &&
-            SUCCEEDED(scalar_key_frame_animation_get_final_value( animation, &value )))
-        impl->opacity = value;
-    else if (!wcscmp( property, L"IsVisible" ) &&
-            SUCCEEDED(boolean_key_frame_animation_get_final_value( animation, &visible )))
-        impl->visible = visible;
-    else if (SUCCEEDED(vector3_key_frame_animation_get_final_value( animation, &vector )))
+    if (!wcscmp( property, L"Opacity" ))
     {
-        if (!wcscmp( property, L"Offset" )) impl->offset = vector;
-        else if (!wcscmp( property, L"Scale" )) impl->scale = vector;
-        else if (!wcscmp( property, L"CenterPoint" )) impl->center_point = vector;
-        else if (!wcscmp( property, L"RotationAxis" )) impl->rotation_axis = vector;
+        if (running_animation_start( impl->compositor, (IUnknown *)&impl->IVisual_iface, animation,
+                &impl->opacity, NULL, 1 )) return S_OK;
+        if (SUCCEEDED(scalar_key_frame_animation_get_final_value( animation, &value )))
+        {
+            running_animations_cancel( &impl->opacity, sizeof(impl->opacity) );
+            impl->opacity = value;
+        }
+    }
+    else if (!wcscmp( property, L"IsVisible" ))
+    {
+        if (running_animation_start( impl->compositor, (IUnknown *)&impl->IVisual_iface, animation,
+                NULL, &impl->visible, 1 )) return S_OK;
+        if (SUCCEEDED(boolean_key_frame_animation_get_final_value( animation, &visible )))
+        {
+            running_animations_cancel( &impl->visible, sizeof(impl->visible) );
+            impl->visible = visible;
+        }
+    }
+    else
+    {
+        struct Vector3 *target = NULL;
+
+        if (!wcscmp( property, L"Offset" )) target = &impl->offset;
+        else if (!wcscmp( property, L"Scale" )) target = &impl->scale;
+        else if (!wcscmp( property, L"CenterPoint" )) target = &impl->center_point;
+        else if (!wcscmp( property, L"RotationAxis" )) target = &impl->rotation_axis;
+        if (target && running_animation_start( impl->compositor, (IUnknown *)&impl->IVisual_iface,
+                animation, &target->X, NULL, 3 )) return S_OK;
+        if (target && SUCCEEDED(vector3_key_frame_animation_get_final_value( animation, &vector )))
+        {
+            running_animations_cancel( target, sizeof(*target) );
+            *target = vector;
+        }
     }
     return S_OK;
 }
@@ -2044,6 +2145,14 @@ static HRESULT WINAPI sprite_visual_composition_object_StopAnimation( ICompositi
     if (!name) return E_INVALIDARG;
     property = WindowsGetStringRawBuffer( name, NULL );
     component = visual_component_index( property );
+    if (component < ARRAY_SIZE(visual_components))
+        running_animations_cancel( (BYTE *)impl + visual_components[component].offset, sizeof(FLOAT) );
+    else if (!wcscmp( property, L"Opacity" )) running_animations_cancel( &impl->opacity, sizeof(impl->opacity) );
+    else if (!wcscmp( property, L"IsVisible" )) running_animations_cancel( &impl->visible, sizeof(impl->visible) );
+    else if (!wcscmp( property, L"Offset" )) running_animations_cancel( &impl->offset, sizeof(impl->offset) );
+    else if (!wcscmp( property, L"Scale" )) running_animations_cancel( &impl->scale, sizeof(impl->scale) );
+    else if (!wcscmp( property, L"CenterPoint" )) running_animations_cancel( &impl->center_point, sizeof(impl->center_point) );
+    else if (!wcscmp( property, L"RotationAxis" )) running_animations_cancel( &impl->rotation_axis, sizeof(impl->rotation_axis) );
     if (component < ARRAY_SIZE(visual_components)) binding = &impl->component_expressions[component];
     else if (!wcscmp( property, L"Scale" )) binding = &impl->scale_expression;
     else if (!wcscmp( property, L"Offset" )) binding = &impl->offset_expression;
@@ -2222,13 +2331,14 @@ static BOOL visual_property_equal(const WCHAR *name,const void *a,const void *b,
     static HRESULT WINAPI visual_get_##name( IVisual *iface, type *value ) \
     { \
         if (!value) return E_POINTER; \
-        *value = sprite_visual_from_IVisual( iface )->field; \
+        running_animations_static_value( &sprite_visual_from_IVisual( iface )->field, sizeof(*value), value ); \
         return S_OK; \
     } \
     static HRESULT WINAPI visual_put_##name( IVisual *iface, type value ) \
     { \
         struct sprite_visual *impl = sprite_visual_from_IVisual(iface); \
         HRESULT hr; \
+        running_animations_cancel( &impl->field, sizeof(impl->field) ); \
         if (visual_property_equal(L## #name,&impl->field,&value,sizeof(value))) return S_OK; \
         impl->field = value; \
         TRACE_(uiperf)( "visual %p property %s tick %llu.\n", iface, #name, GetTickCount64() ); \
@@ -3416,6 +3526,10 @@ static HRESULT surface_brush_create( ICompositor *compositor, ICompositionSurfac
     impl->surface = surface;
     impl->horizontal_alignment_ratio = 0.5f;
     impl->vertical_alignment_ratio = 0.5f;
+    /* Windows filters stretched surfaces unless told otherwise. Word never sets the
+     * mode: its placeholder pages, page images a tenth of the page's size, came out
+     * as hard-edged blocks over the text instead of a soft preview. */
+    impl->interpolation_mode = CompositionBitmapInterpolationMode_Linear;
     impl->ref = 1;
     InitializeCriticalSection( &impl->lock );
     ICompositor_AddRef( compositor );
@@ -5137,6 +5251,19 @@ static const struct animation2_vtbl animation2_vtbl =
     animation2_put_Target,
 };
 
+#define TIMED_MAX_KEYS 16
+
+enum timed_easing { TIMED_EASING_LINEAR, TIMED_EASING_CUBIC, TIMED_EASING_STEP };
+
+struct timed_key
+{
+    FLOAT key;
+    FLOAT value[3];
+    enum timed_easing easing;
+    struct Vector2 point1, point2;
+    INT32 steps;
+};
+
 struct scalar_key_frame_animation
 {
     IScalarKeyFrameAnimation IScalarKeyFrameAnimation_iface;
@@ -5160,6 +5287,11 @@ struct scalar_key_frame_animation
     boolean has_final_value;
     boolean is_boolean;
     boolean is_vector3;
+    /* Every key frame, sorted, so the animation can run over its duration. Animations
+     * with expression key frames, or more key frames than fit, keep jumping to the end. */
+    struct timed_key keys[TIMED_MAX_KEYS];
+    UINT stored_keys;
+    BOOL untimed;
     LONG ref;
 };
 
@@ -5260,6 +5392,309 @@ HRESULT vector3_key_frame_animation_get_final_value( ICompositionAnimation *anim
     else *value = impl->final_vector;
     IVector3KeyFrameAnimation_Release( vector );
     return hr;
+}
+
+/* Key frame animations run over time, as the system compositor runs them on Windows.
+ *
+ * Office drives many transitions with short animations: the text caret fades in and
+ * out and slides to its new place, scrolled pages slide, placeholder pages fade in
+ * only while their content is late, and old content is hidden a moment after new
+ * content arrives. Jumping straight to the last key frame made those happen at
+ * once: placeholders covered finished text, content disappeared before its
+ * replacement was drawn, and the caret could stay in whatever state a redraw caught.
+ *
+ * A running animation writes the property it targets each time the compositor
+ * commits. While any is running, a thread timer asks the application for the next
+ * commit, so Office keeps committing frames through CommitNeeded as it does for any
+ * change. Scoped batches complete when the animations started inside them end. */
+struct running_animation
+{
+    struct list entry;
+    ICompositor *compositor;
+    IUnknown *owner;
+    FLOAT *field;
+    boolean *flag;
+    UINT components;
+    LONGLONG start, delay, duration;
+    INT32 iterations;
+    FLOAT start_value[3];   /* on screen when it started: where it runs from */
+    FLOAT static_value[3];  /* what reading the property returns meanwhile */
+    struct timed_key keys[TIMED_MAX_KEYS];
+    UINT key_count;
+};
+
+static struct list running_animations = LIST_INIT( running_animations );
+static CRITICAL_SECTION running_animations_cs;
+static CRITICAL_SECTION_DEBUG running_animations_cs_debug =
+{
+    0, 0, &running_animations_cs,
+    { &running_animations_cs_debug.ProcessLocksList, &running_animations_cs_debug.ProcessLocksList },
+      0, 0, { (DWORD_PTR)(__FILE__ ": running_animations_cs") }
+};
+static CRITICAL_SECTION running_animations_cs = { &running_animations_cs_debug, -1, 0, 0, 0, 0 };
+static UINT_PTR animation_timer;
+
+static const ICompositionAnimationVtbl scalar_composition_animation_vtbl;
+static void scoped_batches_extend( LONGLONG end );
+static BOOL scoped_batches_fire_due( LONGLONG now );
+
+static LONGLONG animation_now(void)
+{
+    static LARGE_INTEGER frequency;
+    LARGE_INTEGER counter;
+
+    if (!frequency.QuadPart) QueryPerformanceFrequency( &frequency );
+    QueryPerformanceCounter( &counter );
+    return counter.QuadPart / frequency.QuadPart * 10000000 +
+            counter.QuadPart % frequency.QuadPart * 10000000 / frequency.QuadPart;
+}
+
+static FLOAT cubic_bezier_coordinate( FLOAT t, FLOAT p1, FLOAT p2 )
+{
+    FLOAT u = 1.0f - t;
+    return 3.0f * u * u * t * p1 + 3.0f * u * t * t * p2 + t * t * t;
+}
+
+static FLOAT timed_ease( const struct timed_key *key, FLOAT x )
+{
+    FLOAT low = 0.0f, high = 1.0f, t = x;
+    UINT i;
+
+    switch (key->easing)
+    {
+    case TIMED_EASING_CUBIC:
+        /* Find the curve parameter for this time, then read the progress there. */
+        for (i = 0; i < 24; ++i)
+        {
+            t = (low + high) / 2.0f;
+            if (cubic_bezier_coordinate( t, key->point1.X, key->point2.X ) < x) low = t;
+            else high = t;
+        }
+        return cubic_bezier_coordinate( t, key->point1.Y, key->point2.Y );
+    case TIMED_EASING_STEP:
+        return x >= 1.0f ? 1.0f : floorf( x * key->steps ) / key->steps;
+    default:
+        return x;
+    }
+}
+
+/* The value at progress (0 to 1) through one iteration. Before the first key frame
+ * the animation runs from the property's value when it started. */
+static void running_animation_value( const struct running_animation *animation, FLOAT progress,
+        FLOAT *value )
+{
+    const struct timed_key *next = NULL;
+    FLOAT from_key = 0.0f, eased;
+    const FLOAT *from = animation->start_value;
+    UINT i, c;
+
+    for (i = 0; i < animation->key_count; ++i)
+    {
+        if (animation->keys[i].key > progress) { next = &animation->keys[i]; break; }
+        from_key = animation->keys[i].key;
+        from = animation->keys[i].value;
+    }
+    if (!next || animation->flag || next->key <= from_key)
+    {
+        memcpy( value, from, animation->components * sizeof(*value) );
+        return;
+    }
+    eased = timed_ease( next, (progress - from_key) / (next->key - from_key) );
+    for (c = 0; c < animation->components; ++c)
+        value[c] = from[c] + (next->value[c] - from[c]) * eased;
+}
+
+static void running_animation_write( struct running_animation *animation, const FLOAT *value )
+{
+    if (animation->flag) *animation->flag = value[0] != 0.0f;
+    else memcpy( animation->field, value, animation->components * sizeof(*value) );
+}
+
+static void running_animation_free( struct running_animation *animation )
+{
+    list_remove( &animation->entry );
+    IUnknown_Release( animation->owner );
+    ICompositor_Release( animation->compositor );
+    free( animation );
+}
+
+/* Stop animations of the given property, leaving its current value. Setting a
+ * property, or starting another animation on it, does this. */
+static void running_animations_cancel( const void *field, SIZE_T size )
+{
+    struct running_animation *animation, *next;
+    const BYTE *start = field, *end = start + size;
+
+    EnterCriticalSection( &running_animations_cs );
+    LIST_FOR_EACH_ENTRY_SAFE( animation, next, &running_animations, struct running_animation, entry )
+    {
+        const BYTE *target = animation->flag ? (const BYTE *)animation->flag : (const BYTE *)animation->field;
+        SIZE_T target_size = animation->flag ? sizeof(*animation->flag) : animation->components * sizeof(FLOAT);
+
+        if (target < end && target + target_size > start) running_animation_free( animation );
+    }
+    LeaveCriticalSection( &running_animations_cs );
+}
+
+/* Reading a property while it animates gives its value before the animation, as on
+ * Windows, not the value on screen. Office reads the caret's offset back and adds
+ * the next glyph's advance: reading the animated value put it between pixels. */
+static void running_animations_static_value( const void *field, SIZE_T size, void *out )
+{
+    struct running_animation *animation;
+    const BYTE *start = field, *end = start + size;
+    UINT c;
+
+    EnterCriticalSection( &running_animations_cs );
+    memcpy( out, field, size );
+    LIST_FOR_EACH_ENTRY( animation, &running_animations, struct running_animation, entry )
+    {
+        if (animation->flag)
+        {
+            const BYTE *target = (const BYTE *)animation->flag;
+            if (target >= start && target < end)
+                *((boolean *)out + (target - start) / sizeof(boolean)) = animation->static_value[0] != 0.0f;
+            continue;
+        }
+        for (c = 0; c < animation->components; ++c)
+        {
+            const BYTE *target = (const BYTE *)(animation->field + c);
+            if (target >= start && target + sizeof(FLOAT) <= end)
+                memcpy( (BYTE *)out + (target - start), &animation->static_value[c], sizeof(FLOAT) );
+        }
+    }
+    LeaveCriticalSection( &running_animations_cs );
+}
+
+/* Write every running animation's current value; drop the finished ones. Returns
+ * whether any are still running. */
+static BOOL running_animations_tick(void)
+{
+    struct running_animation *animation, *next;
+    LONGLONG now = animation_now(), elapsed;
+    FLOAT value[3], progress;
+    BOOL running;
+
+    EnterCriticalSection( &running_animations_cs );
+    LIST_FOR_EACH_ENTRY_SAFE( animation, next, &running_animations, struct running_animation, entry )
+    {
+        elapsed = now - animation->start - animation->delay;
+        if (elapsed < 0) continue;
+        if (animation->iterations > 0 && elapsed >= animation->duration * animation->iterations)
+        {
+            running_animation_value( animation, 1.0f, value );
+            running_animation_write( animation, value );
+            running_animation_free( animation );
+            continue;
+        }
+        progress = (FLOAT)(elapsed % animation->duration) / animation->duration;
+        running_animation_value( animation, progress, value );
+        running_animation_write( animation, value );
+    }
+    running = !list_empty( &running_animations );
+    LeaveCriticalSection( &running_animations_cs );
+    return running;
+}
+
+static void CALLBACK animation_timer_proc( HWND hwnd, UINT msg, UINT_PTR id, DWORD time );
+
+/* Called on the thread that commits, which pumps messages. */
+static void animation_timer_arm(void)
+{
+    EnterCriticalSection( &running_animations_cs );
+    if (!animation_timer) animation_timer = SetTimer( NULL, 0, 15, animation_timer_proc );
+    LeaveCriticalSection( &running_animations_cs );
+}
+
+static void CALLBACK animation_timer_proc( HWND hwnd, UINT msg, UINT_PTR id, DWORD time )
+{
+    struct running_animation *animation;
+    ICompositor *compositors[16];
+    UINT count = 0, i;
+    BOOL batches;
+
+    KillTimer( NULL, id );
+    EnterCriticalSection( &running_animations_cs );
+    if (animation_timer == id) animation_timer = 0;
+    LIST_FOR_EACH_ENTRY( animation, &running_animations, struct running_animation, entry )
+    {
+        for (i = 0; i < count; ++i) if (compositors[i] == animation->compositor) break;
+        if (i < count || count == ARRAY_SIZE(compositors)) continue;
+        ICompositor_AddRef( (compositors[count++] = animation->compositor) );
+    }
+    LeaveCriticalSection( &running_animations_cs );
+
+    batches = scoped_batches_fire_due( animation_now() );
+    for (i = 0; i < count; ++i)
+    {
+        compositor_notify_commit_needed( impl_from_ICompositor( compositors[i] ) );
+        ICompositor_Release( compositors[i] );
+    }
+    if (batches) animation_timer_arm();
+}
+
+/* Run a key frame animation on a property. Returns FALSE when it should instead go
+ * straight to its final value: expression key frames, no key frames or no duration. */
+static BOOL running_animation_start( ICompositor *compositor, IUnknown *owner,
+        ICompositionAnimation *animation, FLOAT *field, boolean *flag, UINT components )
+{
+    struct scalar_key_frame_animation *impl;
+    struct running_animation *running;
+    ICompositionAnimation *canonical;
+    LONGLONG end;
+    UINT i;
+
+    if (FAILED(ICompositionAnimation_QueryInterface( animation, &IID_ICompositionAnimation,
+            (void **)&canonical ))) return FALSE;
+    ICompositionAnimation_Release( canonical );
+    if (canonical->lpVtbl != &scalar_composition_animation_vtbl) return FALSE;
+    impl = scalar_animation_from_ICompositionAnimation( canonical );
+    if (impl->untimed || !impl->stored_keys || impl->duration.Duration <= 0) return FALSE;
+    if (!!flag != !!impl->is_boolean || (components == 3) != !!impl->is_vector3) return FALSE;
+    if (!(running = calloc( 1, sizeof(*running) ))) return FALSE;
+
+    running->compositor = compositor;
+    running->owner = owner;
+    running->field = field;
+    running->flag = flag;
+    running->components = flag ? 1 : components;
+    running->start = animation_now();
+    running->delay = max( 0, impl->delay_time.Duration );
+    running->duration = impl->duration.Duration;
+    running->iterations = impl->iteration_behavior == 1 /* Forever */ ? 0 : max( 1, impl->iteration_count );
+    if (flag)
+    {
+        boolean value;
+        running->start_value[0] = *flag ? 1.0f : 0.0f;
+        running_animations_static_value( flag, sizeof(*flag), &value );
+        running->static_value[0] = value ? 1.0f : 0.0f;
+    }
+    else
+    {
+        memcpy( running->start_value, field, components * sizeof(FLOAT) );
+        running_animations_static_value( field, components * sizeof(FLOAT), running->static_value );
+    }
+    running->key_count = impl->stored_keys;
+    memcpy( running->keys, impl->keys, impl->stored_keys * sizeof(*impl->keys) );
+    for (i = 0; i < running->key_count; ++i)
+        if (running->keys[i].key > 1.0f) running->keys[i].key = 1.0f;
+
+    running_animations_cancel( flag ? (void *)flag : (void *)field,
+                               flag ? sizeof(*flag) : components * sizeof(FLOAT) );
+    ICompositor_AddRef( compositor );
+    IUnknown_AddRef( owner );
+    EnterCriticalSection( &running_animations_cs );
+    list_add_tail( &running_animations, &running->entry );
+    LeaveCriticalSection( &running_animations_cs );
+    if (running->iterations)
+    {
+        end = running->start + running->delay + running->duration * running->iterations;
+        scoped_batches_extend( end );
+    }
+    TRACE( "animation %p on %p: %u keys, delay %s, duration %s, iterations %d.\n", animation, owner,
+           running->key_count, wine_dbgstr_longlong( running->delay ),
+           wine_dbgstr_longlong( running->duration ), running->iterations );
+    return TRUE;
 }
 
 static inline struct scalar_key_frame_animation *scalar_animation_from_ICompositionAnimationBase(
@@ -5410,6 +5845,35 @@ static HRESULT WINAPI scalar_key_frame_animation_GetTrustLevel( IScalarKeyFrameA
     return scalar_key_frame_animation_get_trust_level( level );
 }
 
+static void easing_function_describe( ICompositionEasingFunction *function, struct timed_key *entry );
+
+static void key_frame_animation_store( struct scalar_key_frame_animation *impl, FLOAT key,
+        const FLOAT *value, UINT count, ICompositionEasingFunction *function )
+{
+    struct timed_key entry = {.key = key};
+    UINT i;
+
+    memcpy( entry.value, value, count * sizeof(*value) );
+    if (function) easing_function_describe( function, &entry );
+    for (i = 0; i < impl->stored_keys; ++i)
+    {
+        if (impl->keys[i].key == key)
+        {
+            impl->keys[i] = entry;
+            return;
+        }
+        if (impl->keys[i].key > key) break;
+    }
+    if (impl->stored_keys == TIMED_MAX_KEYS)
+    {
+        impl->untimed = TRUE;
+        return;
+    }
+    memmove( impl->keys + i + 1, impl->keys + i, (impl->stored_keys - i) * sizeof(*impl->keys) );
+    impl->keys[i] = entry;
+    ++impl->stored_keys;
+}
+
 static HRESULT WINAPI scalar_key_frame_animation_InsertKeyFrame( IScalarKeyFrameAnimation *iface,
         FLOAT key, FLOAT value )
 {
@@ -5417,6 +5881,7 @@ static HRESULT WINAPI scalar_key_frame_animation_InsertKeyFrame( IScalarKeyFrame
 
     TRACE( "iface %p, key %f, value %f.\n", iface, key, value );
     if (key < 0.0f || key > 1.0f) return E_INVALIDARG;
+    key_frame_animation_store( impl, key, &value, 1, NULL );
     if (!impl->has_final_value || key >= impl->final_key)
     {
         impl->final_key = key;
@@ -5435,6 +5900,7 @@ static HRESULT WINAPI scalar_key_frame_animation_InsertKeyFrameWithEasingFunctio
 
     TRACE( "iface %p, key %f, value %f, function %p.\n", iface, key, value, function );
     if (key < 0.0f || key > 1.0f) return E_INVALIDARG;
+    key_frame_animation_store( impl, key, &value, 1, function );
     if (!impl->has_final_value || key >= impl->final_key)
     {
         impl->final_key = key;
@@ -5499,6 +5965,7 @@ static HRESULT WINAPI vector3_key_frame_animation_InsertKeyFrame( IVector3KeyFra
 
     TRACE( "iface %p, key %f, value {%f, %f, %f}.\n", iface, key, value.X, value.Y, value.Z );
     if (!(key >= 0.0f && key <= 1.0f)) return E_INVALIDARG;
+    key_frame_animation_store( impl, key, &value.X, 3, NULL );
     ++impl->key_frame_count;
     if (!impl->has_final_value || key >= impl->final_key)
     {
@@ -5513,7 +5980,11 @@ static HRESULT WINAPI vector3_key_frame_animation_InsertKeyFrameWithEasingFuncti
         IVector3KeyFrameAnimation *iface, FLOAT key, struct Vector3 value,
         ICompositionEasingFunction *function )
 {
-    return vector3_key_frame_animation_InsertKeyFrame( iface, key, value );
+    struct scalar_key_frame_animation *impl = impl_from_IVector3KeyFrameAnimation( iface );
+    HRESULT hr = vector3_key_frame_animation_InsertKeyFrame( iface, key, value );
+
+    if (SUCCEEDED(hr)) key_frame_animation_store( impl, key, &value.X, 3, function );
+    return hr;
 }
 
 static const IVector3KeyFrameAnimationVtbl vector3_key_frame_animation_vtbl =
@@ -5577,6 +6048,10 @@ static HRESULT WINAPI boolean_key_frame_animation_InsertKeyFrame(
 
     TRACE( "iface %p, key %f, value %u.\n", iface, key, value );
     if (key < 0.0f || key > 1.0f) return E_INVALIDARG;
+    {
+        FLOAT number = value ? 1.0f : 0.0f;
+        key_frame_animation_store( impl, key, &number, 1, NULL );
+    }
     if (!impl->has_final_value || key >= impl->final_key)
     {
         impl->final_key = key;
@@ -5646,6 +6121,9 @@ static HRESULT WINAPI key_frame_animation_GetTrustLevel( struct key_frame_animat
     static HRESULT WINAPI key_frame_animation_put_##name( struct key_frame_animation_iface *iface, \
             type value ) \
     { \
+        LONGLONG traced = 0; \
+        memcpy( &traced, &value, min( sizeof(value), sizeof(traced) ) ); \
+        TRACE( "iface %p, " #name " %s.\n", iface, wine_dbgstr_longlong( traced ) ); \
         scalar_animation_from_IKeyFrameAnimation( iface )->field = value; \
         return S_OK; \
     }
@@ -5670,6 +6148,7 @@ static HRESULT WINAPI key_frame_animation_InsertExpressionKeyFrame(
     struct scalar_key_frame_animation *impl = scalar_animation_from_IKeyFrameAnimation( iface );
 
     if (key < 0.0f || key > 1.0f || !expression) return E_INVALIDARG;
+    impl->untimed = TRUE;
     ++impl->key_frame_count;
     return S_OK;
 }
@@ -5681,6 +6160,7 @@ static HRESULT WINAPI key_frame_animation_InsertExpressionKeyFrameWithEasingFunc
     struct scalar_key_frame_animation *impl = scalar_animation_from_IKeyFrameAnimation( iface );
 
     if (key < 0.0f || key > 1.0f || !expression) return E_INVALIDARG;
+    impl->untimed = TRUE;
     ++impl->key_frame_count;
     return S_OK;
 }
@@ -6602,6 +7082,24 @@ static const ICompositionEasingFunctionVtbl step_composition_easing_function_vtb
     step_composition_easing_function_GetTrustLevel,
 };
 
+/* Key frames keep what their easing function does, not the object. */
+static void easing_function_describe( ICompositionEasingFunction *function, struct timed_key *entry )
+{
+    if (function->lpVtbl == &cubic_composition_easing_function_vtbl)
+    {
+        struct cubic_bezier_easing_function *cubic = cubic_from_ICompositionEasingFunction( function );
+        entry->easing = TIMED_EASING_CUBIC;
+        entry->point1 = cubic->point1;
+        entry->point2 = cubic->point2;
+    }
+    else if (function->lpVtbl == &step_composition_easing_function_vtbl)
+    {
+        entry->easing = TIMED_EASING_STEP;
+        entry->steps = max( 1, step_from_ICompositionEasingFunction( function )->step_count );
+    }
+}
+
+
 static HRESULT step_easing_function_create( INT32 step_count, IInspectable **result )
 {
     struct step_easing_function *impl;
@@ -7288,8 +7786,63 @@ struct composition_scoped_batch
     CRITICAL_SECTION cs;
     boolean active;
     boolean ended;
+    /* In active_batches while active, in pending_batches from End until the
+     * animations started inside it have finished. Both lists are guarded by
+     * running_animations_cs. */
+    struct list batch_entry;
+    BOOL listed;
+    LONGLONG end_time;
     LONG ref;
 };
+
+static struct list active_batches = LIST_INIT( active_batches );
+static struct list pending_batches = LIST_INIT( pending_batches );
+
+static void scoped_batch_list( struct composition_scoped_batch *impl, struct list *list )
+{
+    EnterCriticalSection( &running_animations_cs );
+    if (impl->listed) list_remove( &impl->batch_entry );
+    if ((impl->listed = !!list)) list_add_tail( list, &impl->batch_entry );
+    LeaveCriticalSection( &running_animations_cs );
+}
+
+static void scoped_batches_extend( LONGLONG end )
+{
+    struct composition_scoped_batch *batch;
+
+    EnterCriticalSection( &running_animations_cs );
+    LIST_FOR_EACH_ENTRY( batch, &active_batches, struct composition_scoped_batch, batch_entry )
+        if (batch->end_time < end) batch->end_time = end;
+    LeaveCriticalSection( &running_animations_cs );
+}
+
+static void composition_scoped_batch_complete( struct composition_scoped_batch *impl );
+
+/* Completes the batches whose animations have finished. Returns whether any are
+ * still waiting. */
+static BOOL scoped_batches_fire_due( LONGLONG now )
+{
+    struct composition_scoped_batch *batch, *due[32];
+    UINT count = 0, i;
+    BOOL waiting;
+
+    EnterCriticalSection( &running_animations_cs );
+    LIST_FOR_EACH_ENTRY( batch, &pending_batches, struct composition_scoped_batch, batch_entry )
+        if (batch->end_time <= now && count < ARRAY_SIZE(due)) due[count++] = batch;
+    for (i = 0; i < count; ++i)
+    {
+        list_remove( &due[i]->batch_entry );
+        due[i]->listed = FALSE;
+    }
+    waiting = !list_empty( &pending_batches );
+    LeaveCriticalSection( &running_animations_cs );
+    for (i = 0; i < count; ++i)
+    {
+        composition_scoped_batch_complete( due[i] );
+        ICompositionScopedBatch_Release( &due[i]->ICompositionScopedBatch_iface );
+    }
+    return waiting;
+}
 
 static inline struct composition_scoped_batch *impl_from_ICompositionScopedBatch(
         ICompositionScopedBatch *iface )
@@ -7332,6 +7885,7 @@ static ULONG WINAPI composition_scoped_batch_Release( ICompositionScopedBatch *i
             ITypedEventHandler_IInspectable_CompositionBatchCompletedEventArgs_Release( handler->handler );
             free( handler );
         }
+        scoped_batch_list( impl, NULL );
         DeleteCriticalSection( &impl->cs );
         free( impl );
     }
@@ -7392,10 +7946,6 @@ static HRESULT WINAPI composition_scoped_batch_get_IsEnded( ICompositionScopedBa
 static HRESULT WINAPI composition_scoped_batch_End( ICompositionScopedBatch *iface )
 {
     struct composition_scoped_batch *impl = impl_from_ICompositionScopedBatch( iface );
-    struct composition_scoped_batch_handler *entry;
-    ITypedEventHandler_IInspectable_CompositionBatchCompletedEventArgs **handlers = NULL;
-    unsigned int count = 0, i = 0;
-    HRESULT hr;
 
     TRACE( "batch %p End begin.\n", iface );
     EnterCriticalSection( &impl->cs );
@@ -7404,19 +7954,50 @@ static HRESULT WINAPI composition_scoped_batch_End( ICompositionScopedBatch *ifa
         LeaveCriticalSection( &impl->cs );
         return E_ILLEGAL_METHOD_CALL;
     }
+    impl->active = FALSE;
+    impl->ended = TRUE;
+    LeaveCriticalSection( &impl->cs );
+
+    /* Animations started in the batch are still running: complete it when they end. */
+    EnterCriticalSection( &running_animations_cs );
+    if (impl->end_time > animation_now())
+    {
+        if (impl->listed) list_remove( &impl->batch_entry );
+        list_add_tail( &pending_batches, &impl->batch_entry );
+        impl->listed = TRUE;
+        ICompositionScopedBatch_AddRef( iface );
+        LeaveCriticalSection( &running_animations_cs );
+        animation_timer_arm();
+        TRACE( "batch %p End deferred.\n", iface );
+        return S_OK;
+    }
+    LeaveCriticalSection( &running_animations_cs );
+    scoped_batch_list( impl, NULL );
+    composition_scoped_batch_complete( impl );
+    TRACE( "batch %p End return.\n", iface );
+    return S_OK;
+}
+
+static void composition_scoped_batch_complete( struct composition_scoped_batch *impl )
+{
+    ICompositionScopedBatch *iface = &impl->ICompositionScopedBatch_iface;
+    struct composition_scoped_batch_handler *entry;
+    ITypedEventHandler_IInspectable_CompositionBatchCompletedEventArgs **handlers = NULL;
+    unsigned int count = 0, i = 0;
+    HRESULT hr;
+
+    EnterCriticalSection( &impl->cs );
     LIST_FOR_EACH_ENTRY( entry, &impl->handlers, struct composition_scoped_batch_handler, entry ) ++count;
     if (count && !(handlers = malloc( count * sizeof(*handlers) )))
     {
         LeaveCriticalSection( &impl->cs );
-        return E_OUTOFMEMORY;
+        return;
     }
     LIST_FOR_EACH_ENTRY( entry, &impl->handlers, struct composition_scoped_batch_handler, entry )
     {
         handlers[i] = entry->handler;
         ITypedEventHandler_IInspectable_CompositionBatchCompletedEventArgs_AddRef( handlers[i++] );
     }
-    impl->active = FALSE;
-    impl->ended = TRUE;
     LeaveCriticalSection( &impl->cs );
 
     ICompositionScopedBatch_AddRef( iface );
@@ -7433,8 +8014,6 @@ static HRESULT WINAPI composition_scoped_batch_End( ICompositionScopedBatch *ifa
     }
     ICompositionScopedBatch_Release( iface );
     free( handlers );
-    TRACE( "batch %p End return.\n", iface );
-    return S_OK;
 }
 
 static HRESULT WINAPI composition_scoped_batch_Resume( ICompositionScopedBatch *iface )
@@ -7446,6 +8025,7 @@ static HRESULT WINAPI composition_scoped_batch_Resume( ICompositionScopedBatch *
     if (impl->ended) hr = E_ILLEGAL_METHOD_CALL;
     else impl->active = TRUE;
     LeaveCriticalSection( &impl->cs );
+    if (SUCCEEDED(hr)) scoped_batch_list( impl, &active_batches );
     return hr;
 }
 
@@ -7458,6 +8038,7 @@ static HRESULT WINAPI composition_scoped_batch_Suspend( ICompositionScopedBatch 
     if (impl->ended) hr = E_ILLEGAL_METHOD_CALL;
     else impl->active = FALSE;
     LeaveCriticalSection( &impl->cs );
+    if (SUCCEEDED(hr)) scoped_batch_list( impl, NULL );
     return hr;
 }
 
@@ -7530,6 +8111,7 @@ static HRESULT composition_scoped_batch_create( ICompositionScopedBatch **result
     InitializeCriticalSection( &impl->cs );
     impl->active = TRUE;
     impl->ref = 1;
+    scoped_batch_list( impl, &active_batches );
     *result = &impl->ICompositionScopedBatch_iface;
     return S_OK;
 }
@@ -11136,8 +11718,10 @@ static HRESULT WINAPI composition_drawing_surface_QueryInterface( ICompositionDr
     if (!IsEqualGUID( iid, &IID_IUnknown ) && !IsEqualGUID( iid, &IID_IInspectable ) &&
         !IsEqualGUID( iid, &IID_IAgileObject ) && !IsEqualGUID( iid, &IID_ICompositionSurface ) &&
         !IsEqualGUID( iid, &IID_ICompositionDrawingSurface ))
+    {
         WARN( "%s not implemented.\n", debugstr_guid( iid ) );
         return E_NOINTERFACE;
+    }
     *out = iface;
     ICompositionDrawingSurface_AddRef( iface );
     return S_OK;
@@ -13377,11 +13961,12 @@ static HRESULT WINAPI composition_graphics_device_QueryInterface( ICompositionGr
         *out = &impl_from_ICompositionGraphicsDevice( iface )->ICompositionGraphicsDeviceInterop_iface;
     else if (IsEqualGUID( iid, &IID_ICompositionGraphicsDevice2 ))
         *out = &impl_from_ICompositionGraphicsDevice( iface )->ICompositionGraphicsDevice2_iface;
-    else
-    if (!IsEqualGUID( iid, &IID_IUnknown ) && !IsEqualGUID( iid, &IID_IInspectable ) &&
-        !IsEqualGUID( iid, &IID_IAgileObject ) && !IsEqualGUID( iid, &IID_ICompositionGraphicsDevice ))
+    else if (!IsEqualGUID( iid, &IID_IUnknown ) && !IsEqualGUID( iid, &IID_IInspectable ) &&
+             !IsEqualGUID( iid, &IID_IAgileObject ) && !IsEqualGUID( iid, &IID_ICompositionGraphicsDevice ))
+    {
         WARN( "%s not implemented.\n", debugstr_guid( iid ) );
         return E_NOINTERFACE;
+    }
     else
         *out = iface;
     ICompositionGraphicsDevice_AddRef( iface );
@@ -14283,6 +14868,7 @@ static HRESULT WINAPI compositor_controller_Commit( ICompositorController *iface
     unsigned int count = 0;
 
     TRACE( "iface %p.\n", iface );
+    if (running_animations_tick()) animation_timer_arm();
     LIST_FOR_EACH_ENTRY_SAFE( target, next, &compositor->targets, struct desktop_window_target, entry )
     {
         BOOL window_gone = !IsWindow( target->hwnd );
@@ -14684,6 +15270,7 @@ static void compositor_notify_commit_needed( struct compositor *compositor )
     if (!(controller = compositor->controller))
     {
         LeaveCriticalSection( &controller_cs );
+        TRACE( "compositor %p has no controller.\n", compositor );
         return;
     }
     ICompositorController_AddRef( &controller->ICompositorController_iface );
