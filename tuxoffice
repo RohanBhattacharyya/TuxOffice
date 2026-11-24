@@ -79,6 +79,11 @@ runner_env() {
   fi
   # TUXOFFICE_X11=1 forces XWayland when the native Wayland driver misbehaves.
   [[ "${TUXOFFICE_X11:-0}" == 1 ]] || [[ -z "${WAYLAND_DISPLAY:-}" ]] || unset DISPLAY
+  # Swap chains for composition (PowerPoint's camera): DXVK makes them only when
+  # asked, and its build must count their presents for the compositor to see frames.
+  if [[ -f "$r/share/tuxoffice/dxvk/composition-present-v1" ]]; then
+    export DXVK_CONFIG="${DXVK_CONFIG:+$DXVK_CONFIG;}dxgi.enableDummyCompositionSwapchain = True"
+  fi
   # Any wine command on a prefix from an older runner starts Wine's own update,
   # which can wait forever on a .NET dialog; run TuxOffice's update first.
   update_runner
@@ -246,6 +251,10 @@ update_runner() {
   configure_installer_components
   configure_shell
   configure_virtual_registry || true
+  # The prefix holds copies of DXVK's libraries: give it the new runner's.
+  if wine reg query 'HKCU\Software\Wine\DllOverrides' /v dxgi 2>/dev/null | grep -q 'native'; then
+    ( configure_graphics dxvk ) >/dev/null 2>&1 || warn "DXVK was not updated in the prefix"
+  fi
 }
 
 # Settings that older TuxOffice versions did not apply: run once per revision,
