@@ -440,6 +440,8 @@ struct desktop_window_target
     /* rendering inputs of the last presented frame, see target_snapshot */
     BYTE *drawn_state;
     SIZE_T drawn_size;
+    UINT snap_frame;
+    UINT drawn_generation;  /* of the last full redraw, which recorded visual bounds */
     LONG ref;
 };
 
@@ -1933,6 +1935,13 @@ struct sprite_visual
     FLOAT rotation_angle;
     FLOAT rotation_angle_degrees;
     boolean visible;
+    /* For redrawing only what changed, see target_snapshot. Only the rendering
+     * thread of the target the visual was last seen in uses these. */
+    struct desktop_window_target *snap_target;
+    UINT snap_frame;
+    UINT64 geometry_hash, appearance_hash;
+    UINT drawn_generation;
+    D2D1_RECT_F drawn_bounds;  /* of the visual and its children, in target pixels */
     LONG ref;
 };
 
@@ -12860,6 +12869,23 @@ static HRESULT draw_composition_brush( ID2D1DeviceContext *context, IComposition
  * target can keep its last presented frame. Anything this walk does not model
  * (animations, expressions, effects, geometric clips, shadows) marks the state
  * dynamic, which always redraws. */
+/* Expressions give a visual's values when it is drawn. */
+static void visual_evaluate_expressions( struct sprite_visual *impl )
+{
+    UINT i;
+
+    if (impl->scale_expression)
+        expression_animation_get_vector( impl->scale_expression, &impl->scale );
+    if (impl->offset_expression)
+        expression_animation_get_vector( impl->offset_expression, &impl->offset );
+    if (impl->center_expression)
+        expression_animation_get_vector( impl->center_expression, &impl->center_point );
+    for (i = 0; i < ARRAY_SIZE(visual_components); ++i)
+        if (impl->component_expressions[i])
+            expression_animation_evaluate_scalar( impl->component_expressions[i], &impl->ICompositionObject_iface,
+                    (FLOAT *)((BYTE *)impl + visual_components[i].offset) );
+}
+
 struct target_snapshot
 {
     BYTE *data;
@@ -12867,7 +12893,31 @@ struct target_snapshot
     SIZE_T capacity;
     BOOL dynamic;
     const char *reason;
+    /* What changed since the last frame. When no visual moved, resized, appeared
+     * or went away, and only visuals' appearance changed (opacity, brush, surface
+     * contents), only where they were drawn needs drawing again: the damage. */
+    struct desktop_window_target *target;
+    UINT frame;
+    BOOL full;
+    const char *full_reason;
+    BOOL has_damage;
+    D2D1_RECT_F damage;
 };
+
+static void snapshot_full( struct target_snapshot *snap, const char *reason )
+{
+    if (!snap->full) snap->full_reason = reason;
+    snap->full = TRUE;
+}
+
+static UINT64 snapshot_hash( const struct target_snapshot *snap, SIZE_T start, UINT64 hash )
+{
+    SIZE_T i;
+
+    if (snap->dynamic) return hash;
+    for (i = start; i < snap->size; ++i) hash = (hash ^ snap->data[i]) * 0x100000001b3ull;
+    return hash;
+}
 
 static void snapshot_add( struct target_snapshot *snap, const void *data, SIZE_T size )
 {
@@ -13170,6 +13220,56 @@ static HRESULT create_geometric_clip_mask( ICompositionClip *clip, ID2D1DeviceCo
 
 /* Whether a clip rectangle, as Direct2D applies it (the bounding box of the
  * transformed rectangle), leaves nothing of the render target visible. */
+/* The state of the frame being drawn on this thread, for recording where each
+ * visual draws (a full redraw) or drawing only the damage (a partial one). */
+struct draw_frame
+{
+    struct desktop_window_target *target;
+    BOOL partial;
+    D2D1_RECT_F damage;
+};
+
+static DWORD draw_frame_tls = TLS_OUT_OF_INDEXES;
+
+static struct draw_frame *get_draw_frame(void)
+{
+    if (draw_frame_tls == TLS_OUT_OF_INDEXES) return NULL;
+    return TlsGetValue( draw_frame_tls );
+}
+
+static D2D1_RECT_F transform_rect_bounds( const D2D1_MATRIX_3X2_F *m, const D2D1_RECT_F *r )
+{
+    D2D1_POINT_2F p[4] = {{r->left, r->top}, {r->right, r->top}, {r->left, r->bottom}, {r->right, r->bottom}};
+    D2D1_RECT_F out = {FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX};
+    UINT i;
+
+    for (i = 0; i < 4; ++i)
+    {
+        FLOAT x = p[i].x * m->_11 + p[i].y * m->_21 + m->_31;
+        FLOAT y = p[i].x * m->_12 + p[i].y * m->_22 + m->_32;
+        out.left = min( out.left, x );
+        out.top = min( out.top, y );
+        out.right = max( out.right, x );
+        out.bottom = max( out.bottom, y );
+    }
+    return out;
+}
+
+static void union_rect_f( D2D1_RECT_F *dst, const D2D1_RECT_F *src )
+{
+    if (src->right <= src->left || src->bottom <= src->top) return;
+    if (dst->right <= dst->left || dst->bottom <= dst->top) { *dst = *src; return; }
+    dst->left = min( dst->left, src->left );
+    dst->top = min( dst->top, src->top );
+    dst->right = max( dst->right, src->right );
+    dst->bottom = max( dst->bottom, src->bottom );
+}
+
+static BOOL rects_intersect_f( const D2D1_RECT_F *a, const D2D1_RECT_F *b )
+{
+    return a->left < b->right && b->left < a->right && a->top < b->bottom && b->top < a->bottom;
+}
+
 static BOOL clip_outside_target( ID2D1DeviceContext *context, const D2D1_MATRIX_3X2_F *m,
         const D2D1_RECT_F *rect )
 {
@@ -13212,6 +13312,8 @@ static HRESULT draw_composition_visual_mode( ID2D1DeviceContext *context, IVisua
     ID2D1Geometry *geometric_mask = NULL;
     ICompositionShadow *shadow;
     D2D1_MATRIX_3X2_F parent, local, transform;
+    struct draw_frame *frame;
+    D2D1_RECT_F drawn = {0}, earlier = {0};
     FLOAT center_x, center_y;
     FLOAT width, height;
     UINT i;
@@ -13252,18 +13354,22 @@ static HRESULT draw_composition_visual_mode( ID2D1DeviceContext *context, IVisua
                    kid->offset.X, kid->offset.Y, kid->brush, kid->clip );
         }
     }
+    frame = get_draw_frame();
+    if (frame && !frame->partial)
+    {
+        /* Drawn again in the same frame: keep where it drew first too. */
+        if (impl->drawn_generation == frame->target->drawn_generation) earlier = impl->drawn_bounds;
+        impl->drawn_generation = frame->target->drawn_generation;
+        impl->drawn_bounds = earlier;
+    }
     if (!impl->visible) return S_OK;
+    /* Nothing moved since the last full redraw: a subtree away from the damage
+     * draws what is already there. */
+    if (frame && frame->partial && impl->drawn_generation == frame->target->drawn_generation &&
+            !rects_intersect_f( &impl->drawn_bounds, &frame->damage ))
+        return S_OK;
     mode = impl->composite_mode == CompositionCompositeMode_Inherit ? parent_mode : impl->composite_mode;
-    if (impl->scale_expression)
-        expression_animation_get_vector( impl->scale_expression, &impl->scale );
-    if (impl->offset_expression)
-        expression_animation_get_vector( impl->offset_expression, &impl->offset );
-    if (impl->center_expression)
-        expression_animation_get_vector( impl->center_expression, &impl->center_point );
-    for (i = 0; i < ARRAY_SIZE(visual_components); ++i)
-        if (impl->component_expressions[i])
-            expression_animation_evaluate_scalar( impl->component_expressions[i], &impl->ICompositionObject_iface,
-                    (FLOAT *)((BYTE *)impl + visual_components[i].offset) );
+    visual_evaluate_expressions( impl );
     children = impl_from_IVisualCollection( impl->children );
     width = impl->size.X + parent_width * impl->relative_size_adjustment.X;
     height = impl->size.Y + parent_height * impl->relative_size_adjustment.Y;
@@ -13291,6 +13397,7 @@ static HRESULT draw_composition_visual_mode( ID2D1DeviceContext *context, IVisua
             local._31 * parent._12 + local._32 * parent._22 + parent._32};
     ID2D1DeviceContext_SetTransform( context, &transform );
     bounds = (D2D1_RECT_F){0.0f, 0.0f, width, height};
+    if (frame && !frame->partial) drawn = transform_rect_bounds( &transform, &bounds );
     if (TRACE_ON(uirender))
     {
         const char *kind = "none";
@@ -13341,6 +13448,8 @@ static HRESULT draw_composition_visual_mode( ID2D1DeviceContext *context, IVisua
     {
         hr=draw_composition_shadow(context,shadow,impl->brush,&bounds,opacity,depth);
         ICompositionShadow_Release(shadow);
+        /* A shadow reaches out by its blur and offset: count the whole target. */
+        drawn = (D2D1_RECT_F){-FLT_MAX / 4, -FLT_MAX / 4, FLT_MAX / 4, FLT_MAX / 4};
     }
     if (SUCCEEDED(hr) && impl->is_redirect)
     {
@@ -13354,8 +13463,25 @@ static HRESULT draw_composition_visual_mode( ID2D1DeviceContext *context, IVisua
     if (SUCCEEDED(hr) && impl->brush && bounds.right > bounds.left && bounds.bottom > bounds.top)
         hr = draw_visual_brush( context, impl->brush, &bounds, opacity, mode );
     for (i = 0; SUCCEEDED(hr) && i < children->count; ++i)
+    {
         hr = draw_composition_visual_mode( context, children->items[i], 0.0f, 0.0f, width, height,
                 opacity, depth + 1, mode );
+        if (frame && !frame->partial && children->items[i])
+            union_rect_f( &drawn, &sprite_visual_from_IVisual( children->items[i] )->drawn_bounds );
+    }
+    if (frame && !frame->partial)
+    {
+        if (clip)
+        {
+            D2D1_RECT_F limit = transform_rect_bounds( &transform, &clip_bounds );
+            drawn.left = max( drawn.left, limit.left );
+            drawn.top = max( drawn.top, limit.top );
+            drawn.right = min( drawn.right, limit.right );
+            drawn.bottom = min( drawn.bottom, limit.bottom );
+        }
+        union_rect_f( &drawn, &earlier );
+        impl->drawn_bounds = drawn;
+    }
     if (clip)
     {
         ID2D1DeviceContext_PopAxisAlignedClip( context );
@@ -13628,6 +13754,8 @@ static void snapshot_visual( struct target_snapshot *snap, IVisual *visual, UINT
     struct visual_collection *children;
     struct sprite_visual *impl;
     ICompositionShadow *shadow = NULL;
+    SIZE_T geometry_start, appearance_start;
+    UINT64 geometry, appearance;
     UINT i;
 
     SNAPSHOT_FIELD( snap, visual );
@@ -13638,19 +13766,23 @@ static void snapshot_visual( struct target_snapshot *snap, IVisual *visual, UINT
         return;
     }
     impl = sprite_visual_from_IVisual( visual );
-    if (impl->scale_expression || impl->offset_expression || impl->center_expression)
+    /* Take the values expressions give now, as drawing does: a frame whose
+     * expressions give what they gave before is unchanged. */
+    visual_evaluate_expressions( impl );
+    geometry_start = snap->size;
+    SNAPSHOT_FIELD( snap, impl->visible );
+    if (!impl->visible)
     {
-        snapshot_dynamic( snap, "expression" );
+        if (impl->snap_target == snap->target && impl->snap_frame == snap->frame) ;
+        else if (impl->snap_target != snap->target || impl->snap_frame + 1 != snap->frame)
+            snapshot_full( snap, "new visual" );
+        else if (impl->geometry_hash != snapshot_hash( snap, geometry_start, 0xcbf29ce484222325ull ))
+            snapshot_full( snap, "visibility" );
+        impl->geometry_hash = snapshot_hash( snap, geometry_start, 0xcbf29ce484222325ull );
+        impl->snap_target = snap->target;
+        impl->snap_frame = snap->frame;
         return;
     }
-    for (i = 0; i < ARRAY_SIZE(impl->component_expressions); ++i)
-        if (impl->component_expressions[i])
-        {
-            snapshot_dynamic( snap, "expression" );
-            return;
-        }
-    SNAPSHOT_FIELD( snap, impl->visible );
-    if (!impl->visible) return;
     SNAPSHOT_FIELD( snap, impl->anchor_point );
     SNAPSHOT_FIELD( snap, impl->relative_size_adjustment );
     SNAPSHOT_FIELD( snap, impl->center_point );
@@ -13663,16 +13795,17 @@ static void snapshot_visual( struct target_snapshot *snap, IVisual *visual, UINT
     SNAPSHOT_FIELD( snap, impl->transform_matrix );
     SNAPSHOT_FIELD( snap, impl->backface_visibility );
     SNAPSHOT_FIELD( snap, impl->border_mode );
-    SNAPSHOT_FIELD( snap, impl->composite_mode );
-    SNAPSHOT_FIELD( snap, impl->opacity );
     SNAPSHOT_FIELD( snap, impl->rotation_angle );
     SNAPSHOT_FIELD( snap, impl->rotation_angle_degrees );
     SNAPSHOT_FIELD( snap, impl->is_redirect );
+    /* A shadow reaches beyond the visual, and a redirect draws another visual a
+     * second time: changes to either redraw everything. */
     if (SUCCEEDED(sprite2_get_Shadow( &impl->ISpriteVisual2_iface, &shadow )) && shadow)
     {
         snapshot_shadow( snap, shadow );
         ICompositionShadow_Release( shadow );
     }
+    if (impl->is_redirect) snapshot_full( snap, "redirect" );
     SNAPSHOT_FIELD( snap, impl->clip );
     if (impl->clip)
     {
@@ -13690,6 +13823,41 @@ static void snapshot_visual( struct target_snapshot *snap, IVisual *visual, UINT
         }
         else snapshot_dynamic( snap, "clip" );
     }
+    children = impl_from_IVisualCollection( impl->children );
+    SNAPSHOT_FIELD( snap, children->count );
+    for (i = 0; i < children->count; ++i) SNAPSHOT_FIELD( snap, children->items[i] );
+    geometry = snapshot_hash( snap, geometry_start, 0xcbf29ce484222325ull );
+    appearance_start = snap->size;
+    SNAPSHOT_FIELD( snap, impl->composite_mode );
+    SNAPSHOT_FIELD( snap, impl->opacity );
+    snapshot_brush( snap, impl->brush, 0 );
+    appearance = snapshot_hash( snap, appearance_start, 0xcbf29ce484222325ull );
+    /* A visual drawn in two places is compared once a frame; its bounds cover both. */
+    if (impl->snap_target == snap->target && impl->snap_frame == snap->frame) ;
+    else if (impl->snap_target != snap->target || impl->snap_frame + 1 != snap->frame)
+        snapshot_full( snap, "new visual" );
+    else if (geometry != impl->geometry_hash) snapshot_full( snap, "geometry" );
+    else if (appearance != impl->appearance_hash)
+    {
+        if (impl->drawn_generation != snap->target->drawn_generation) snapshot_full( snap, "not drawn" );
+        else if (impl->drawn_bounds.right > impl->drawn_bounds.left &&
+                 impl->drawn_bounds.bottom > impl->drawn_bounds.top)
+        {
+            if (!snap->has_damage) snap->damage = impl->drawn_bounds;
+            else
+            {
+                snap->damage.left = min( snap->damage.left, impl->drawn_bounds.left );
+                snap->damage.top = min( snap->damage.top, impl->drawn_bounds.top );
+                snap->damage.right = max( snap->damage.right, impl->drawn_bounds.right );
+                snap->damage.bottom = max( snap->damage.bottom, impl->drawn_bounds.bottom );
+            }
+            snap->has_damage = TRUE;
+        }
+    }
+    impl->geometry_hash = geometry;
+    impl->appearance_hash = appearance;
+    impl->snap_target = snap->target;
+    impl->snap_frame = snap->frame;
     if (impl->is_redirect)
     {
         IVisual *source = visual_get_source( impl );
@@ -13697,10 +13865,7 @@ static void snapshot_visual( struct target_snapshot *snap, IVisual *visual, UINT
         snapshot_visual( snap, source, depth + 1 );
         if (source) IVisual_Release( source );
     }
-    snapshot_brush( snap, impl->brush, 0 );
     /* Walk children the way drawing does, on the rendering thread. */
-    children = impl_from_IVisualCollection( impl->children );
-    SNAPSHOT_FIELD( snap, children->count );
     for (i = 0; i < children->count && !snap->dynamic; ++i)
         snapshot_visual( snap, children->items[i], depth + 1 );
 }
@@ -13771,6 +13936,7 @@ found:
 
 static HRESULT desktop_window_target_render_locked( struct desktop_window_target *target )
 {
+    struct draw_frame frame = {0}, *previous_frame;
     struct composition_drawing_surface *source;
     ID2D1Bitmap1 *source_bitmap;
     D2D1_BITMAP_PROPERTIES1 properties = {0};
@@ -13874,7 +14040,8 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
         desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
         desc.BufferCount = 1;
         desc.Scaling = DXGI_SCALING_STRETCH;
-        desc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+        /* Sequential keeps the buffer's contents for drawing only what changed. */
+        desc.SwapEffect = DXGI_SWAP_EFFECT_SEQUENTIAL;
         desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
         stage = "create swapchain";
         if (FAILED(hr = IDXGIFactory2_CreateSwapChainForHwnd( factory, (IUnknown *)d3d_device,
@@ -13908,6 +14075,8 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
     }
 
     setup = perf_us();
+    snap.target = target;
+    snap.frame = ++target->snap_frame;
     snapshot_add( &snap, &target->root, sizeof(target->root) );
     snapshot_add( &snap, &width, sizeof(width) );
     snapshot_add( &snap, &height, sizeof(height) );
@@ -13921,15 +14090,56 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
         goto done;
     }
     if (snap.dynamic) TRACE_(uiperf)( "frame hwnd %p redraw: %s.\n", target->hwnd, snap.reason );
+    /* The swap chain keeps its buffer, so a frame where only some visuals'
+     * appearance changed redraws where they were. */
+    frame.target = target;
+    frame.partial = !redraw && !snap.dynamic && !snap.full && target->drawn_state;
+    if (frame.partial)
+    {
+        if (!snap.has_damage) frame.damage = (D2D1_RECT_F){0};
+        else frame.damage = (D2D1_RECT_F){max( 0.0f, floorf( snap.damage.left ) - 1.0f ),
+                max( 0.0f, floorf( snap.damage.top ) - 1.0f ),
+                min( (FLOAT)width, ceilf( snap.damage.right ) + 1.0f ),
+                min( (FLOAT)height, ceilf( snap.damage.bottom ) + 1.0f )};
+    }
+    else
+    {
+        if (snap.full) TRACE_(uiperf)( "frame hwnd %p full redraw: %s.\n", target->hwnd, snap.full_reason );
+        target->drawn_generation++;
+    }
     free( target->drawn_state );
     target->drawn_state = NULL;
     setup = perf_us();
+    if (frame.partial && (frame.damage.right <= frame.damage.left || frame.damage.bottom <= frame.damage.top))
+    {
+        /* Only what is not drawn changed. */
+        target->drawn_state = snap.data;
+        target->drawn_size = snap.size;
+        snap.data = NULL;
+        hr = S_OK;
+        goto done;
+    }
+    if (draw_frame_tls == TLS_OUT_OF_INDEXES)
+    {
+        DWORD index = TlsAlloc();
+        if (InterlockedCompareExchange( (LONG *)&draw_frame_tls, index, TLS_OUT_OF_INDEXES ) != TLS_OUT_OF_INDEXES)
+            TlsFree( index );
+    }
+    previous_frame = TlsGetValue( draw_frame_tls );
+    TlsSetValue( draw_frame_tls, &frame );
     ID2D1DeviceContext_SetTarget( target->render_context, (ID2D1Image *)target->render_bitmap );
     ID2D1DeviceContext_SetTransform( target->render_context, &identity );
     ID2D1DeviceContext_BeginDraw( target->render_context );
+    if (frame.partial)
+        ID2D1DeviceContext_PushAxisAlignedClip( target->render_context, &frame.damage, D2D1_ANTIALIAS_MODE_ALIASED );
     ID2D1DeviceContext_Clear( target->render_context, &white );
     draw = draw_composition_visual( target->render_context, target->root, 0.0f, 0.0f,
             width, height, 1.0f, 0 );
+    if (frame.partial) ID2D1DeviceContext_PopAxisAlignedClip( target->render_context );
+    TlsSetValue( draw_frame_tls, previous_frame );
+    if (frame.partial)
+        TRACE_(uiperf)( "frame hwnd %p partial %.0f,%.0f-%.0f,%.0f.\n", target->hwnd, frame.damage.left,
+                frame.damage.top, frame.damage.right, frame.damage.bottom );
     stage = "end draw";
     hr = ID2D1DeviceContext_EndDraw( target->render_context, NULL, NULL );
     if (SUCCEEDED(hr)) hr = draw;
