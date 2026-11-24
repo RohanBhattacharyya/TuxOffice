@@ -28,6 +28,24 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Publisher picture-source loading:** fixed Web Services deserialization of
+  a present, empty string element. `get_text()` treated `<Scope/>` as an absent
+  field, so an optional `WS_WSZ_TYPE` became NULL. Microsoft's service catalog
+  uses an empty Scope for its Exchange federation providers. Office rejected
+  the catalog, left its cache unready, and repeatedly waited 30 seconds for a
+  cache-change notification while displaying "Please wait while we load
+  pictures." The full received catalog was valid (28 services); Office's
+  partially parsed result stopped at the first empty Scope.
+  Empty elements now provide empty text without consuming the closing node
+  prematurely. Publisher reaches the actual Insert Pictures page at
+  `insertmedia.bing.office.net/odc/insertmedia` with the candidate reader.
+  Eight regression cases distinguish empty, absent and explicitly nil strings
+  and check the following field. Both architectures pass 3,859 reader checks
+  with no unexpected failures (51 existing todo assertions).
+  This does **not** finish the Pictures repair: native Wayland still fails to
+  display WebView2 content, and a cancel/reopen ribbon sequence exposed a
+  separate Publisher selection/context error. WebView2 is currently installed
+  only in the disposable test prefix, and setup still needs dependency handling.
 - Publisher/Access/Outlook parity audit (24 November, in disposable prefixes):
   the actual Home → Pictures button hangs when WebView2 is absent, leaving
   Publisher disabled without a visible dialog. Installing the current runtime

@@ -4346,6 +4346,8 @@ static void restore_reader_position( struct reader *reader, const struct reader_
 static HRESULT get_text( struct reader *reader, WS_TYPE_MAPPING mapping, const WS_XML_STRING *localname,
                          const WS_XML_STRING *ns, const WS_XML_TEXT **ret, BOOL *found )
 {
+    static const WS_XML_UTF8_TEXT empty_text = {{WS_XML_TEXT_TYPE_UTF8}, {0}};
+
     switch (mapping)
     {
     case WS_ATTRIBUTE_TYPE_MAPPING:
@@ -4386,6 +4388,14 @@ static HRESULT get_text( struct reader *reader, WS_TYPE_MAPPING mapping, const W
             }
             save_reader_position( reader, &pos );
             if ((hr = read_next_node( reader )) != S_OK) return hr;
+            /* An empty element is present. In particular, an optional WS_WSZ
+             * field must deserialize to an empty string, not a missing field. */
+            if (node_type( reader->current ) == WS_XML_NODE_TYPE_END_ELEMENT)
+            {
+                restore_reader_position( reader, &pos );
+                *ret = &empty_text.text;
+                return S_OK;
+            }
             if (node_type( reader->current ) != WS_XML_NODE_TYPE_TEXT)
             {
                 restore_reader_position( reader, &pos );

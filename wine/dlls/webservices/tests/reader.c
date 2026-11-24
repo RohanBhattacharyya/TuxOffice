@@ -3660,7 +3660,7 @@ static void test_repeating_element(void)
     ok( test5->service != NULL, "service not set\n" );
     ok( test5->service_count == 1, "got %lu\n", test5->service_count );
     ok( !test5->service[0].name.length, "got %lu\n", test5->service[0].name.length );
-    todo_wine ok( test5->service[0].name.chars != NULL, "chars set\n" );
+    ok( test5->service[0].name.chars != NULL, "chars set\n" );
 
     WsFreeReader( reader );
     WsFreeHeap( heap );
@@ -4548,6 +4548,75 @@ static void test_field_options(void)
     ok( test->int32 == -1, "got %d\n", test->int32 );
     ok( IsEqualGUID( &test->guid, &guid_null ), "wrong guid\n" );
 
+    WsFreeReader( reader );
+    WsFreeHeap( heap );
+}
+
+static void test_empty_string_fields(void)
+{
+    static const struct
+    {
+        const char *xml;
+        ULONG options;
+        BOOL present;
+    } tests[] =
+    {
+        {"<t><s/><tail>after</tail></t>", WS_FIELD_OPTIONAL, TRUE},
+        {"<t><s></s><tail>after</tail></t>", WS_FIELD_OPTIONAL, TRUE},
+        {"<t><tail>after</tail></t>", WS_FIELD_OPTIONAL, FALSE},
+        {"<t><s/><tail>after</tail></t>", WS_FIELD_OPTIONAL | WS_FIELD_NILLABLE, TRUE},
+        {"<t><s></s><tail>after</tail></t>", WS_FIELD_OPTIONAL | WS_FIELD_NILLABLE, TRUE},
+        {"<t><tail>after</tail></t>", WS_FIELD_OPTIONAL | WS_FIELD_NILLABLE, FALSE},
+        {"<t xmlns:i='http://www.w3.org/2001/XMLSchema-instance'><s i:nil='true'/>"
+         "<tail>after</tail></t>", WS_FIELD_OPTIONAL | WS_FIELD_NILLABLE, FALSE},
+        {"<t xmlns:i='http://www.w3.org/2001/XMLSchema-instance'><s i:nil='false'/>"
+         "<tail>after</tail></t>", WS_FIELD_OPTIONAL | WS_FIELD_NILLABLE, TRUE},
+    };
+    WS_XML_STRING ns = WS_XML_STRING_VALUE(""), name = WS_XML_STRING_VALUE("s");
+    WS_XML_STRING tail = WS_XML_STRING_VALUE("tail");
+    WS_FIELD_DESCRIPTION field = {0}, tail_field = {0}, *fields[] = {&field, &tail_field};
+    WS_STRUCT_DESCRIPTION desc = {0};
+    struct value { WCHAR *string, *tail; } *value;
+    WS_XML_READER *reader;
+    WS_HEAP *heap;
+    HRESULT hr;
+    unsigned int i;
+
+    hr = WsCreateHeap( 1 << 16, 0, NULL, 0, &heap, NULL );
+    ok( hr == S_OK, "got %#lx\n", hr );
+    hr = WsCreateReader( NULL, 0, &reader, NULL );
+    ok( hr == S_OK, "got %#lx\n", hr );
+
+    field.mapping = WS_ELEMENT_FIELD_MAPPING;
+    field.localName = &name;
+    field.ns = &ns;
+    field.type = WS_WSZ_TYPE;
+    tail_field = field;
+    tail_field.localName = &tail;
+    tail_field.offset = offsetof(struct value, tail);
+    desc.size = sizeof(*value);
+    desc.alignment = TYPE_ALIGNMENT(struct value);
+    desc.fields = fields;
+    desc.fieldCount = ARRAY_SIZE(fields);
+
+    for (i = 0; i < ARRAY_SIZE(tests); i++)
+    {
+        winetest_push_context( "%u", i );
+        field.options = tests[i].options;
+        hr = set_input( reader, tests[i].xml, strlen(tests[i].xml) );
+        ok( hr == S_OK, "got %#lx\n", hr );
+        value = NULL;
+        hr = WsReadType( reader, WS_ELEMENT_CONTENT_TYPE_MAPPING, WS_STRUCT_TYPE, &desc,
+                         WS_READ_REQUIRED_POINTER, heap, &value, sizeof(value), NULL );
+        ok( hr == S_OK, "got %#lx\n", hr );
+        if (hr == S_OK && value)
+        {
+            ok( !!value->string == tests[i].present, "got string %p\n", value->string );
+            if (value->string) ok( !value->string[0], "got %s\n", wine_dbgstr_w(value->string) );
+            ok( value->tail && !lstrcmpW(value->tail, L"after"), "got tail %s\n", wine_dbgstr_w(value->tail) );
+        }
+        winetest_pop_context();
+    }
     WsFreeReader( reader );
     WsFreeHeap( heap );
 }
@@ -7650,6 +7719,7 @@ START_TEST(reader)
     test_WsSetReaderPosition();
     test_entities();
     test_field_options();
+    test_empty_string_fields();
     test_WsReadBytes();
     test_WsReadChars();
     test_WsReadCharsUtf8();
