@@ -944,6 +944,25 @@ static void wayland_surface_reconfigure_size(struct wayland_surface *surface,
         wp_viewport_set_destination(surface->wp_viewport, -1, -1);
 }
 
+/* The surface coordinate of a window edge (in window pixels), as the compositor
+ * shows it: at the device pixel nearest to the surface coordinate times the scale. */
+static int surface_edge_from_window(struct wayland_surface *surface, int window, BOOL far)
+{
+    double scale = surface->window.scale;
+    int base = floor(window / scale), candidate;
+
+    for (candidate = base - 1; candidate <= base + 2; candidate++)
+        if ((int)round(candidate * scale) == window) return candidate;
+    /* Not reachable: cover the window pixel rather than leave it out. */
+    if (far)
+    {
+        for (candidate = base; ; candidate++)
+            if ((int)round(candidate * scale) > window) return candidate;
+    }
+    for (candidate = base + 1; ; candidate--)
+        if ((int)round(candidate * scale) < window) return candidate;
+}
+
 /**********************************************************************
  *          wayland_surface_reconfigure_client
  *
@@ -1006,18 +1025,25 @@ static void wayland_surface_reconfigure_client(struct wayland_surface *surface,
         src_width = (INT64)(visible_right - client_x) * buffer_width / client_width - src_x;
         src_height = (INT64)(visible_bottom - client_y) * buffer_height / client_height - src_y;
     }
-    if (crop && src_width > 0 && src_height > 0)
-    {
-        wayland_surface_coords_from_window(surface, visible_left, visible_top, &x, &y);
-        wayland_surface_coords_from_window(surface, visible_right - visible_left,
-                                           visible_bottom - visible_top, &width, &height);
-    }
-    else
+    if (!crop || src_width <= 0 || src_height <= 0)
     {
         crop = FALSE;
-        wayland_surface_coords_from_window(surface, client_x, client_y, &x, &y);
-        wayland_surface_coords_from_window(surface, client_width, client_height, &width, &height);
+        visible_left = client_x;
+        visible_top = client_y;
+        visible_right = client_x + client_width;
+        visible_bottom = client_y + client_height;
     }
+    /* Subsurfaces are placed in whole surface pixels, and the compositor shows
+     * each edge at the nearest device pixel. Under a fractional scale, rounding
+     * the position and the size each on their own showed most GPU children a
+     * pixel or two larger than their image, resampling all of it (blurry text),
+     * or a pixel short of their window (a white line along Word's task panes).
+     * Pick for each edge the surface pixel that lands on its device pixel, and
+     * where none does (one in five at 125%), the next one outwards. */
+    x = surface_edge_from_window(surface, visible_left, FALSE);
+    y = surface_edge_from_window(surface, visible_top, FALSE);
+    width = surface_edge_from_window(surface, visible_right, TRUE) - x;
+    height = surface_edge_from_window(surface, visible_bottom, TRUE) - y;
 
     TRACE("hwnd=%p subsurface=%d,%d+%dx%d\n", surface->hwnd, x, y, width, height);
     TRACE_(uistack)("GPU hwnd %p in %p at %d,%d size %dx%d (window %s)%s\n", client->client.hwnd,
