@@ -30,13 +30,12 @@ fi
   echo "DXVK source revision differs from the tested revision" >&2; exit 1;
 }
 git -C "$WORK/source" submodule update --init --recursive --depth 1
+# Start from the pristine tree: a patch changed since the last build neither
+# applies over its old version nor reverses cleanly.
+git -C "$WORK/source" checkout -- .
 for patch in "$HERE/patches/dxvk-context-state-lock.patch" "$HERE/patches/dxvk-resource-import-lock.patch" \
     "$HERE/patches/dxvk-composition-present.patch"; do
-  if git -C "$WORK/source" apply --check "$patch" 2>/dev/null; then
-    git -C "$WORK/source" apply "$patch"
-  else
-    git -C "$WORK/source" apply --reverse --check "$patch"
-  fi
+  git -C "$WORK/source" apply "$patch"
 done
 python3 - "$WORK" "$WORK/toolchain/$TOOLCHAIN/bin" <<'PY'
 from pathlib import Path
