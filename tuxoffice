@@ -79,6 +79,9 @@ runner_env() {
   fi
   # TUXOFFICE_X11=1 forces XWayland when the native Wayland driver misbehaves.
   [[ "${TUXOFFICE_X11:-0}" == 1 ]] || [[ -z "${WAYLAND_DISPLAY:-}" ]] || unset DISPLAY
+  # Any wine command on a prefix from an older runner starts Wine's own update,
+  # which can wait forever on a .NET dialog; run TuxOffice's update first.
+  update_runner
 }
 
 fetch() { # url dest [sha256]
