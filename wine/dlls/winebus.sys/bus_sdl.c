@@ -32,6 +32,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <dlfcn.h>
+#include <time.h>
 #ifdef HAVE_SDL_H
 # include <SDL.h>
 #endif
@@ -80,6 +81,7 @@ MAKE_FUNCPTR(SDL_JoystickName);
 MAKE_FUNCPTR(SDL_JoystickNumAxes);
 MAKE_FUNCPTR(SDL_JoystickOpen);
 MAKE_FUNCPTR(SDL_WaitEventTimeout);
+MAKE_FUNCPTR(SDL_PollEvent);
 MAKE_FUNCPTR(SDL_JoystickNumButtons);
 MAKE_FUNCPTR(SDL_JoystickNumBalls);
 MAKE_FUNCPTR(SDL_JoystickNumHats);
@@ -1129,6 +1131,7 @@ NTSTATUS sdl_bus_init(void *args)
     LOAD_FUNCPTR(SDL_JoystickNumAxes);
     LOAD_FUNCPTR(SDL_JoystickOpen);
     LOAD_FUNCPTR(SDL_WaitEventTimeout);
+    LOAD_FUNCPTR(SDL_PollEvent);
     LOAD_FUNCPTR(SDL_JoystickNumButtons);
     LOAD_FUNCPTR(SDL_JoystickNumBalls);
     LOAD_FUNCPTR(SDL_JoystickNumHats);
@@ -1234,11 +1237,27 @@ NTSTATUS sdl_bus_wait(void *args)
     /* cleanup previously returned event */
     bus_event_cleanup(result);
 
+    /* Without SDL's video subsystem, waiting for events polls them every
+     * millisecond, which kept a core busy enough to show as idle CPU use. Poll
+     * here instead: every 10 ms while there are devices, for their input and
+     * effects, and every 250 ms otherwise, for new devices and for stopping. */
     do
     {
         if (bus_event_queue_pop(&event_queue, result)) return STATUS_PENDING;
-        if (pSDL_WaitEventTimeout(&event, 10) != 0) process_device_event(&event);
-        else check_all_devices_effects_state();
+        if (pSDL_PollEvent(&event)) process_device_event(&event);
+        else
+        {
+            struct timespec delay = {0, 10 * 1000000};
+            BOOL idle;
+
+            check_all_devices_effects_state();
+            pthread_mutex_lock(&sdl_cs);
+            idle = list_empty(&device_list);
+            pthread_mutex_unlock(&sdl_cs);
+            if (idle) delay.tv_nsec = 250 * 1000000;
+            nanosleep(&delay, NULL);
+            event.type = 0;
+        }
     } while (event.type != quit_event);
 
     TRACE("SDL main loop exiting\n");
