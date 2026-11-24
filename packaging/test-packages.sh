@@ -18,7 +18,7 @@ run_test() { # image
       export DEBIAN_FRONTEND=noninteractive; apt-get update -qq; apt-get install -y -qq sudo curl xz-utils >/dev/null
     elif command -v dnf >/dev/null; then dnf install -y -q sudo curl xz >/dev/null
     elif command -v zypper >/dev/null; then zypper -q -n install sudo curl xz >/dev/null
-    elif command -v pacman >/dev/null; then pacman -Sy --noconfirm --needed sudo curl xz >/dev/null
+    elif command -v pacman >/dev/null; then pacman -Syu --noconfirm --needed sudo curl xz >/dev/null
     fi
     useradd -m tester
     echo "tester ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/tester
