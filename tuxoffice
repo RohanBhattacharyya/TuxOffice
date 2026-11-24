@@ -230,7 +230,11 @@ update_runner() {
   fi
   mkdir -p "$TUX_CACHE"
   msg "updating the prefix for the new runner" >&2
-  if ! wine wineboot -u >"$TUX_CACHE/prefix-update.log" 2>&1; then
+  # The update registers the 32-bit mscoree.dll again. With .NET 4.8 installed
+  # that is Microsoft's shim, which cannot find its runtime there and shows a
+  # modal "This application could not be started" box; wineboot then waits on
+  # it forever. COMPlus_NoGuiFromShim makes the shim fail without the box.
+  if ! COMPlus_NoGuiFromShim=1 wine wineboot -u >"$TUX_CACHE/prefix-update.log" 2>&1; then
     warn "prefix update failed; see $TUX_CACHE/prefix-update.log"
     return 0
   fi
