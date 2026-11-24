@@ -213,6 +213,7 @@ struct request
     int receive_response_timeout;
     DWORD max_redirects;
     DWORD redirect_count; /* total number of redirects during this request */
+    BOOL empty_bearer_retried; /* sent again without an empty bearer probe */
     WCHAR *status_text;
     UINT64 content_length; /* total number of bytes to be read */
     UINT64 content_read;   /* bytes read so far */

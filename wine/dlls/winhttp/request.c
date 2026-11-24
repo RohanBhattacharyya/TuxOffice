@@ -2959,6 +2959,33 @@ static DWORD queue_receive_response( struct request *request )
     return ret;
 }
 
+/* Office adds "Authorization: Bearer" with no token to every request it makes, a
+ * discovery probe for services that answer with a 401 and a WWW-Authenticate
+ * challenge. Many hosts refuse the request outright instead: raw.githubusercontent.com
+ * with a 404, S3 with a 400. Pictures linked from mail and documents from such hosts,
+ * which show on Windows, came out as "The linked image cannot be displayed". When the
+ * probe is refused without a challenge, send the request again once without it. */
+static BOOL drop_empty_bearer( struct request *request, DWORD status )
+{
+    const WCHAR *value;
+    int index;
+
+    if (request->empty_bearer_retried) return FALSE;
+    if (status != HTTP_STATUS_BAD_REQUEST && status != HTTP_STATUS_FORBIDDEN && status != HTTP_STATUS_NOT_FOUND)
+        return FALSE;
+    if ((index = get_header_index( request, L"Authorization", 0, TRUE )) < 0) return FALSE;
+    for (value = request->headers[index].value; *value == ' '; value++);
+    if (wcsnicmp( value, L"Bearer", 6 )) return FALSE;
+    for (value += 6; *value == ' '; value++);
+    if (*value) return FALSE;
+    if (get_header_index( request, L"WWW-Authenticate", 0, FALSE ) >= 0) return FALSE;
+
+    TRACE( "status %lu to an empty bearer probe, sending again without it\n", status );
+    delete_header( request, index );
+    request->empty_bearer_retried = TRUE;
+    return TRUE;
+}
+
 static DWORD receive_response( struct request *request )
 {
     BOOL async_mode = request->connect->hdr.flags & WINHTTP_FLAG_ASYNC;
@@ -3049,7 +3076,7 @@ static DWORD receive_response( struct request *request )
 
         if (handle_authorization( request, status )) goto done;
     }
-    else goto done;
+    else if (!drop_empty_bearer( request, status )) goto done;
 
     request->state = REQUEST_RESPONSE_RECURSIVE_REQUEST;
     return async_mode ? queue_receive_response( request ) : receive_response( request );
