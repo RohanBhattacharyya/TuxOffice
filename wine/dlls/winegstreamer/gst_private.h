@@ -149,6 +149,7 @@ bool amt_to_wg_format(const AM_MEDIA_TYPE *mt, struct wg_format *format);
 BOOL init_gstreamer(void);
 
 extern HRESULT mfplat_get_class_object(REFCLSID rclsid, REFIID riid, void **obj);
+HRESULT video_capture_devices_create(IUnknown *outer, IUnknown **out);
 
 IMFMediaType *mf_media_type_from_wg_format(const struct wg_format *format);
 void mf_media_type_to_wg_format(IMFMediaType *type, struct wg_format *format);

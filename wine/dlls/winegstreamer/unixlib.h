@@ -421,6 +421,63 @@ struct wg_muxer_read_data_params
     UINT64 offset;
 };
 
+/* Cameras, through GStreamer's device monitor. */
+typedef UINT64 wg_camera_t;
+
+enum wg_camera_format
+{
+    WG_CAMERA_FORMAT_NV12 = 1,
+    WG_CAMERA_FORMAT_YUY2,
+    WG_CAMERA_FORMAT_BGRX,
+};
+
+struct wg_camera_info
+{
+    char name[128];
+    char id[128];
+};
+
+struct wg_camera_mode
+{
+    UINT32 width;
+    UINT32 height;
+    UINT32 fps_n;
+    UINT32 fps_d;
+};
+
+struct wg_camera_list_params
+{
+    UINT64 infos; /* struct wg_camera_info[capacity] */
+    UINT32 capacity;
+    UINT32 count;
+};
+
+struct wg_camera_get_modes_params
+{
+    char id[128];
+    UINT64 modes; /* struct wg_camera_mode[capacity] */
+    UINT32 capacity;
+    UINT32 count;
+};
+
+struct wg_camera_create_params
+{
+    char id[128];
+    UINT32 format; /* enum wg_camera_format */
+    struct wg_camera_mode mode;
+    wg_camera_t camera;
+};
+
+struct wg_camera_read_params
+{
+    wg_camera_t camera;
+    UINT64 data;
+    UINT32 size;
+    UINT32 timeout_ms;
+    UINT32 written;
+    INT64 time; /* 100 ns units since the first frame */
+};
+
 enum unix_funcs
 {
     unix_wg_init_gstreamer,
@@ -470,6 +527,12 @@ enum unix_funcs
     unix_wg_muxer_push_sample,
     unix_wg_muxer_read_data,
     unix_wg_muxer_finalize,
+
+    unix_wg_camera_list,
+    unix_wg_camera_get_modes,
+    unix_wg_camera_create,
+    unix_wg_camera_read,
+    unix_wg_camera_destroy,
 
     unix_wg_funcs_count,
 };

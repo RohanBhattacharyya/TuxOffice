@@ -2343,6 +2343,12 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
     X(wg_muxer_push_sample),
     X(wg_muxer_read_data),
     X(wg_muxer_finalize),
+
+    X(wg_camera_list),
+    X(wg_camera_get_modes),
+    X(wg_camera_create),
+    X(wg_camera_read),
+    X(wg_camera_destroy),
 };
 
 C_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == unix_wg_funcs_count);
@@ -2740,6 +2746,12 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
     X64(wg_muxer_push_sample),
     X64(wg_muxer_read_data),
     X(wg_muxer_finalize),
+
+    X(wg_camera_list),
+    X(wg_camera_get_modes),
+    X(wg_camera_create),
+    X(wg_camera_read),
+    X(wg_camera_destroy),
 };
 
 C_ASSERT(ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_wg_funcs_count);

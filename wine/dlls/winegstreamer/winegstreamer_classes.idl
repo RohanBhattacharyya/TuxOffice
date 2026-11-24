@@ -143,3 +143,9 @@ coclass wg_mp3_sink_factory {}
     uuid(5d5407d9-c6ca-4770-a7cc-27c0cb8a7627)
 ]
 coclass wg_mpeg4_sink_factory {}
+
+[
+    threading(both),
+    uuid(a63be0f0-e5c4-4104-93ae-9fed2eae38e0)
+]
+coclass wg_video_capture_devices {}

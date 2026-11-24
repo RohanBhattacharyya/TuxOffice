@@ -39,6 +39,14 @@ GST_DEBUG_CATEGORY_EXTERN(wine);
 
 extern NTSTATUS wg_init_gstreamer(void *args);
 
+/* wg_camera.c */
+
+extern NTSTATUS wg_camera_list(void *args);
+extern NTSTATUS wg_camera_get_modes(void *args);
+extern NTSTATUS wg_camera_create(void *args);
+extern NTSTATUS wg_camera_read(void *args);
+extern NTSTATUS wg_camera_destroy(void *args);
+
 extern GstStreamType stream_type_from_caps(GstCaps *caps);
 extern GstElement *create_element(const char *name, const char *plugin_set);
 GstElement *factory_create_element(GstElementFactory *factory);

@@ -988,6 +988,7 @@ static struct class_factory resampler_cf = {{&class_factory_vtbl}, resampler_cre
 static struct class_factory color_convert_cf = {{&class_factory_vtbl}, color_convert_create};
 static struct class_factory mp3_sink_class_factory_cf = {{&class_factory_vtbl}, mp3_sink_class_factory_create};
 static struct class_factory mpeg4_sink_class_factory_cf = {{&class_factory_vtbl}, mpeg4_sink_class_factory_create};
+static struct class_factory video_capture_devices_cf = {{&class_factory_vtbl}, video_capture_devices_create};
 
 HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
 {
@@ -1040,6 +1041,8 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID iid, void **out)
         factory = &mp3_sink_class_factory_cf;
     else if (IsEqualGUID(clsid, &CLSID_wg_mpeg4_sink_factory))
         factory = &mpeg4_sink_class_factory_cf;
+    else if (IsEqualGUID(clsid, &CLSID_WineVideoCaptureDevices))
+        factory = &video_capture_devices_cf;
     else
     {
         FIXME("%s not implemented, returning CLASS_E_CLASSNOTAVAILABLE.\n", debugstr_guid(clsid));
