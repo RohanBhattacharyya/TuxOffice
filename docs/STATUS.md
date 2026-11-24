@@ -141,6 +141,13 @@ Committed after 0.1.5; checked in the isolated session.
   `WWW-Authenticate` still goes to authentication). Whether Windows retries the same way
   is not known; the pictures do show there, and now show here (Word page and Outlook
   mail checked).
+- **Wheel scrolling glides in Word.** `TryUpdatePositionWithAnimation` follows the
+  animation's key frames and easing over time instead of jumping: four wheel steps now
+  move the page in 44 eased steps of about 200 ms each, for the same 192 pixels.
+- **Idle CPU.** winebus's SDL thread polled every millisecond (SDL has no real wait
+  without its video subsystem); it now sleeps 10 ms between polls with devices present
+  and 250 ms without. Idle Excel with all Wine processes: 9.5 ms/s before, 1.5 after;
+  idle PowerPoint 4.0 ms/s (27 on 26 October).
 - `tests/functional/outlook.vbs` purges its leftover folders from Deleted Items, which
   had filled after about twenty runs and failed "add folder" on every runner: 28 of 28.
 
