@@ -1307,6 +1307,9 @@ struct tracker_inertia_operation
     struct interaction_tracker *tracker;
     ULONGLONG last_tick;
     INT32 request_id;
+    /* TryUpdatePositionWithAnimation: the position follows this course instead of inertia */
+    struct key_frame_course *course;
+    ULONGLONG course_start;
 };
 
 static struct list tracker_inertia_operations = LIST_INIT(tracker_inertia_operations);
@@ -2855,6 +2858,7 @@ static void tracker_inertia_release( struct tracker_inertia_operation *operation
     if (!InterlockedDecrement( &operation->ref ))
     {
         tracker = &operation->tracker->IInteractionTracker_iface;
+        if (operation->course) key_frame_course_free( operation->course );
         free( operation );
         IInteractionTracker_Release( tracker );
     }
@@ -2933,6 +2937,27 @@ static void tracker_inertia_advance_locked( struct interaction_tracker *impl, UL
     elapsed = (now - operation->last_tick) / 1000.0;
     operation->last_tick = now;
     request_id = operation->request_id;
+    if (operation->course)
+    {
+        finished = key_frame_course_value( operation->course, (now - operation->course_start) * 10000, &position );
+        position.X = min( max( position.X, impl->min_position.X ), impl->max_position.X );
+        position.Y = min( max( position.Y, impl->min_position.Y ), impl->max_position.Y );
+        position.Z = min( max( position.Z, impl->min_position.Z ), impl->max_position.Z );
+        if (impl->position.Z != position.Z) interaction_tracker_mark_changed( impl, &changed );
+        impl->position.Z = position.Z;
+        ++impl->animation_revision;
+        if (finished) impl->clamp_position = TRUE;
+        LeaveCriticalSection( &impl->animation_cs );
+        interaction_tracker_update_axis( impl, InteractionBindingAxisModes_PositionX, position.X, &changed );
+        interaction_tracker_update_axis( impl, InteractionBindingAxisModes_PositionY, position.Y, &changed );
+        interaction_tracker_notify_changes( impl, request_id, TRUE, &changed, discarded );
+        if (finished)
+        {
+            tracker_inertia_cancel_locked( impl, released );
+            interaction_tracker_queue_state( impl, TRACKER_IDLE, request_id, FALSE, discarded );
+        }
+        return;
+    }
     position.X = tracker_inertia_axis( impl->position.X, &impl->position_velocity.X,
             impl->position_decay.X, impl->min_position.X, impl->max_position.X, elapsed );
     position.Y = tracker_inertia_axis( impl->position.Y, &impl->position_velocity.Y,
@@ -3158,6 +3183,69 @@ static HRESULT WINAPI interaction_tracker_TryUpdatePositionBy( IInteractionTrack
     return interaction_tracker_update_position( impl, amount, TRUE, TRUE, request_id );
 }
 
+/* Windows runs the animation on the compositor: the position glides along its key
+ * frames instead of jumping to the last one. Word scrolls with these, one per mouse
+ * wheel step. The inertia worker advances the course; a later update starts again
+ * from wherever the position has got to. */
+static HRESULT tracker_start_course( struct interaction_tracker *impl, ICompositionAnimation *animation,
+        INT32 *request_id )
+{
+    struct tracker_inertia_operation *operation;
+    struct key_frame_course *course;
+    struct list released, discarded;
+    struct Vector3 start;
+    ULONGLONG now;
+    HRESULT hr;
+
+    if (FAILED(hr = interaction_tracker_evaluate_bounds( impl ))) return hr;
+    list_init( &released );
+    list_init( &discarded );
+    EnterCriticalSection( &tracker_binding_cs );
+    now = GetTickCount64();
+    tracker_inertia_advance_locked( impl, now, &released, &discarded );
+    tracker_inertia_cancel_locked( impl, &released );
+    EnterCriticalSection( &impl->animation_cs );
+    start = impl->position;
+    if (impl->notifications_closed) hr = RO_E_CLOSED;
+    else if (SUCCEEDED(hr = key_frame_course_create( animation, &start, &course )))
+    {
+        if (!(operation = calloc( 1, sizeof(*operation) )))
+        {
+            key_frame_course_free( course );
+            hr = E_OUTOFMEMORY;
+        }
+        else
+        {
+            operation->ref = 1;
+            operation->tracker = impl;
+            operation->last_tick = now;
+            operation->course = course;
+            operation->course_start = now;
+            IInteractionTracker_AddRef( &impl->IInteractionTracker_iface );
+            impl->inertia = operation;
+            list_add_tail( &tracker_inertia_operations, &operation->entry );
+            impl->clamp_position = FALSE;
+            *request_id = operation->request_id = interaction_tracker_next_request_id( impl );
+        }
+    }
+    if (SUCCEEDED(hr) && !tracker_inertia_worker_active)
+    {
+        tracker_inertia_worker_active = TRUE;
+        if (!TrySubmitThreadpoolCallback( tracker_inertia_worker, NULL, NULL ))
+        {
+            tracker_inertia_worker_active = FALSE;
+            hr = HRESULT_FROM_WIN32( GetLastError() );
+            if (SUCCEEDED(hr)) hr = E_FAIL;
+        }
+    }
+    LeaveCriticalSection( &impl->animation_cs );
+    if (FAILED(hr) && impl->inertia) tracker_inertia_cancel_locked( impl, &released );
+    LeaveCriticalSection( &tracker_binding_cs );
+    tracker_notifications_free( &discarded );
+    tracker_inertia_free_list( &released );
+    return hr;
+}
+
 static HRESULT WINAPI interaction_tracker_TryUpdatePositionWithAnimation( IInteractionTracker *iface,
         IInspectable *animation, INT32 *request_id )
 {
@@ -3168,10 +3256,16 @@ static HRESULT WINAPI interaction_tracker_TryUpdatePositionWithAnimation( IInter
 
     TRACE( "iface %p, animation %p, request_id %p.\n", iface, animation, request_id );
     if (!request_id) return E_POINTER;
-    /* Like animations on visuals, this goes straight to the final key frame. */
     if (animation && SUCCEEDED(IInspectable_QueryInterface( animation, &IID_ICompositionAnimation,
             (void **)&composition_animation )))
     {
+        hr = tracker_start_course( impl, composition_animation, request_id );
+        if (SUCCEEDED(hr) || hr == RO_E_CLOSED)
+        {
+            ICompositionAnimation_Release( composition_animation );
+            return hr;
+        }
+        /* An animation without timed key frames goes straight to its final one. */
         hr = vector3_key_frame_animation_get_final_value( composition_animation, &value );
         ICompositionAnimation_Release( composition_animation );
         if (SUCCEEDED(hr))

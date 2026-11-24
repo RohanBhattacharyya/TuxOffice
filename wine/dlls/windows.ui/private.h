@@ -80,6 +80,11 @@ HRESULT expression_animation_clone( IExpressionAnimation *animation, IExpression
 HRESULT expression_animation_evaluate_scalar( IExpressionAnimation *animation, ICompositionObject *target, FLOAT *value );
 HRESULT scalar_key_frame_animation_get_final_value( ICompositionAnimation *animation, FLOAT *value );
 HRESULT vector3_key_frame_animation_get_final_value( ICompositionAnimation *animation, struct Vector3 *value );
+struct key_frame_course;
+HRESULT key_frame_course_create( ICompositionAnimation *animation, const struct Vector3 *start,
+        struct key_frame_course **course );
+BOOL key_frame_course_value( const struct key_frame_course *course, LONGLONG elapsed, struct Vector3 *value );
+void key_frame_course_free( struct key_frame_course *course );
 HRESULT composition_drop_shadow_create( ICompositor *compositor, IInspectable **result );
 void composition_notify_changed( ICompositor *compositor );
 IDispatcherQueue *compositor_get_dispatcher_queue( ICompositor *compositor );

@@ -5873,6 +5873,67 @@ static BOOL running_animation_start( ICompositor *compositor, IUnknown *owner,
     return TRUE;
 }
 
+/* A Vector3 key frame animation's course over time, for animated interaction tracker
+ * updates: it runs from start through the animation's key frames, with their easing. */
+struct key_frame_course
+{
+    struct running_animation running;
+};
+
+HRESULT key_frame_course_create( ICompositionAnimation *animation, const struct Vector3 *start,
+        struct key_frame_course **result )
+{
+    struct scalar_key_frame_animation *impl;
+    struct key_frame_course *course;
+    ICompositionAnimation *canonical;
+    UINT i;
+
+    *result = NULL;
+    if (FAILED(ICompositionAnimation_QueryInterface( animation, &IID_ICompositionAnimation,
+            (void **)&canonical ))) return E_NOINTERFACE;
+    ICompositionAnimation_Release( canonical );
+    if (canonical->lpVtbl != &scalar_composition_animation_vtbl) return E_NOINTERFACE;
+    impl = scalar_animation_from_ICompositionAnimation( canonical );
+    if (impl->untimed || !impl->stored_keys || impl->duration.Duration <= 0 || !impl->is_vector3)
+        return E_NOTIMPL;
+    if (!(course = calloc( 1, sizeof(*course) ))) return E_OUTOFMEMORY;
+    course->running.components = 3;
+    course->running.delay = max( 0, impl->delay_time.Duration );
+    course->running.duration = impl->duration.Duration;
+    course->running.iterations = 1;
+    course->running.start_value[0] = start->X;
+    course->running.start_value[1] = start->Y;
+    course->running.start_value[2] = start->Z;
+    course->running.key_count = impl->stored_keys;
+    memcpy( course->running.keys, impl->keys, impl->stored_keys * sizeof(*impl->keys) );
+    for (i = 0; i < course->running.key_count; ++i)
+        if (course->running.keys[i].key > 1.0f) course->running.keys[i].key = 1.0f;
+    *result = course;
+    return S_OK;
+}
+
+/* The value elapsed (100 ns units) after the start. Returns TRUE once it has ended. */
+BOOL key_frame_course_value( const struct key_frame_course *course, LONGLONG elapsed, struct Vector3 *value )
+{
+    const struct running_animation *running = &course->running;
+    FLOAT progress, out[3];
+    BOOL ended;
+
+    if (elapsed < running->delay) progress = 0.0f;
+    else progress = (FLOAT)(elapsed - running->delay) / running->duration;
+    if ((ended = progress >= 1.0f)) progress = 1.0f;
+    running_animation_value( running, progress, out );
+    value->X = out[0];
+    value->Y = out[1];
+    value->Z = out[2];
+    return ended;
+}
+
+void key_frame_course_free( struct key_frame_course *course )
+{
+    free( course );
+}
+
 static inline struct scalar_key_frame_animation *scalar_animation_from_ICompositionAnimationBase(
         ICompositionAnimationBase *iface )
 {
