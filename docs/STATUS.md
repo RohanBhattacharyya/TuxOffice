@@ -140,6 +140,15 @@ Committed after 0.1.5; checked in the isolated session.
   drawn unchanged) through the colour matrix path; `tests/d2d-effects.c` checks each.
   A live 1080p Cameo costs about 0.58 cores, about 0.18 of them ours (conversion,
   PipeWire); PowerPoint's own per-frame work is the rest.
+- **Windows whose size has no exact scale** (one size in five at 125%) were shown a pixel
+  larger than their image, filled from the buffer beyond it: a white line under Word's
+  save prompt. They now take the next smaller surface size and show one to one.
+- **Open: Publisher crashes on the first keystroke into a text box** (seen on another
+  install; the test account's Publisher is read-only, retired from Microsoft 365, so it
+  is not reproduced here). The text engine singleton (`PTXT9.DLL`, created through
+  `QSManager_GetInstance`) failed to initialize without an exception, and the first use
+  dereferences its empty interface (`MSPUB.EXE+0x60F1A4`). Wine's temporary compound file
+  with Publisher's flags (0x4011012) works; the failing step is not found.
 - **Sharp text at fractional scales.** At 125% most GPU children (Word's ribbon, panes,
   document) were shown a pixel or two larger than their image, because the driver
   rounded position and size separately; the compositor resampled them. Edges now land on
