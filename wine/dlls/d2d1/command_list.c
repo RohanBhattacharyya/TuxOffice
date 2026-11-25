@@ -951,6 +951,21 @@ done:
     return hr;
 }
 
+/* Whether drawing the list writes pixels other than by blending onto them. */
+BOOL d2d_command_list_has_clear(ID2D1CommandList *iface)
+{
+    struct d2d_command_list *command_list = impl_from_ID2D1CommandList(iface);
+    const void *data = command_list->data, *end = (char *)command_list->data + command_list->size;
+
+    while (data < end)
+    {
+        const struct d2d_command *command = data;
+        if (command->op == D2D_COMMAND_CLEAR) return TRUE;
+        data = (char *)data + command->size;
+    }
+    return FALSE;
+}
+
 HRESULT d2d_command_list_replay(ID2D1CommandList *iface, struct d2d_device_context *target)
 {
     ID2D1DeviceContext *context = (ID2D1DeviceContext *)&target->ID2D1DeviceContext6_iface;

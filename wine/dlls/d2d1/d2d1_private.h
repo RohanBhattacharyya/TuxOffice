@@ -179,6 +179,10 @@ struct d2d_indexed_objects
     size_t count;
 };
 
+/* Wine's windows.ui draws Windows.UI.Composition's DestinationInvert with this
+ * primitive blend: source * (1 - destination) + destination * (1 - source). */
+#define D2D1_PRIMITIVE_BLEND_WINE_DESTINATION_INVERT ((D2D1_PRIMITIVE_BLEND)0x574e0001)
+
 struct d2d_device_context
 {
     ID2D1DeviceContext6 ID2D1DeviceContext6_iface;
@@ -215,6 +219,8 @@ struct d2d_device_context
     ID3D11Buffer *vb;
     ID3D11RasterizerState *rs;
     ID3D11BlendState *bs;
+    /* For the primitive blends other than source over, created when first used. */
+    ID3D11BlendState *primitive_bs[5];
     ID3D11SamplerState *sampler_states
             [D2D_SAMPLER_INTERPOLATION_MODE_COUNT]
             [D2D_SAMPLER_EXTEND_MODE_COUNT]
@@ -949,6 +955,7 @@ HRESULT d2d_effect_image_bounds(struct d2d_device_context *context, ID2D1Image *
         const struct d2d_effect_frame *parent, D2D1_UNIT_MODE mode, D2D1_RECT_F *bounds);
 HRESULT d2d_command_list_get_bounds(ID2D1CommandList *iface, struct d2d_device_context *context,
         const struct d2d_effect_frame *parent, D2D1_UNIT_MODE output_mode, D2D1_RECT_F *bounds);
+BOOL d2d_command_list_has_clear(ID2D1CommandList *iface);
 HRESULT d2d_command_list_replay(ID2D1CommandList *iface, struct d2d_device_context *target);
 void d2d_command_list_begin_draw(struct d2d_command_list *command_list, const struct d2d_device_context *context);
 void d2d_command_list_set_antialias_mode(struct d2d_command_list *command_list, D2D1_ANTIALIAS_MODE mode);

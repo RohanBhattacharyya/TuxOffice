@@ -16,6 +16,7 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include <float.h>
 #include "d2d1_private.h"
 #include "d3d11_4.h"
 #include "eagle_trace.h"
@@ -798,6 +799,58 @@ static void d2d_clip_stack_pop(struct d2d_clip_stack *stack)
     --stack->count;
 }
 
+/* The blend state for the context's primitive blend. */
+static ID3D11BlendState *d2d_device_context_get_blend_state(struct d2d_device_context *context)
+{
+    D2D1_PRIMITIVE_BLEND blend = context->drawing_state.primitiveBlend;
+    D3D11_BLEND_DESC desc = {0};
+    D3D11_RENDER_TARGET_BLEND_DESC *rt = &desc.RenderTarget[0];
+    unsigned int index;
+    HRESULT hr;
+
+    switch (blend)
+    {
+        case D2D1_PRIMITIVE_BLEND_COPY: index = 0; break;
+        case D2D1_PRIMITIVE_BLEND_MIN: index = 1; break;
+        case D2D1_PRIMITIVE_BLEND_ADD: index = 2; break;
+        case D2D1_PRIMITIVE_BLEND_MAX: index = 3; break;
+        case D2D1_PRIMITIVE_BLEND_WINE_DESTINATION_INVERT: index = 4; break;
+        default: return context->bs;
+    }
+    if (context->primitive_bs[index]) return context->primitive_bs[index];
+
+    rt->BlendEnable = TRUE;
+    rt->RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    rt->SrcBlend = rt->SrcBlendAlpha = D3D11_BLEND_ONE;
+    rt->DestBlend = rt->DestBlendAlpha = D3D11_BLEND_ONE;
+    rt->BlendOp = rt->BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    switch (blend)
+    {
+        case D2D1_PRIMITIVE_BLEND_COPY:
+            rt->DestBlend = rt->DestBlendAlpha = D3D11_BLEND_ZERO;
+            break;
+        case D2D1_PRIMITIVE_BLEND_MIN:
+            rt->BlendOp = rt->BlendOpAlpha = D3D11_BLEND_OP_MIN;
+            break;
+        case D2D1_PRIMITIVE_BLEND_MAX:
+            rt->BlendOp = rt->BlendOpAlpha = D3D11_BLEND_OP_MAX;
+            break;
+        case D2D1_PRIMITIVE_BLEND_WINE_DESTINATION_INVERT:
+            rt->SrcBlend = D3D11_BLEND_INV_DEST_COLOR;
+            rt->DestBlend = D3D11_BLEND_INV_SRC_COLOR;
+            rt->SrcBlendAlpha = D3D11_BLEND_INV_DEST_ALPHA;
+            break;
+        default:
+            break;
+    }
+    if (FAILED(hr = ID3D11Device1_CreateBlendState(context->d3d_device, &desc, &context->primitive_bs[index])))
+    {
+        WARN("Failed to create blend state for primitive blend %#x, hr %#lx.\n", blend, hr);
+        return context->bs;
+    }
+    return context->primitive_bs[index];
+}
+
 static void d2d_device_context_draw(struct d2d_device_context *render_target, enum d2d_shape_type shape_type,
         ID3D11Buffer *ib, unsigned int index_count, ID3D11Buffer *vb, unsigned int vb_stride,
         struct d2d_brush *brush, struct d2d_brush *opacity_brush)
@@ -861,7 +914,8 @@ static void d2d_device_context_draw(struct d2d_device_context *render_target, en
     ID3D11DeviceContext1_OMSetRenderTargets(context, 1, &render_target->target.bitmap->rtv, NULL);
     if (brush)
     {
-        ID3D11DeviceContext1_OMSetBlendState(context, render_target->bs, NULL, D3D11_DEFAULT_SAMPLE_MASK);
+        ID3D11DeviceContext1_OMSetBlendState(context, d2d_device_context_get_blend_state(render_target),
+                NULL, D3D11_DEFAULT_SAMPLE_MASK);
         d2d_brush_bind_resources(brush, render_target, 0);
     }
     else
@@ -976,6 +1030,8 @@ static ULONG STDMETHODCALLTYPE d2d_device_context_inner_Release(IUnknown *iface)
             IDWriteRenderingParams_Release(context->text_rendering_params);
         if (context->bs)
             ID3D11BlendState_Release(context->bs);
+        for (i = 0; i < ARRAY_SIZE(context->primitive_bs); ++i)
+            if (context->primitive_bs[i]) ID3D11BlendState_Release(context->primitive_bs[i]);
         ID3D11RasterizerState_Release(context->rs);
         ID3D11Buffer_Release(context->vb);
         ID3D11Buffer_Release(context->ib);
@@ -3502,7 +3558,7 @@ static void STDMETHODCALLTYPE d2d_device_context_SetPrimitiveBlend(ID2D1DeviceCo
 
     TRACE("iface %p, primitive_blend %u.\n", iface, primitive_blend);
 
-    if (primitive_blend > D2D1_PRIMITIVE_BLEND_MAX)
+    if (primitive_blend > D2D1_PRIMITIVE_BLEND_MAX && primitive_blend != D2D1_PRIMITIVE_BLEND_WINE_DESTINATION_INVERT)
     {
         WARN("Unknown blend mode %u.\n", primitive_blend);
         return;
@@ -5173,6 +5229,7 @@ static void STDMETHODCALLTYPE d2d_device_context_DrawImage(ID2D1DeviceContext6 *
     {
         D2D1_MATRIX_3X2_F previous_transform = context->drawing_state.transform;
         D2D1_MATRIX_3X2_F transform = identity;
+        BOOL isolate;
         HRESULT hr;
 
         if (target_offset)
@@ -5186,12 +5243,29 @@ static void STDMETHODCALLTYPE d2d_device_context_DrawImage(ID2D1DeviceContext6 *
             transform._32 -= image_rect->top;
         }
         d2d_matrix_multiply(&transform, &previous_transform);
+        /* A command list draws as an image: its own Clear affects only that image,
+         * which is then composited. PowerPoint draws its text selection highlight
+         * as a list that clears to the highlight colour over the text. Replay such
+         * a list in a layer, which starts transparent and is composited source over. */
+        isolate = d2d_command_list_has_clear(command_list);
+        if (isolate)
+        {
+            D2D1_LAYER_PARAMETERS1 layer = {{-FLT_MAX, -FLT_MAX, FLT_MAX, FLT_MAX}, NULL,
+                    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, {1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f}, 1.0f, NULL,
+                    D2D1_LAYER_OPTIONS1_NONE};
+            d2d_device_context_push_layer(context, &layer, NULL);
+        }
         ID2D1DeviceContext6_SetTransform(iface, &transform);
         if (image_rect)
             ID2D1DeviceContext6_PushAxisAlignedClip(iface, image_rect, D2D1_ANTIALIAS_MODE_ALIASED);
         hr = d2d_command_list_replay(command_list, context);
         if (image_rect)
             ID2D1DeviceContext6_PopAxisAlignedClip(iface);
+        if (isolate)
+        {
+            ID2D1DeviceContext6_SetTransform(iface, &previous_transform);
+            ID2D1DeviceContext6_PopLayer(iface);
+        }
         ID2D1DeviceContext6_SetTransform(iface, &previous_transform);
         ID2D1CommandList_Release(command_list);
         if (FAILED(hr)) d2d_device_context_set_error(context, hr);
