@@ -135,6 +135,7 @@ cmd_setup() {
   W_OPT_UNATTENDED=1 "$TUX_HOME/tools/winetricks" -q corefonts gdiplus msxml6 riched20 msls31 \
     >"$TUX_CACHE/winetricks.log" 2>&1 || die "winetricks failed; see $TUX_CACHE/winetricks.log"
   install_dotnet || die ".NET Framework 4.8 failed to install; see $TUX_CACHE/dotnet48.log"
+  install_webview2 || warn "WebView2 failed to install (Office's online pictures and add-ins need it); see $TUX_CACHE/webview2.log"
 
   # Selawik: Microsoft's open-source metric-compatible stand-in for Segoe UI.
   fetch "$SELAWIK_URL" "$TUX_CACHE/selawik.zip"
@@ -271,6 +272,8 @@ update_prefix() {
   # only warns, so Office still starts, and the next start tries again.
   [[ -f "$TUX_CACHE/dotnet48" ]] || install_dotnet || \
     warn ".NET Framework 4.8 is not installed (Excel's Power Query needs it); see $TUX_CACHE/dotnet48.log"
+  [[ -f "$TUX_CACHE/webview2" ]] || install_webview2 || \
+    warn "WebView2 is not installed (Office's online pictures and add-ins need it); see $TUX_CACHE/webview2.log"
   [[ -f $stamp && $(<"$stamp") == "$PREFIX_REVISION" ]] && return 0
   mkdir -p "$TUX_CACHE"
   msg "updating the Office environment"
@@ -306,6 +309,29 @@ install_dotnet() {
     wreg 'HKCU\Software\Wine\DllOverrides' /v "$dll" /t REG_SZ /d builtin
   done
   : >"$TUX_CACHE/dotnet48"
+}
+
+# Microsoft Edge WebView2, which Office uses for its web dialogs and panes:
+# Online Pictures, Stock Images, Publisher's Pictures, add-ins. Without it some
+# of these do nothing at all. The installer is Microsoft's evergreen standalone
+# one, so this always installs the current runtime, which then updates itself.
+WEBVIEW2_URL='https://go.microsoft.com/fwlink/?linkid=2124701'
+WEBVIEW2_CLIENT='HKLM\Software\Wow6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+webview2_installed() {
+  wine reg query "$WEBVIEW2_CLIENT" /v pv 2>/dev/null | grep -q 'pv.*REG_SZ.*[0-9]\.'
+}
+
+install_webview2() {
+  local installer="$TUX_CACHE/MicrosoftEdgeWebView2RuntimeInstallerX64.exe"
+  mkdir -p "$TUX_CACHE"
+  if ! webview2_installed; then
+    msg "installing Microsoft Edge WebView2 (a download of about 300 MB)"
+    fetch "$WEBVIEW2_URL" "$installer" >"$TUX_CACHE/webview2.log" 2>&1 || return 1
+    wine "$installer" /silent /install >>"$TUX_CACHE/webview2.log" 2>&1
+    webview2_installed || return 1
+    rm -f "$installer"
+  fi
+  : >"$TUX_CACHE/webview2"
 }
 
 # Hide Wine's standalone tray window (a box floating over Office with an icon
