@@ -3,7 +3,7 @@
 """Run an app's object-model test in the isolated session, watching for faults.
 
 Usage (inside tests/isolated-run.py): run.py OUTDIR APP [TIMEOUT]
-APP is access, publisher, outlook, formats, media, vba or powerquery (the matching APP.vbs runs
+APP is access, ado, publisher, outlook, formats, media, vba or powerquery (the matching APP.vbs runs
 under Wine's cscript) or onenote (onenote-api.exe, see tests/build-helpers.sh). While it runs
 the script records the visible windows every few seconds, so a modal dialog that
 stalls automation names itself. Afterwards it reports the PASS/FAIL lines, the

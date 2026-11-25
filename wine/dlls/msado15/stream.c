@@ -181,12 +181,13 @@ static HRESULT resize_buffer( struct stream *stream, LONG size )
     if (stream->allocated < size)
     {
         BYTE *tmp;
-        LONG new_size = max( size, stream->allocated * 2 );
+        LONG new_size = size;
+        if (stream->allocated <= MAXLONG / 2) new_size = max( size, stream->allocated * 2 );
         if (!(tmp = realloc( stream->buf, new_size ))) return E_OUTOFMEMORY;
-        memset( tmp + stream->allocated, 0, new_size - stream->allocated );
         stream->buf = tmp;
         stream->allocated = new_size;
     }
+    if (size > stream->size) memset( stream->buf + stream->size, 0, size - stream->size );
     stream->size = size;
     return S_OK;
 }
@@ -200,8 +201,10 @@ static HRESULT WINAPI stream_put_Position( _Stream *iface, ADO_LONGPTR pos )
 
     if (stream->state == adStateClosed) return MAKE_ADO_HRESULT( adErrObjectClosed );
     if (pos < 0) return MAKE_ADO_HRESULT( adErrInvalidArgument );
+    if (pos > MAXLONG) return E_OUTOFMEMORY;
 
-    if ((hr = resize_buffer( stream, stream->pos )) != S_OK) return hr;
+    if (pos > stream->size && stream->mode != adModeRead &&
+            (hr = resize_buffer( stream, pos )) != S_OK) return hr;
     stream->pos = pos;
     return S_OK;
 }
@@ -298,7 +301,7 @@ static HRESULT WINAPI stream_put_Charset( _Stream *iface, BSTR charset )
 static HRESULT create_byte_array( BYTE *data, LONG len, VARIANT *ret )
 {
     SAFEARRAY *vector;
-    LONG i;
+    BYTE *dst;
     HRESULT hr;
 
     if (!len)
@@ -307,14 +310,13 @@ static HRESULT create_byte_array( BYTE *data, LONG len, VARIANT *ret )
         return S_OK;
     }
     if (!(vector = SafeArrayCreateVector( VT_UI1, 0, len ))) return E_OUTOFMEMORY;
-    for (i = 0; i < len; i++)
+    if ((hr = SafeArrayAccessData( vector, (void **)&dst )) != S_OK)
     {
-        if ((hr = SafeArrayPutElement( vector, &i, &data[i] )) != S_OK)
-        {
-            SafeArrayDestroy( vector );
-            return hr;
-        }
+        SafeArrayDestroy( vector );
+        return hr;
     }
+    memcpy( dst, data, len );
+    SafeArrayUnaccessData( vector );
 
     V_VT( ret ) = VT_ARRAY | VT_UI1;
     V_ARRAY( ret ) = vector;
@@ -332,10 +334,10 @@ static HRESULT WINAPI stream_Read( _Stream *iface, LONG size, VARIANT *val )
     if (stream->type != adTypeBinary) return MAKE_ADO_HRESULT( adErrIllegalOperation );
     if (size < adReadAll) return MAKE_ADO_HRESULT( adErrInvalidArgument );
 
-    if (size == adReadAll) size = stream->size - stream->pos;
-    else size = min( size, stream->size - stream->pos );
+    if (size == adReadAll) size = max( 0, stream->size - stream->pos );
+    else size = min( size, max( 0, stream->size - stream->pos ) );
 
-    if ((hr = create_byte_array( stream->buf + stream->pos, size, val )) != S_OK) return hr;
+    if ((hr = create_byte_array( size ? stream->buf + stream->pos : NULL, size, val )) != S_OK) return hr;
     stream->pos += size;
     return S_OK;
 }
@@ -377,24 +379,29 @@ static HRESULT WINAPI stream_SkipLine( _Stream *iface )
 static HRESULT WINAPI stream_Write( _Stream *iface, VARIANT buf )
 {
     struct stream *stream = impl_from_Stream( iface );
-    LONG bound, i;
+    ULONG count;
+    BYTE *data;
     HRESULT hr;
 
     TRACE( "%p, %s\n", stream, debugstr_variant(&buf) );
 
     if (stream->state == adStateClosed) return MAKE_ADO_HRESULT( adErrObjectClosed );
     if (stream->type != adTypeBinary) return MAKE_ADO_HRESULT( adErrIllegalOperation );
-    if (V_VT( &buf ) != (VT_ARRAY | VT_UI1)) return MAKE_ADO_HRESULT( adErrInvalidArgument );
+    if (V_VT( &buf ) != (VT_ARRAY | VT_UI1) || !V_ARRAY( &buf ) ||
+            SafeArrayGetDim( V_ARRAY( &buf ) ) != 1 || SafeArrayGetElemsize( V_ARRAY( &buf ) ) != 1)
+        return MAKE_ADO_HRESULT( adErrInvalidArgument );
 
-    if ((hr = SafeArrayGetUBound( V_ARRAY( &buf ), 1, &bound )) != S_OK) return hr;
-    if ((hr = resize_buffer( stream, stream->size + bound + 1 )) != S_OK) return hr;
-
-    for (i = 0; i <= bound; i++)
+    count = V_ARRAY( &buf )->rgsabound[0].cElements;
+    if (count > MAXLONG - stream->pos) return E_OUTOFMEMORY;
+    if (!count) return S_OK;
+    if ((hr = SafeArrayAccessData( V_ARRAY( &buf ), (void **)&data )) != S_OK) return hr;
+    if ((hr = resize_buffer( stream, max( stream->size, stream->pos + count ) )) == S_OK)
     {
-        if ((hr = SafeArrayGetElement( V_ARRAY( &buf ), &i, &stream->buf[stream->pos++] )) != S_OK) return hr;
+        memcpy( stream->buf + stream->pos, data, count );
+        stream->pos += count;
     }
-
-    return S_OK;
+    SafeArrayUnaccessData( V_ARRAY( &buf ) );
+    return hr;
 }
 
 static HRESULT WINAPI stream_SetEOS( _Stream *iface )
@@ -434,8 +441,10 @@ static HRESULT WINAPI stream_ReadText( _Stream *iface, LONG len, BSTR *ret )
 {
     struct stream *stream = impl_from_Stream( iface );
     BSTR str;
+    LONG pos = stream->pos, available;
 
     TRACE( "%p, %ld, %p\n", stream, len, ret );
+    if (stream->state == adStateClosed) return MAKE_ADO_HRESULT( adErrObjectClosed );
     if (len == adReadLine)
     {
         FIXME( "adReadLine not supported\n" );
@@ -450,14 +459,16 @@ static HRESULT WINAPI stream_ReadText( _Stream *iface, LONG len, BSTR *ret )
     if (stream->type != adTypeText) return MAKE_ADO_HRESULT( adErrIllegalOperation );
     if (len < adReadLine) return MAKE_ADO_HRESULT( adErrInvalidArgument );
 
-    if (len == adReadAll) len = (stream->size - stream->pos) / sizeof(WCHAR);
-    else len = min( len, stream->size - stream->pos / sizeof(WCHAR) );
+    /* The Unicode byte-order mark is storage metadata, not a text character. */
+    if (len && !pos && stream->size >= 2 && stream->buf[0] == 0xff && stream->buf[1] == 0xfe) pos = 2;
+    available = max( 0, stream->size - pos ) / sizeof(WCHAR);
+    if (len == adReadAll) len = available;
+    else len = min( len, available );
 
     if (!(str = SysAllocStringLen( NULL, len ))) return E_OUTOFMEMORY;
-    memcpy( str, stream->buf + stream->pos, len * sizeof(WCHAR) );
-    str[len] = 0;
+    if (len) memcpy( str, stream->buf + pos, len * sizeof(WCHAR) );
 
-    stream->pos += len * sizeof(WCHAR);
+    stream->pos = pos + len * sizeof(WCHAR);
 
     *ret = str;
     return S_OK;
@@ -467,9 +478,10 @@ static HRESULT WINAPI stream_WriteText( _Stream *iface, BSTR data, StreamWriteEn
 {
     struct stream *stream = impl_from_Stream( iface );
     HRESULT hr;
-    LONG size;
+    ULONG size, pos, prefix;
 
     TRACE( "%p, %s, %u\n", stream, debugstr_w(data), options );
+    if (stream->state == adStateClosed) return MAKE_ADO_HRESULT( adErrObjectClosed );
     if (options != adWriteChar)
     {
         FIXME( "options %u not supported\n", options );
@@ -483,11 +495,19 @@ static HRESULT WINAPI stream_WriteText( _Stream *iface, BSTR data, StreamWriteEn
 
     if (stream->type != adTypeText) return MAKE_ADO_HRESULT( adErrIllegalOperation );
 
-    size = (lstrlenW( data ) + 1) * sizeof(WCHAR);
-    if ((hr = resize_buffer( stream, stream->size + size )) != S_OK) return hr;
+    pos = stream->pos;
+    prefix = pos ? 0 : sizeof(WCHAR);
+    if (SysStringLen( data ) > (MAXLONG - pos - prefix) / sizeof(WCHAR)) return E_OUTOFMEMORY;
+    size = SysStringLen( data ) * sizeof(WCHAR);
+    if ((hr = resize_buffer( stream, max( stream->size, pos + prefix + size ) )) != S_OK) return hr;
 
-    memcpy( stream->buf + stream->pos, data, size );
-    stream->pos += size;
+    if (prefix)
+    {
+        stream->buf[0] = 0xff;
+        stream->buf[1] = 0xfe;
+    }
+    if (size) memcpy( stream->buf + pos + prefix, data, size );
+    stream->pos = pos + prefix + size;
 
     return S_OK;
 }

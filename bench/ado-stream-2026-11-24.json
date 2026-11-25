@@ -1,0 +1,141 @@
+{
+  "scope": "In-process 4 MiB ADO binary Stream Write/Read, five samples per architecture. Data checked byte for byte. No Office or Windows performance comparison.",
+  "command": "ado-stream.exe --benchmark",
+  "runs": [
+    {
+      "bits": 64,
+      "bytes": 4194304,
+      "samples": [
+        {
+          "write_ms": 42.3733,
+          "read_ms": 42.1705
+        },
+        {
+          "write_ms": 40.8738,
+          "read_ms": 41.0259
+        },
+        {
+          "write_ms": 42.0184,
+          "read_ms": 41.8187
+        },
+        {
+          "write_ms": 42.1042,
+          "read_ms": 41.1897
+        },
+        {
+          "write_ms": 41.3394,
+          "read_ms": 41.9665
+        }
+      ],
+      "failures": 0,
+      "label": "baseline",
+      "dll_sha256": "16e045e677febd0da5e66da2af597e4b82b4d2cc8860699e152eb2a867013e99",
+      "medians_ms": {
+        "write_ms": 42.0184,
+        "read_ms": 41.8187
+      }
+    },
+    {
+      "bits": 32,
+      "bytes": 4194304,
+      "samples": [
+        {
+          "write_ms": 46.163,
+          "read_ms": 44.5032
+        },
+        {
+          "write_ms": 45.8553,
+          "read_ms": 44.4503
+        },
+        {
+          "write_ms": 46.2577,
+          "read_ms": 45.2436
+        },
+        {
+          "write_ms": 46.2812,
+          "read_ms": 45.1374
+        },
+        {
+          "write_ms": 45.9225,
+          "read_ms": 45.0428
+        }
+      ],
+      "failures": 0,
+      "label": "baseline",
+      "dll_sha256": "1f6f83b5d76197006dad82a4cff82f51f7e752538f15cf213efcfbb077ff9322",
+      "medians_ms": {
+        "write_ms": 46.163,
+        "read_ms": 45.0428
+      }
+    },
+    {
+      "bits": 64,
+      "bytes": 4194304,
+      "samples": [
+        {
+          "write_ms": 0.7864,
+          "read_ms": 0.8016
+        },
+        {
+          "write_ms": 0.5731,
+          "read_ms": 0.6005
+        },
+        {
+          "write_ms": 0.5757,
+          "read_ms": 0.5639
+        },
+        {
+          "write_ms": 0.5503,
+          "read_ms": 0.578
+        },
+        {
+          "write_ms": 0.5603,
+          "read_ms": 0.5597
+        }
+      ],
+      "failures": 0,
+      "label": "candidate",
+      "dll_sha256": "eff0cfa75303e33ac2fc23855c5c0ecd632b5d84da0e16036393ab9fcdedb526",
+      "medians_ms": {
+        "write_ms": 0.5731,
+        "read_ms": 0.578
+      }
+    },
+    {
+      "bits": 32,
+      "bytes": 4194304,
+      "samples": [
+        {
+          "write_ms": 1.0369,
+          "read_ms": 0.838
+        },
+        {
+          "write_ms": 0.5778,
+          "read_ms": 0.5604
+        },
+        {
+          "write_ms": 0.5529,
+          "read_ms": 0.616
+        },
+        {
+          "write_ms": 0.5388,
+          "read_ms": 0.5411
+        },
+        {
+          "write_ms": 0.5049,
+          "read_ms": 0.5122
+        }
+      ],
+      "failures": 0,
+      "label": "candidate",
+      "dll_sha256": "ce7719b7b04934ca9557907800dbf729df2b493acfe9d9e6fc095d5f32b42e44",
+      "medians_ms": {
+        "write_ms": 0.5529,
+        "read_ms": 0.5604
+      }
+    }
+  ],
+  "baseline_commit": "8751807",
+  "source": "tests/ado-stream.c",
+  "source_sha256": "b614d6cfbcecbe70751b4db3247af4d56bfeabf688909007b3da320881f035bb"
+}

@@ -28,6 +28,27 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **ADO stream corruption and crash fixes:** partial text reads previously used
+  an incorrect byte/character bound; the new 32-bit regression reproduces an
+  unhandled page fault. Text writes also stored a trailing NUL instead of the
+  Unicode byte-order mark, and seeking could truncate the stream. Reads now
+  respect remaining characters, Unicode text preserves embedded NULs with the
+  correct BSTR length, seeking preserves existing contents, overwrites preserve
+  the suffix, and extending after truncation zeroes the newly exposed bytes.
+  Binary writes accept nonzero SAFEARRAY lower bounds and both binary transfers
+  copy the array in bulk. `tests/ado-stream.c` passes 82 checks per architecture;
+  `tests/functional/ado.vbs` compiles and runs typed ADO 6.1 code inside native
+  Access and passes seven checks. The preceding code returns 22 characters
+  instead of 21 in that test. Five 4 MiB benchmark samples per architecture
+  verify every byte: x64 median write/read times improve from 42.018/41.819 ms
+  to 0.573/0.578 ms; x86 from 46.163/45.043 ms to 0.553/0.560 ms. Raw data,
+  binary fingerprints and scope are in `bench/ado-stream-2026-11-24.json`;
+  rerun with the stream probe's `--benchmark` argument. These are in-process API
+  measurements, not Windows or whole-Office comparisons. The seek/overwrite
+  behavior follows Microsoft's [Position](https://learn.microsoft.com/en-us/office/client-developer/access/desktop-database-reference/position-property-ado)
+  and [WriteText](https://learn.microsoft.com/en-us/office/client-developer/access/desktop-database-reference/writetext-method-ado)
+  contracts. Charset conversion, line operations and other existing stream
+  stubs remain outside this fix.
 - **ADO 6.1 reference and interface support:** native VBA tracing identifies the
   Labels size-query failure as a missing ADO 6.1 type library. Loading that
   reference throws `TYPE_E_CANTLOADLIBRARY` before expression lookup can reach
@@ -44,6 +65,12 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   still blank, including with the source table explicitly selected. Labels
   completion and full ADO feature coverage remain unverified. This change is
   not yet packaged or installed on the host.
+- **Labels callback lookup narrowed down:** selecting the source table explicitly
+  still leaves the field list blank. Native `BASIC_CLASS_GetIDsOfNames` tracing
+  shows the actual wizard repeatedly failing to resolve `FillFields` with
+  `0x800a09a1`. A separate Access form's user-defined list callback works. The
+  current evidence points to callback lookup before field retrieval; the root
+  cause and fix remain under investigation.
 - **Faster Office type-library loading:** MSFT name references previously scanned
   the full linked list for every reference. A temporary sorted offset index now
   permits binary search while parsing, with the original scan retained if its
@@ -121,10 +148,12 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   that private alias, while the failing wizard query does not. An ADO 6.1
   reference (`{B691E011-1797-432E-907A-4D8C69339129}`) also reports
   `IsBroken=False` but fails `FullPath` with `TYPE_E_LIBNOTREGISTERED`. Wine
-  currently supplies the older ADO 2.8 type library. A temporary path mapping in
-  the isolated prefix did not clear the wizard failure and was removed; no
-  ADO alias or substitute library is shipped. The relationship between these
-  findings remains unproven.
+  0.1.17 supplies the older ADO 2.8 type library. An initial temporary per-user
+  path mapping did not clear the wizard failure and was removed. Subsequent
+  tracing and a machine-level registration probe in the isolated prefix proved
+  the missing reference was aborting expression lookup; see the newer ADO 6.1
+  entry above. All temporary mappings were removed before implementing the
+  correctly identified second library resource.
 - **0.1.16 release built and verified:** packages and checked SHA256SUMS are in
   `dist/0.1.16/`. The portable runner was rebuilt from committed source in Ubuntu
   24.04. Clean Arch system installation, 32/64-bit execution, removal and per-user

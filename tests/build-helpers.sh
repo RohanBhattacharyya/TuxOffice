@@ -30,3 +30,5 @@ winegcc -b x86_64-windows -mconsole -o "$destination/typelib-dual.exe" "$HERE/ty
 winegcc -b i386-windows -mconsole -o "$destination/typelib-dual32.exe" "$HERE/typelib-dual.c" -loleaut32 -lole32 -luuid -luser32
 winegcc -b x86_64-windows -mconsole -o "$destination/ado-interfaces.exe" "$HERE/ado-interfaces.c" -loleaut32 -lole32 -luuid -luser32
 winegcc -b i386-windows -mconsole -o "$destination/ado-interfaces32.exe" "$HERE/ado-interfaces.c" -loleaut32 -lole32 -luuid -luser32
+winegcc -b x86_64-windows -mconsole -o "$destination/ado-stream.exe" "$HERE/ado-stream.c" -loleaut32 -lole32 -luuid
+winegcc -b i386-windows -mconsole -o "$destination/ado-stream32.exe" "$HERE/ado-stream.c" -loleaut32 -lole32 -luuid
