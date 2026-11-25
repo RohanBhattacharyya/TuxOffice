@@ -16,7 +16,7 @@ apt-get install -y -qq --no-install-recommends \
   build-essential clang lld llvm bison flex pkg-config git python3 ca-certificates curl \
   xz-utils zstd file meson ninja-build glslang-tools \
   libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev libxkbregistry-dev libegl-dev libvulkan-dev \
-  libfreetype-dev libfontconfig-dev libgnutls28-dev libsecret-1-dev libdbus-1-dev libsystemd-dev \
+  libfreetype-dev libfontconfig-dev zlib1g-dev libgnutls28-dev libsecret-1-dev libdbus-1-dev libsystemd-dev \
   libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   libsdl2-dev \
   libx11-dev libxext-dev libxrandr-dev libxrender-dev libxi-dev libxcursor-dev libxfixes-dev \
@@ -43,6 +43,7 @@ TUXOFFICE_HOME=/work/home TUXOFFICE_BUILD_DIR=/cache/build TUXOFFICE_DXVK_BUILD_
 runner=/work/home/runners/tuxoffice-${RUNNER_NAME#soda-}
 [[ -f $runner/share/tuxoffice/dxvk/resource-pool-lock-v1 ]] || { echo "DXVK bundle missing" >&2; exit 1; }
 [[ -x $runner/bin/tuxoffice-file-dialog ]] || { echo "file chooser helper missing" >&2; exit 1; }
+[[ -x $runner/bin/tuxoffice-splash ]] || { echo "launch window helper missing" >&2; exit 1; }
 # Development headers are not needed to run Office. Without Soda's legacy
 # 32-bit Unix loader, Wine runs 32-bit Windows code (such as Office's
 # installer) through WoW64 in 64-bit processes, so distributions need no

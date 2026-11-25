@@ -71,6 +71,19 @@ install_support_files() {
   else
     echo 'warning: libsystemd not found; Office will use Wine file dialogs' >&2
   fi
+  # Native helper that shows the launch window until Office shows its own.
+  local protocols scanner_dir="$WORK/splash-protocols" xml name
+  protocols=$(pkg-config --variable=pkgdatadir wayland-protocols)
+  mkdir -p "$scanner_dir"
+  for xml in stable/xdg-shell/xdg-shell.xml stable/viewporter/viewporter.xml \
+             staging/fractional-scale/fractional-scale-v1.xml staging/xdg-activation/xdg-activation-v1.xml \
+             staging/cursor-shape/cursor-shape-v1.xml unstable/tablet/tablet-unstable-v2.xml; do
+    name=$(basename "$xml" .xml)
+    wayland-scanner client-header "$protocols/$xml" "$scanner_dir/$name-client-protocol.h"
+    wayland-scanner private-code "$protocols/$xml" "$scanner_dir/$name-protocol.c"
+  done
+  cc -O2 -Wall -I"$scanner_dir" -o "$destination/bin/tuxoffice-splash" "$HERE/../lib/splash.c" \
+    "$scanner_dir"/*-protocol.c $(pkg-config --cflags --libs wayland-client freetype2 fontconfig zlib) -lm -ldl
   install -m 0644 "$WORK/pdf-printer.exe" "$destination/share/tuxoffice/pdf-printer.exe"
   install -m 0644 "$WORK/office-ui.exe" "$destination/share/tuxoffice/office-ui.exe"
   install -m 0644 "$WORK/root-certs.exe" "$destination/share/tuxoffice/root-certs.exe"

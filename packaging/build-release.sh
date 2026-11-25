@@ -50,6 +50,7 @@ check winebus.so libSDL2-2.0.so.0
 check windows.security.authentication.onlineid.so libsecret-1.so.0
 check winegstreamer.so libgstreamer-1.0.so.0
 [[ -x $DIST/runner/bin/tuxoffice-file-dialog ]] || die "the file chooser helper is missing"
+[[ -x $DIST/runner/bin/tuxoffice-splash ]] || die "the launch window helper is missing"
 [[ -f $DIST/runner/share/tuxoffice/dxvk/resource-pool-lock-v1 ]] || die "the DXVK bundle is missing"
 
 msg "staging tuxoffice $VERSION"
