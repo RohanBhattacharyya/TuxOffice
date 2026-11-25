@@ -51,11 +51,15 @@ die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 # runner/build.sh, the one a distribution package installed, then stock Soda.
 find_runner() {
   local r
-  for r in "${TUXOFFICE_RUNNER:-}" "$TUX_HOME/runners/$LOCAL_RUNNER_NAME" "$SYSTEM_RUNNER" \
+  if [[ -n ${TUXOFFICE_RUNNER:-} ]]; then
+    [[ -x "$TUXOFFICE_RUNNER/bin/wine" ]] || die "no runner at $TUXOFFICE_RUNNER"
+    echo "$TUXOFFICE_RUNNER"
+    return 0
+  fi
+  for r in "$TUX_HOME/runners/$LOCAL_RUNNER_NAME" "$SYSTEM_RUNNER" \
            "$TUX_HOME/runners/$RUNNER_NAME"; do
     [[ -n $r && -x "$r/bin/wine" ]] && { echo "$r"; return 0; }
   done
-  [[ -z ${TUXOFFICE_RUNNER:-} ]] || die "no runner at $TUXOFFICE_RUNNER"
   return 1
 }
 
