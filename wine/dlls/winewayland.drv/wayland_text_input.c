@@ -108,11 +108,13 @@ static void text_input_leave(void *data, struct zwp_text_input_v3 *zwp_text_inpu
     pthread_mutex_lock(&text_input->mutex);
     zwp_text_input_v3_disable(text_input->zwp_text_input_v3);
     zwp_text_input_v3_commit(text_input->zwp_text_input_v3);
-    if (text_input->focused_hwnd)
-    {
+    /* End a composition in progress. Without one there is nothing to clear,
+     * and an update reaches the window as a key press: Publisher, with a
+     * picture selected, then complains about typing whenever it loses the
+     * keyboard focus. */
+    if (text_input->focused_hwnd && text_input->current_preedit.string)
         post_ime_update(text_input->focused_hwnd, 0, NULL, NULL);
-        text_input->focused_hwnd = NULL;
-    }
+    text_input->focused_hwnd = NULL;
     wayland_text_input_reset_all_state(text_input);
     pthread_mutex_unlock(&text_input->mutex);
 }
