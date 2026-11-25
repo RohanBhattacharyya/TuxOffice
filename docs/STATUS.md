@@ -28,6 +28,22 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **0.1.18 built and installation-tested:** release source is `457f430`, with
+  ADO changes in `8751807` and `84faa56`. All four formats and checked SHA256SUMS
+  are in `dist/0.1.18/`. Clean Arch system installation, 32/64-bit Wine execution,
+  removal and per-user installation pass. The packaged runner passes 140
+  interface checks, 82 stream checks and the existing 1,012-check ADO suite on
+  each architecture (39 existing TODOs and one ODBC skip). A separate prefix
+  upgrade from 0.1.17 verifies that the launcher automatically registers 6.1 in
+  both registry views and then passes all 222 new checks per architecture.
+  Native Access's typed ADO test passes seven checks; Excel VBA's early-bound
+  Word test passes five. The same-source candidate passes the three-round,
+  64-check Access UI suite and retains Access's 42/44 object-model baseline,
+  with only the existing XML export and compaction failures. The packaged runner
+  also passes 24 Access UI checks and six Publisher inline checks with two
+  native file dialogs, save/reopen and PDF pixel verification. These Publisher
+  checks do not cover its still-broken Pictures source gallery. Host pacman remains
+  **0.1.13-1**; no host installation or Office-prefix change was made.
 - **ADO stream corruption and crash fixes:** partial text reads previously used
   an incorrect byte/character bound; the new 32-bit regression reproduces an
   unhandled page fault. Text writes also stored a trailing NUL instead of the
@@ -64,13 +80,13 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   sizes and advances past the previous Null error. The later field list is
   still blank, including with the source table explicitly selected. Labels
   completion and full ADO feature coverage remain unverified. This change is
-  not yet packaged or installed on the host.
+  included in 0.1.18; it has not been installed on the host.
 - **Labels callback lookup narrowed down:** selecting the source table explicitly
   still leaves the field list blank. Native `BASIC_CLASS_GetIDsOfNames` tracing
   shows the actual wizard repeatedly failing to resolve `FillFields` with
-  `0x800a09a1`. A separate Access form's user-defined list callback works. The
-  current evidence points to callback lookup before field retrieval; the root
-  cause and fix remain under investigation.
+  `0x800a09a1`. Separate Access callbacks work in both standard and form modules.
+  The wizard's callback resolution and fallback are the next investigation
+  target; the cause of the empty list remains unproven.
 - **Faster Office type-library loading:** MSFT name references previously scanned
   the full linked list for every reference. A temporary sorted offset index now
   permits binary search while parsing, with the original scan retained if its
