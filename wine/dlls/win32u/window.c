@@ -24,6 +24,8 @@
 #endif
 
 #include <assert.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
@@ -4157,6 +4159,20 @@ done:
 }
 
 /* NtUserSetWindowPos implementation */
+/* TuxOffice's launcher shows a window of its own until the app it starts
+ * shows one: it names a file in TUXOFFICE_SPLASH_READY, removed here when this
+ * process first shows a toplevel window that is not tiny. */
+static void notify_launcher_window_shown( HWND hwnd, const RECT *rect )
+{
+    static LONG done;
+    const char *path;
+
+    if (done || rect->right - rect->left < 100 || rect->bottom - rect->top < 50) return;
+    if (NtUserGetAncestor( hwnd, GA_PARENT ) != get_desktop_window()) return;
+    if (InterlockedExchange( &done, 1 )) return;
+    if ((path = getenv( "TUXOFFICE_SPLASH_READY" )) && *path) unlink( path );
+}
+
 BOOL set_window_pos( WINDOWPOS *winpos, int parent_x, int parent_y )
 {
     RECT valid_rects[2], surface_rect;
@@ -4243,6 +4259,7 @@ BOOL set_window_pos( WINDOWPOS *winpos, int parent_x, int parent_y )
         NtUserNotifyWinEvent( EVENT_OBJECT_SHOW, winpos->hwnd, 0, 0 );
 
         NtUserShowCaret( winpos->hwnd );
+        notify_launcher_window_shown( winpos->hwnd, &new_rects.window );
     }
 
     if (!(winpos->flags & (SWP_NOACTIVATE|SWP_HIDEWINDOW)))
