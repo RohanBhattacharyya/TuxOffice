@@ -53,6 +53,9 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   Office's window each time. Word, Excel and PowerPoint suites pass.
   `TUXOFFICE_SPLASH=0` turns it off. `fetch` now also returns curl's
   failure instead of continuing without the file.
+  Released as 0.1.23: the container-built runner passes the same launch
+  timelines (Word, PowerPoint) and the Word, Excel and PowerPoint suites, and
+  the packages install on Arch Linux and Ubuntu 24.04.
 
 - **Publisher took the focus back whenever it lost it (reported on 0.1.21):**
   with a picture or shape selected, switching to any other application made
