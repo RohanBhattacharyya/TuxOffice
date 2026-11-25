@@ -67,6 +67,21 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   queues unfinished updates (own device context, own bitmap when virtual) and
   completes them all at EndDraw (`c421ff5`). Both themes now show Sheet1,
   Sheet2 with the active tab underlined, the arrows and +.
+- **PowerPoint feature pass (0.1.25 runner):** working: typing in title,
+  subtitle, bullets, table cells and notes; Ctrl+A, bold, undo; new slide;
+  thumbnails; Design themes (and the Designer pane's online ideas);
+  Transitions (Fade applies, slide marked); slide show (F5, arrows, Esc);
+  Insert > Table, shapes from the Home gallery; right-click menu and mini
+  toolbar; Ctrl+S, close and reopen (table, cell text, notes kept).
+  Open: Office dialogs (NUIDialog, e.g. Font from the context menu) show a
+  blank white strip instead of their caption once their content renders
+  (on 0.1.24 the caption showed but the content stayed blank). Office handles
+  WM_NCPAINT itself; drawing the default frame after it (tried and reverted)
+  did not show, so something white is composited over the frame. Also seen
+  once: the Insert > Table button inserted a 2x4 table without the grid.
+- Released as 0.1.25: suites, the WebView2 test and the Arch and Ubuntu
+  package installs pass; Excel tabs and PowerPoint typing checked on the
+  container-built runner.
 - Harness note: in the isolated session screenshots from `ScreenArea` are in
   logical pixels (2048x1280 of a 2560x1600 capture) and so are eis-input
   coordinates; an earlier x1.6 conversion made clicks land on neighbouring
