@@ -2875,7 +2875,15 @@ static HRESULT show_native_dialog(FileDialogImpl *This, HWND parent)
     }
 
     if (disabled) EnableWindow(owner, TRUE);
-    if (owner) SetForegroundWindow(owner);
+    if (owner)
+    {
+        SetForegroundWindow(owner);
+        /* The last input went to the native portal, outside Wine. Until the
+         * compositor sends keyboard enter, Wine may refuse the foreground
+         * request. Reactivate our input queue as a modal dialog would, so
+         * SetFocus does not depend on that asynchronous notification. */
+        SetActiveWindow(owner);
+    }
     /* Activating the portal's window clears the Windows keyboard focus.
      * Re-activating the owner alone focuses its top-level window, leaving
      * typing and context-dependent commands detached from the original edit

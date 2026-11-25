@@ -28,6 +28,16 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Native picker return race repaired:** tracing the intermittent failure
+  showed `SetForegroundWindow` returning FALSE while the compositor's keyboard
+  enter notification was still queued. Wine had deactivated the owner when
+  input moved to the native portal; `SetFocus` then also failed because no
+  window in the caller's queue was active. The modal return path now explicitly
+  reactivates its owner before restoring the surviving edit control.
+  The candidate passes 100 consecutive real KDE cancellations, and Publisher's
+  three-round inline picture workflow still passes all 12 assertions and PDF
+  pixel verification. This does not resolve the separate Pictures ribbon
+  cancel/reopen context error, which still reproduces.
 - **0.1.15 build:** packages are in `dist/0.1.15/`, with verified checksums.
   Clean Arch system installation, 32/64-bit Wine execution, removal and per-user
   installation pass. The desktop's pacman installation remains 0.1.13-1.
