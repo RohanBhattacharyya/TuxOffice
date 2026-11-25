@@ -28,6 +28,26 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Word text stayed blurry after scrolling (reported on 0.1.23):** at 172%
+  a page, or both pages around a page break, kept a soft grey copy of the
+  text, or a doubled one, with no input for as long as the window stayed.
+  On Windows, Word shows a placeholder only while a page's tiles are late
+  (white plus a page image a tenth of the size, stretched, both at 30%
+  opacity) and the sharp tiles replace it a frame or two later. Word builds
+  the stacking order by inserting each page's placeholder at the top of the
+  pages container and then inserting the same visual again below the
+  page's content; it does the same with its caret and marker visuals (53
+  re-inserts into the same collection and 20 into another one in one
+  scroll). A Windows visual has one parent, so the second insert moves it.
+  Wine's `VisualCollection` added a second entry and left the first, so the
+  placeholder kept drawing over the text. Inserting a visual that is
+  already in a collection now moves it, and `Visual.Parent` returns the
+  container (it was always null). The `uitree` debug channel traces
+  inserts, removals, visibility, opacity and animations. Checked at 172%
+  with touchpad and wheel scrolls ending on page breaks: sharp 0.3 s after
+  each scroll; the caret still blinks; Word, Excel and PowerPoint suites
+  and the WebView2 Online Pictures test pass.
+
 - **Launch window (25 November):** `tuxoffice run` showed nothing until
   Office's own splash, which after a cold start took 4.5 s in the test
   session, 13.9 s right after a runner update (`wineboot -u`), and minutes
