@@ -28,6 +28,50 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **PowerPoint text boxes showed nothing while typing (reported on 0.1.24,
+  present since at least 0.1.5):** from the click into a placeholder, every
+  composition frame of the slide view failed, so the slide never updated
+  (typing, selection handles, even resizing the window) until another slide
+  was shown. PowerPoint draws its caret and text selection as a
+  262144x262144 virtual surface in DestinationInvert mode; the inverted-brush
+  path computed width x height in 32 bits, which overflowed to 0, tried a
+  262144x262144 offscreen target and failed, and a failing visual discarded
+  the whole frame. Fixed in layers:
+  - a frame is presented even if one visual fails to draw (`39df254`);
+  - DestinationInvert is drawn with a destination blend,
+    src x (1 - dst) + dst x (1 - src), for any brush and size; the old
+    approximation (invert the brush's own colours) turned the grey selection
+    into an opaque block (`806349f`);
+  - d2d1 applied no primitive blend at all (MIN, ADD, MAX, COPY were stored
+    and ignored); it now uses a blend state per mode, plus a private one for
+    the invert above (`f012a67`);
+  - PowerPoint's selection highlight is a command list that clears to the
+    highlight colour; replayed onto the target its Clear erased the selected
+    text. Lists containing a Clear are replayed in a layer, as an image is
+    composited on Windows (`f012a67`).
+  Checked: typing in title, subtitle and bullet placeholders shows at once with
+  a blinking caret; Ctrl+A shows a grey highlight with the text; bold, undo,
+  new slide, slide thumbnails, the Insert and Home ribbons, drawing shapes.
+- **First click on an Insert > Shapes gallery item did nothing** in a fresh
+  PowerPoint. `IsWinEventHookInstalled` was a stub returning TRUE, so Office
+  did accessibility work on every event as if a screen reader listened; it
+  now asks win32u whether a WinEvent hook exists (`2d5b372`). Open: in a
+  scripted run the click is still ignored if the pointer jumps from the
+  Shapes button straight onto the item and rests there 0.5-1.5 s; moving
+  across a neighbouring item first, as a hand does, works.
+- **Excel sheet tabs were a plain grey rectangle (reported on 0.1.24, present
+  since at least 0.1.10):** Excel draws the tab strip's background, suspends,
+  then begins an update for each tab, the next-sheet arrow and the new-sheet
+  button on the same virtual surface; its render thread ends them all with
+  one EndDraw. BeginDraw refused every update after the first. A surface now
+  queues unfinished updates (own device context, own bitmap when virtual) and
+  completes them all at EndDraw (`c421ff5`). Both themes now show Sheet1,
+  Sheet2 with the active tab underlined, the arrows and +.
+- Harness note: in the isolated session screenshots from `ScreenArea` are in
+  logical pixels (2048x1280 of a 2560x1600 capture) and so are eis-input
+  coordinates; an earlier x1.6 conversion made clicks land on neighbouring
+  controls and looked like PowerPoint bugs.
+
 - **Word text stayed blurry after scrolling (reported on 0.1.23):** at 172%
   a page, or both pages around a page break, kept a soft grey copy of the
   text, or a doubled one, with no input for as long as the window stayed.
