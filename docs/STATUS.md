@@ -28,6 +28,58 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **WebView2 renders under native Wayland (25 November):** Office's web
+  dialogs were blank because WebView2's browser draws into a child window
+  of Office's dialog from another process, and winewayland has no way to
+  draw into a toplevel owned by another process: win32u gave such DCs no
+  surface and the pixels were dropped. For drivers without a `GetDC` entry
+  point, the drawing process now paints into a section shared with the
+  toplevel's process (flushed when the DC is released, since Chromium's
+  processes never go idle) and posts an internal message to the window's
+  parent; that process copies the damaged area into its own window surface
+  through a DC of the child, so it is clipped like any child (`64353f5`).
+  WebView2 starts with `--disable-gpu --disable-direct-composition`
+  (`0d2b6b8`): its GPU frames go through DirectComposition, which still
+  cannot reach the host's window, while software frames are GDI drawing.
+  `tests/cross-process-child.c` fails on 0.1.19 (white) and passes three
+  bands and 19-20 of 20 animation frames with the fix.
+- **Results:** PowerPoint Online Pictures searches Bing and inserts the
+  picture with its attribution (Designer then offers layouts); Word Stock
+  Images inserts a picture; Publisher's Insert Pictures dialog renders,
+  Browse opens the KDE chooser, and Bing search inserts a picture. Typing,
+  clicks and repaints reach the page.
+- **Focus taken by tooltips:** hovering a WebView2 control shows a
+  click-through, non-activating tooltip owned by the browser's child window.
+  winewayland made it an xdg_toplevel, KWin focused it, and Office's dialog
+  took the focus back from the page on reactivation, so typing went nowhere.
+  Such popups of foreign windows are now left unmapped (`1ea4d2e`). Other
+  popups of foreign windows (e.g. a `<select>` dropdown) still become
+  toplevels; compositing them through the owner process is open.
+- **Publisher picture download:** Publisher downloads the chosen picture
+  with `HlinkParseDisplayName` + `HlinkResolveMonikerForData`. Office
+  patches `MkParseDisplayNameEx` (urlmon) and `MkParseDisplayName` (ole32)
+  with inline jumps, and the hooks fail for these URLs, so Wine's hlink fell
+  back to a file moniker, bound nothing, and Publisher offered to "Convert"
+  an empty file. hlink now creates URL monikers for http/https/ftp itself
+  (`7098a45`); the download then completes (1 MB JPEG) and inserts.
+- **WebView2 runtime in setup:** `tuxoffice setup` installs Microsoft's
+  evergreen standalone runtime (about 300 MB), and existing prefixes get it
+  once on their next start; failure only warns (`a513ee0`). Tested in a
+  fresh empty prefix: 2 min 20 s, then a web view renders there too.
+- **Regression on the candidate:** office-suite Word 11, Excel 17,
+  PowerPoint 8 checks pass; functional formats and vba pass.
+  `embedded-chart-ui.py` fails ("Full Excel document window did not
+  appear") on both the candidate and the 0.1.19 release runner, so it is
+  not caused by these changes.
+- **Still open here:** icon glyphs on the Bing pages show as boxes: the
+  page's `FabricMDL2Icons` web font returns 404 from Microsoft's CDN, and
+  Windows falls back to its Segoe MDL2/Fluent icon fonts, which come from
+  the optional `tuxoffice fonts segoe`. The Online Pictures heading asks for
+  a family named "Segoe Semibold" and gets the default serif face; whether
+  Windows matches that name is unverified. The Office Add-ins store dialog
+  is hosted in the IE WebBrowser control (Wine Gecko), not WebView2, and
+  stays on its loading spinner.
+
 - **0.1.19 built and installation-tested:** final binary source is `78d6ae5`.
   All four formats and verified SHA256SUMS are in `dist/0.1.19/`. Clean Arch
   system installation, 32/64-bit execution, removal and per-user installation
