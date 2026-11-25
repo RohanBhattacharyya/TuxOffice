@@ -7842,6 +7842,9 @@ ULONG_PTR WINAPI NtUserCallOneParam( ULONG_PTR arg, ULONG code )
     case NtUserCallOneParam_UnregisterTouchWindow:
         return unregister_touch_window( (HWND)arg );
 
+    case NtUserCallOneParam_IsWinEventHookInstalled:
+        return is_hooked( WH_WINEVENT );
+
     /* temporary exports */
     case NtUserGetDeskPattern:
         return get_entry( &entry_DESKPATTERN, 256, (WCHAR *)arg );

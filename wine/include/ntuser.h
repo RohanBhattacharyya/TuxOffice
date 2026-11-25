@@ -1138,6 +1138,7 @@ enum
     NtUserCallOneParam_D3DKMTOpenAdapterFromGdiDisplayName,
     NtUserCallOneParam_GetAsyncKeyboardState,
     NtUserCallOneParam_UnregisterTouchWindow,
+    NtUserCallOneParam_IsWinEventHookInstalled,
     /* temporary exports */
     NtUserGetDeskPattern,
 };

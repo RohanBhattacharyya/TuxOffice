@@ -537,9 +537,10 @@ NTSTATUS WINAPI User32CallWindowsHook( void *args, ULONG size )
  */
 BOOL WINAPI IsWinEventHookInstalled(DWORD dwEvent)
 {
-    /* FIXME: Needed by Office 2007 installer */
-    WARN("(%ld)-stub!\n", dwEvent);
-    return TRUE;
+    /* Whether any WinEvent hook is installed, whatever events it covers. Office
+     * prepares accessibility data for every event when this returns TRUE. */
+    TRACE("(%ld)\n", dwEvent);
+    return NtUserCallOneParam( dwEvent, NtUserCallOneParam_IsWinEventHookInstalled );
 }
 
 /* Undocumented RegisterUserApiHook() */
