@@ -33,7 +33,7 @@ subscription.
 ## Highlights
 
 - **Activation by signing in.** Office activates with your own Microsoft 365
-  account through a browser sign-in. No KMS tools, no product-key tricks.
+  account through a browser sign-in.
 - **A Linux desktop citizen.** Open and Save As use your desktop's file
   chooser (Dolphin's dialog on Plasma) and save straight into your Linux
   folders. Text, HTML and images copy and paste with native apps. You can

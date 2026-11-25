@@ -106,17 +106,11 @@ top (`runner/` in this repo) costs little.
   `AppvIsvSubsystems64.dll` / `C2R64.dll` must be copied next to the apps.
 
 ### 3.2 Activation and licensing
-Under Wine, Office's licensing has two paths:
-
-* **Subscription ("vNext") licensing**: after sign-in, Office fetches a
-  licence from Microsoft's licensing service (OLS). Soda implements the Web
-  Account Manager and OnlineId APIs, bridged to the system browser (device
-  code) with tokens in the desktop keyring (Secret Service). TuxOffice sets
-  `LicensingNext\<SKU>=2` for subscription SKUs.
-* **SPP-based licensing** (retail perpetual keys, volume KMS/MAK): needs the
-  Windows Software Protection service (`sppsvc`), which Wine does not have;
-  Soda's `sppc.dll` only reports a grace period. Volume/KMS activation does
-  not work under Wine, whatever KMS host is configured.
+Office activates through subscription ("vNext") licensing: after sign-in,
+Office fetches a licence from Microsoft's licensing service (OLS). Soda
+implements the Web Account Manager and OnlineId APIs, bridged to the system
+browser (device code) with tokens in the desktop keyring (Secret Service).
+TuxOffice sets `LicensingNext\<SKU>=2` for subscription SKUs.
 
 **Bug found and fixed (runner patch 0002).** With a work/school account,
 sign-in "succeeded" but Office stayed unactivated. Tracing (patch 0001)
@@ -131,9 +125,6 @@ under the requested authority. Result: `LicenseFetcher::FetchModelFromOls -
 Successfully retrieved model from OLS`, licence stored, Office activated.
 Remaining gap: Soda rejects Microsoft's 16-hex-digit consumer client id, so
 personal-account (MSA) token requests still fail.
-
-TuxOffice ships no KMS client and does not use third-party public KMS
-emulators (such as massgrave's); those activate copies without a licence.
 
 ### 3.3 Fonts
 Office's UI expects Segoe UI (and Segoe Fluent Icons/MDL2 Assets on
