@@ -37,6 +37,8 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   cases return provider/session references to zero and balance initialization
   on both architectures. The existing ADO suite passes 1,012 checks on each
   architecture (39 existing todos, one unavailable ODBC-driver skip).
+  Access's broader baseline remains 41/43 after this repair: XML export and
+  compaction following its borrowed ADO connection still fail separately.
 - **Access ribbon stress coverage:** `tests/access-ui.py` passes 64 checks over
   25 UI steps: three rounds each of single forms, multiple-item forms,
   datasheets and split forms, actual keyboard edits, persistence after reopening,
