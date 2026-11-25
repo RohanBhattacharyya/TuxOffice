@@ -12860,7 +12860,11 @@ static HRESULT effect_render_source( void *data, HSTRING name, ID2D1Image **imag
             name, &brush ))) return hr;
     if (!brush) return E_INVALIDARG;
     if (FAILED(hr = ID2D1DeviceContext_CreateCompatibleRenderTarget( sources->context, &sources->size,
-            NULL, &format, D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE, &target ))) goto done;
+            NULL, &format, D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE, &target )))
+    {
+        WARN( "%s target %.2fx%.2f failed, hr %#lx.\n", "effect source", sources->size.width, sources->size.height, hr );
+        goto done;
+    }
     if (FAILED(hr = ID2D1BitmapRenderTarget_QueryInterface( target, &IID_ID2D1DeviceContext,
             (void **)&context ))) goto done;
     ID2D1DeviceContext_BeginDraw( context );
@@ -12898,7 +12902,11 @@ static HRESULT draw_effect_brush( ID2D1DeviceContext *context, struct compositio
     if (InterlockedCompareExchange( &effect->closed, 0, 0 )) return RO_E_CLOSED;
     effect_update_expressions( effect );
     if (FAILED(hr = ID2D1DeviceContext_CreateCompatibleRenderTarget( context, &sources.size, NULL,
-            &format, D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE, &target ))) goto done;
+            &format, D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE, &target )))
+    {
+        WARN( "%s target %.2fx%.2f failed, hr %#lx.\n", "effect", sources.size.width, sources.size.height, hr );
+        goto done;
+    }
     if (FAILED(hr = ID2D1BitmapRenderTarget_QueryInterface( target, &IID_ID2D1DeviceContext,
             (void **)&output ))) goto done;
     sources.context = output;
@@ -13066,6 +13074,91 @@ static CRITICAL_SECTION_DEBUG inverted_brush_cs_debug =
 };
 static CRITICAL_SECTION inverted_brush_cs = { &inverted_brush_cs_debug, -1, 0, 0, 0, 0 };
 
+/* DestinationInvert for a brush too large to read back, such as PowerPoint's
+ * text caret and selection: a virtual surface of 262144x262144 drawn white.
+ * Draw the part of it that can show offscreen and invert its colours (keeping
+ * alpha) with a colour matrix, as the readback path does. */
+static HRESULT draw_large_inverted_brush( ID2D1DeviceContext *context, ICompositionBrush *brush,
+        const D2D1_RECT_F *bounds, FLOAT opacity )
+{
+    D2D1_PIXEL_FORMAT format = {DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED};
+    D2D1_MATRIX_5X4_F invert = {0};
+    D2D1_COLOR_F clear = {0.0f, 0.0f, 0.0f, 0.0f};
+    D2D1_MATRIX_3X2_F transform, inverse, shift;
+    D2D1_RECT_F visible = *bounds;
+    ID2D1BitmapRenderTarget *target = NULL;
+    ID2D1DeviceContext *offscreen = NULL;
+    ID2D1Bitmap *bitmap = NULL;
+    ID2D1Effect *effect = NULL;
+    D2D1_POINT_2F corner, origin;
+    D2D1_SIZE_F target_size, size;
+    float det, left = FLT_MAX, top = FLT_MAX, right = -FLT_MAX, bottom = -FLT_MAX;
+    HRESULT hr, end;
+    UINT i;
+
+    invert._11 = invert._22 = invert._33 = -1.0f;
+    invert._44 = opacity;
+    invert._51 = invert._52 = invert._53 = 1.0f;
+
+    /* What of the brush falls inside the render target, in local coordinates. */
+    ID2D1DeviceContext_GetTransform( context, &transform );
+    target_size = ID2D1DeviceContext_GetSize( context );
+    det = transform._11 * transform._22 - transform._12 * transform._21;
+    if (fabsf( det ) < 1e-6f) return S_OK;
+    inverse._11 = transform._22 / det;
+    inverse._12 = -transform._12 / det;
+    inverse._21 = -transform._21 / det;
+    inverse._22 = transform._11 / det;
+    inverse._31 = -(transform._31 * inverse._11 + transform._32 * inverse._21);
+    inverse._32 = -(transform._31 * inverse._12 + transform._32 * inverse._22);
+    for (i = 0; i < 4; ++i)
+    {
+        float x = i & 1 ? target_size.width : 0.0f, y = i & 2 ? target_size.height : 0.0f;
+        corner.x = x * inverse._11 + y * inverse._21 + inverse._31;
+        corner.y = x * inverse._12 + y * inverse._22 + inverse._32;
+        left = min( left, corner.x );
+        top = min( top, corner.y );
+        right = max( right, corner.x );
+        bottom = max( bottom, corner.y );
+    }
+    visible.left = max( visible.left, floorf( left ) );
+    visible.top = max( visible.top, floorf( top ) );
+    visible.right = min( visible.right, ceilf( right ) );
+    visible.bottom = min( visible.bottom, ceilf( bottom ) );
+    if (visible.right <= visible.left || visible.bottom <= visible.top) return S_OK;
+    size = (D2D1_SIZE_F){visible.right - visible.left, visible.bottom - visible.top};
+    TRACE_(uirender)( "large inverted brush %p visible %.1f,%.1f-%.1f,%.1f target %.0fx%.0f opacity %.2f.\n",
+            brush, visible.left, visible.top, visible.right, visible.bottom, target_size.width, target_size.height, opacity );
+
+    if (FAILED(hr = ID2D1DeviceContext_CreateCompatibleRenderTarget( context, &size, NULL, &format,
+            D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE, &target ))) goto done;
+    if (FAILED(hr = ID2D1BitmapRenderTarget_QueryInterface( target, &IID_ID2D1DeviceContext,
+            (void **)&offscreen ))) goto done;
+    shift = (D2D1_MATRIX_3X2_F){1.0f, 0.0f, 0.0f, 1.0f, -visible.left, -visible.top};
+    ID2D1DeviceContext_BeginDraw( offscreen );
+    ID2D1DeviceContext_Clear( offscreen, &clear );
+    ID2D1DeviceContext_SetTransform( offscreen, &shift );
+    hr = draw_composition_brush( offscreen, brush, bounds, 1.0f, 0 );
+    end = ID2D1DeviceContext_EndDraw( offscreen, NULL, NULL );
+    if (SUCCEEDED(hr)) hr = end;
+    if (FAILED(hr)) goto done;
+    if (FAILED(hr = ID2D1BitmapRenderTarget_GetBitmap( target, &bitmap ))) goto done;
+    if (FAILED(hr = ID2D1DeviceContext_CreateEffect( context, &CLSID_D2D1ColorMatrix, &effect ))) goto done;
+    ID2D1Effect_SetInput( effect, 0, (ID2D1Image *)bitmap, TRUE );
+    if (FAILED(hr = ID2D1Effect_SetValue( effect, D2D1_COLORMATRIX_PROP_COLOR_MATRIX,
+            D2D1_PROPERTY_TYPE_MATRIX_5X4, (const BYTE *)&invert, sizeof(invert) ))) goto done;
+    origin = (D2D1_POINT_2F){visible.left, visible.top};
+    ID2D1DeviceContext_DrawImage( context, (ID2D1Image *)effect, &origin, NULL,
+            D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_COMPOSITE_MODE_SOURCE_OVER );
+done:
+    if (effect) ID2D1Effect_Release( effect );
+    if (bitmap) ID2D1Bitmap_Release( bitmap );
+    if (offscreen) ID2D1DeviceContext_Release( offscreen );
+    if (target) ID2D1BitmapRenderTarget_Release( target );
+    if (FAILED(hr)) WARN( "Could not invert brush %p over %.0fx%.0f, hr %#lx.\n", brush, size.width, size.height, hr );
+    return hr;
+}
+
 /* DestinationInvert for brushes other than solid colours, e.g. OneNote's
  * caret, a white nine-grid image. Like the colour case, invert the brush's own
  * colours (keeping its alpha), which is exact over white and black. The
@@ -13093,8 +13186,9 @@ static HRESULT draw_inverted_brush( ID2D1DeviceContext *context, ICompositionBru
     HRESULT hr;
     UINT x, y, i;
 
-    if (!pixels.width || !pixels.height || pixels.width * pixels.height > 64 * 1024)
-        return draw_composition_brush( context, brush, bounds, opacity, 0 );
+    if (!(size.width >= 1.0f && size.height >= 1.0f)) return S_OK;
+    if (size.width * size.height > 64.0f * 1024.0f)
+        return draw_large_inverted_brush( context, brush, bounds, opacity );
     ID2D1DeviceContext_GetDevice( context, &device );
     snapshot_brush( &key, brush, 0 );
     EnterCriticalSection( &inverted_brush_cs );
@@ -13119,7 +13213,11 @@ static HRESULT draw_inverted_brush( ID2D1DeviceContext *context, ICompositionBru
         goto done;
     }
     if (FAILED(hr = ID2D1DeviceContext_CreateCompatibleRenderTarget( context, &size, &pixels, &format,
-            D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE, &target ))) goto done;
+            D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE, &target )))
+    {
+        WARN( "%s target %.2fx%.2f failed, hr %#lx.\n", "inverted", size.width, size.height, hr );
+        goto done;
+    }
     if (FAILED(hr = ID2D1BitmapRenderTarget_QueryInterface( target, &IID_ID2D1DeviceContext,
             (void **)&offscreen ))) goto done;
     ID2D1DeviceContext_BeginDraw( offscreen );
@@ -13260,7 +13358,11 @@ static HRESULT draw_composition_shadow( ID2D1DeviceContext *context, ICompositio
     alpha*=opacity*color.A/255.0f;
     if (alpha<=0) { hr=S_OK; goto done; }
     if (FAILED(hr=ID2D1DeviceContext_CreateCompatibleRenderTarget(context,&size,NULL,&format,
-            D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE,&target))) goto done;
+            D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE,&target)))
+    {
+        WARN( "%s target %.2fx%.2f failed, hr %#lx.\n", "shadow", size.width, size.height, hr );
+        goto done;
+    }
     if (FAILED(hr=ID2D1BitmapRenderTarget_QueryInterface(target,&IID_ID2D1DeviceContext,(void **)&mask_context))) goto done;
     ID2D1DeviceContext_BeginDraw(mask_context);
     ID2D1DeviceContext_Clear(mask_context,&clear);
@@ -14238,7 +14340,9 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
                 frame.damage.top, frame.damage.right, frame.damage.bottom );
     stage = "end draw";
     hr = ID2D1DeviceContext_EndDraw( target->render_context, NULL, NULL );
-    if (SUCCEEDED(hr)) hr = draw;
+    /* A visual that cannot be drawn must not keep the rest of the window from
+     * updating: show what was drawn. */
+    if (FAILED(draw)) WARN( "hwnd %p: drawing a visual failed, hr %#lx.\n", target->hwnd, draw );
     if (FAILED(hr)) goto done;
     drawn = perf_us();
     stage = "present";
