@@ -59,6 +59,7 @@ extern char *header_name;
 extern char *header_token;
 extern char *local_stubs_name;
 extern char *typelib_name;
+extern char *typelib_order;
 extern char *metadata_name;
 extern char *dlldata_name;
 extern char *proxy_name;

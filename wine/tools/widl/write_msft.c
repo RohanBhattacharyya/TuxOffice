@@ -1896,6 +1896,9 @@ static msft_typeinfo_t *create_msft_typeinfo(msft_typelib_t *typelib, enum type_
     msft_typeinfo->typelib = typelib;
 
     nameoffset = ctl2_alloc_name(typelib, name);
+    /* A previously emitted member may have used the same case-insensitive
+     * name. The type's public spelling must still match its declaration. */
+    memcpy(typelib->typelib_segment_data[MSFT_SEG_NAME] + nameoffset + 12, name, strlen(name));
     typeinfo_offset = ctl2_alloc_typeinfo(typelib, nameoffset);
     typeinfo = (MSFT_TypeInfoBase *)&typelib->typelib_segment_data[MSFT_SEG_TYPEINFO][typeinfo_offset];
 
@@ -2499,6 +2502,60 @@ static void add_entry(msft_typelib_t *typelib, const statement_t *stmt)
     }
 }
 
+/* Compiled clients can encode a type's library index rather than its GUID.
+ * Retain that ABI without constraining the order in which dependency traversal
+ * generates the descriptions. HREFTYPEs and name/GUID entries use segment
+ * offsets, so their references remain valid when the public index is reordered. */
+static void set_index_order(msft_typelib_t *typelib, const char *filename)
+{
+    unsigned int count = typelib->typelib_header.nrtypeinfos, index = 0, i;
+    int *offsets = xmalloc(count * sizeof(*offsets));
+    unsigned char *seen = xmalloc(count);
+    char *line = NULL, *name, *end;
+    size_t length = 0;
+    FILE *file;
+
+    if (!(file = fopen(filename, "r"))) error("cannot open typelib order file %s\n", filename);
+    memset(seen, 0, count);
+    while (widl_getline(&line, &length, file))
+    {
+        name = line;
+        while (isspace((unsigned char)*name)) ++name;
+        if (!*name || *name == '#') continue;
+        end = name;
+        while (*end && !isspace((unsigned char)*end) && *end != '#') ++end;
+        if (*end == '#') *end = 0;
+        else if (*end) *end++ = 0;
+        while (isspace((unsigned char)*end)) ++end;
+        if (*end && *end != '#') error("unexpected text after %s in %s\n", name, filename);
+        for (i = 0; i < count; ++i)
+        {
+            int offset = typelib->typelib_typeinfo_offsets[i];
+            MSFT_TypeInfoBase *info = (void *)(typelib->typelib_segment_data[MSFT_SEG_TYPEINFO] + offset);
+            const unsigned char *data = typelib->typelib_segment_data[MSFT_SEG_NAME] + info->NameOffset;
+            unsigned int len = data[8];
+            if (strlen(name) != len || strncasecmp(name, (const char *)data + 12, len)) continue;
+            if (seen[i]) error("duplicate type %s in %s\n", name, filename);
+            seen[i] = 1;
+            offsets[index++] = offset;
+            break;
+        }
+        if (i == count) error("unknown type %s in %s\n", name, filename);
+    }
+    if (ferror(file)) error("cannot read typelib order file %s\n", filename);
+    if (index != count) error("%s lists %u types, expected %u\n", filename, index, count);
+    for (i = 0; i < count; ++i)
+    {
+        MSFT_TypeInfoBase *info = (void *)(typelib->typelib_segment_data[MSFT_SEG_TYPEINFO] + offsets[i]);
+        info->typekind = (info->typekind & 0xffff) | (i << 16);
+    }
+    memcpy(typelib->typelib_typeinfo_offsets, offsets, count * sizeof(*offsets));
+    free(line);
+    free(seen);
+    free(offsets);
+    fclose(file);
+}
+
 static void set_name(msft_typelib_t *typelib)
 {
     int offset;
@@ -2833,6 +2890,7 @@ int create_msft_typelib(typelib_t *typelib)
         LIST_FOR_EACH_ENTRY( stmt, typelib->stmts, const statement_t, entry )
             add_entry(msft, stmt);
 
+    if (typelib_order) set_index_order(msft, typelib_order);
     save_all_changes(msft);
     free(msft);
     return 1;

@@ -60,6 +60,7 @@ static const char usage[] =
 "   --ns_prefix        Prefix namespaces with ABI namespace\n"
 "   --oldnames         Use old naming conventions\n"
 "   --oldtlb           Generate typelib in the old format (SLTG)\n"
+"   --typelib-order=file Preserve the type index ABI listed in file (MSFT)\n"
 "   -o, --output=NAME  Set the output file name\n"
 "   -Otype             Type of stubs to generate (-Os, -Oi, -Oif)\n"
 "   -p                 Generate proxy\n"
@@ -122,6 +123,7 @@ char *header_name;
 char *local_stubs_name;
 char *header_token;
 char *typelib_name;
+char *typelib_order;
 char *metadata_name;
 char *dlldata_name;
 char *proxy_name;
@@ -160,6 +162,7 @@ enum {
     LOCAL_STUBS_OPTION,
     NOSTDINC_OPTION,
     OLD_TYPELIB_OPTION,
+    TYPELIB_ORDER_OPTION,
     PACKING_OPTION,
     PREFIX_ALL_OPTION,
     PREFIX_CLIENT_OPTION,
@@ -196,6 +199,7 @@ static const struct long_option long_options[] = {
     { "robust", 0, ROBUST_OPTION },
     { "sysroot", 1, SYSROOT_OPTION },
     { "target", 0, 'b' },
+    { "typelib-order", 1, TYPELIB_ORDER_OPTION },
     { "winrt", 0, RT_OPTION },
     { "win32", 0, WIN32_OPTION },
     { "win64", 0, WIN64_OPTION },
@@ -617,7 +621,12 @@ static void option_callback( int optc, char *optarg )
       do_typelib = 1;
       break;
     case OLD_TYPELIB_OPTION:
+      if (typelib_order) error("--typelib-order requires the MSFT format\n");
       old_typelib = 1;
+      break;
+    case TYPELIB_ORDER_OPTION:
+      if (old_typelib) error("--typelib-order requires the MSFT format\n");
+      typelib_order = xstrdup(optarg);
       break;
     case 'T':
       typelib_name = xstrdup(optarg);
