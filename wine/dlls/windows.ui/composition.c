@@ -42,6 +42,9 @@ WINE_DECLARE_DEBUG_CHANNEL(uisurface);
 WINE_DECLARE_DEBUG_CHANNEL(uiperf);
 WINE_DECLARE_DEBUG_CHANNEL(uievents);
 WINE_DECLARE_DEBUG_CHANNEL(uilifetime);
+WINE_DECLARE_DEBUG_CHANNEL(uitree);
+static void *visual_trace_id( IVisual *iface );
+static struct visual_collection **visual_collection_slot( IVisual *visual );
 
 static IDCompositionVisual *dcomp_visual_from_visual( IVisual *iface );
 static void surface_brush_bind( ICompositionSurfaceBrush *iface, IDCompositionVisual *visual );
@@ -1067,6 +1070,12 @@ static ULONG WINAPI visual_collection_Release( IVisualCollection *iface )
 
     if (!ref)
     {
+        struct visual_collection **slot;
+
+        EnterCriticalSection( &visual_graph_cs );
+        for (i = 0; i < impl->count; ++i)
+            if ((slot = visual_collection_slot( impl->items[i] )) && *slot == impl) *slot = NULL;
+        LeaveCriticalSection( &visual_graph_cs );
         for (i = 0; i < impl->count; ++i) IVisual_Release( impl->items[i] );
         if (impl->dcomp_parent) IDCompositionVisual_Release( impl->dcomp_parent );
         free( impl->items );
@@ -1122,27 +1131,63 @@ static HRESULT visual_collection_reserve( struct visual_collection *impl )
     return S_OK;
 }
 
+/* Takes CHILD out of its collection, keeping the reference the entry held.
+ * Called with visual_graph_cs held. */
+static void visual_collection_detach( struct visual_collection *impl, UINT32 i )
+{
+    struct visual_collection **slot = visual_collection_slot( impl->items[i] );
+    IDCompositionVisual *dcomp_child;
+
+    if (impl->dcomp_parent && (dcomp_child = dcomp_visual_from_visual( impl->items[i] )))
+        IDCompositionVisual_RemoveVisual( impl->dcomp_parent, dcomp_child );
+    if (slot && *slot == impl) *slot = NULL;
+    memmove( impl->items + i, impl->items + i + 1, (impl->count - i - 1) * sizeof(*impl->items) );
+    --impl->count;
+}
+
+/* A visual is in one collection at most. Inserting one that already is, in this
+ * collection or another, moves it: Word inserts each page's placeholder at the
+ * top, then again below the page's content, and expects it to end up there. */
 static HRESULT visual_collection_insert(struct visual_collection *impl, UINT32 index, IVisual *child)
 {
     IDCompositionVisual *dcomp_child, *dcomp_reference = NULL;
+    struct visual_collection **slot, *previous;
     HRESULT hr = S_OK;
+    UINT32 i;
 
     if (!child) return E_INVALIDARG;
     EnterCriticalSection(&visual_graph_cs);
+    slot = visual_collection_slot(child);
     if (index > impl->count) hr = E_INVALIDARG;
     else if (impl->owner && visual_contains(child, impl->owner, 0)) hr = E_INVALIDARG;
-    else if (FAILED(hr = visual_collection_reserve(impl))) {}
     else
     {
-        memmove(impl->items + index + 1, impl->items + index,
-                (impl->count - index) * sizeof(*impl->items));
         IVisual_AddRef(child);
-        impl->items[index] = child;
-        ++impl->count;
-        if (impl->dcomp_parent && (dcomp_child = dcomp_visual_from_visual(child)))
+        if (slot && (previous = *slot))
         {
-            if (index) dcomp_reference = dcomp_visual_from_visual(impl->items[index - 1]);
-            hr = IDCompositionVisual_AddVisual(impl->dcomp_parent, dcomp_child, index != 0, dcomp_reference);
+            for (i = 0; i < previous->count; ++i) if (previous->items[i] == child) break;
+            if (i < previous->count)
+            {
+                if (previous == impl && i < index) --index;
+                visual_collection_detach(previous, i);
+                IVisual_Release(child);
+            }
+        }
+        if (FAILED(hr = visual_collection_reserve(impl))) IVisual_Release(child);
+        else
+        {
+            memmove(impl->items + index + 1, impl->items + index,
+                    (impl->count - index) * sizeof(*impl->items));
+            impl->items[index] = child;
+            ++impl->count;
+            if (slot) *slot = impl;
+            TRACE_(uitree)("insert %p into %p at %u of %u\n", visual_trace_id(child),
+                    impl->owner ? visual_trace_id(impl->owner) : NULL, index, impl->count);
+            if (impl->dcomp_parent && (dcomp_child = dcomp_visual_from_visual(child)))
+            {
+                if (index) dcomp_reference = dcomp_visual_from_visual(impl->items[index - 1]);
+                hr = IDCompositionVisual_AddVisual(impl->dcomp_parent, dcomp_child, index != 0, dcomp_reference);
+            }
         }
     }
     LeaveCriticalSection(&visual_graph_cs);
@@ -1187,20 +1232,18 @@ static HRESULT WINAPI visual_collection_Remove_locked( IVisualCollection *iface,
     struct visual_collection *impl = impl_from_IVisualCollection( iface );
     UINT32 i;
 
+    EnterCriticalSection( &visual_graph_cs );
     for (i = 0; i < impl->count; ++i)
     {
         if (impl->items[i] != child) continue;
-        if (impl->dcomp_parent)
-        {
-            IDCompositionVisual *dcomp_child = dcomp_visual_from_visual( child );
-            if (dcomp_child) IDCompositionVisual_RemoveVisual( impl->dcomp_parent, dcomp_child );
-        }
-        IVisual_Release( impl->items[i] );
-        memmove( impl->items + i, impl->items + i + 1,
-                 (impl->count - i - 1) * sizeof(*impl->items) );
-        --impl->count;
+        TRACE_(uitree)("remove %p from %p\n", visual_trace_id(child),
+                impl->owner ? visual_trace_id(impl->owner) : NULL);
+        visual_collection_detach( impl, i );
+        LeaveCriticalSection( &visual_graph_cs );
+        IVisual_Release( child );
         return S_OK;
     }
+    LeaveCriticalSection( &visual_graph_cs );
     return E_INVALIDARG;
 }
 
@@ -1208,6 +1251,15 @@ static HRESULT WINAPI visual_collection_RemoveAll_locked( IVisualCollection *ifa
 {
     struct visual_collection *impl = impl_from_IVisualCollection( iface );
 
+    TRACE_(uitree)("remove all %u from %p\n", impl->count,
+            impl->owner ? visual_trace_id(impl->owner) : NULL);
+    struct visual_collection **slot;
+    UINT32 i;
+
+    EnterCriticalSection( &visual_graph_cs );
+    for (i = 0; i < impl->count; ++i)
+        if ((slot = visual_collection_slot( impl->items[i] )) && *slot == impl) *slot = NULL;
+    LeaveCriticalSection( &visual_graph_cs );
     if (impl->dcomp_parent) IDCompositionVisual_RemoveAllVisuals( impl->dcomp_parent );
     while (impl->count) IVisual_Release( impl->items[--impl->count] );
     return S_OK;
@@ -1909,6 +1961,7 @@ struct sprite_visual
     ICompositionObject ICompositionObject_iface;
     IDCompositionVisual *dcomp_visual;
     IVisualCollection *children;
+    struct visual_collection *collection; /* the one it is in, not referenced */
     ICompositionPropertySet *properties;
     ICompositor *compositor;
     ICompositionBrush *brush;
@@ -1953,6 +2006,19 @@ static inline struct sprite_visual *impl_from_ISpriteVisual( ISpriteVisual *ifac
 static inline struct sprite_visual *sprite_visual_from_IVisual( IVisual *iface )
 {
     return CONTAINING_RECORD( iface, struct sprite_visual, IVisual_iface );
+}
+
+static void *visual_trace_id( IVisual *iface )
+{
+    return sprite_visual_from_IVisual( iface );
+}
+
+static const IVisualVtbl visual_vtbl;
+
+static struct visual_collection **visual_collection_slot( IVisual *visual )
+{
+    if (!visual || visual->lpVtbl != &visual_vtbl) return NULL;
+    return &sprite_visual_from_IVisual( visual )->collection;
 }
 
 static IDCompositionVisual *dcomp_visual_from_visual( IVisual *iface )
@@ -2230,6 +2296,7 @@ static HRESULT sprite_visual_start_animation( struct sprite_visual *impl, HSTRIN
 
     if (!name || !animation) return E_INVALIDARG;
     property = WindowsGetStringRawBuffer( name, NULL );
+    TRACE_(uitree)("animate %p %s animation %p\n", impl, debugstr_w(property), animation);
     component = visual_component_index( property );
     if (component < ARRAY_SIZE(visual_components))
     {
@@ -2524,6 +2591,8 @@ static BOOL visual_property_equal(const WCHAR *name,const void *a,const void *b,
         running_animations_cancel( &impl->field, sizeof(impl->field) ); \
         if (visual_property_equal(L## #name,&impl->field,&value,sizeof(value))) return S_OK; \
         impl->field = value; \
+        if (!strcmp( #name, "Opacity" )) TRACE_(uitree)( "put %p Opacity %f\n", impl, *(FLOAT *)&value ); \
+        else if (!strcmp( #name, "IsVisible" )) TRACE_(uitree)( "put %p IsVisible %d\n", impl, *(boolean *)&value ); \
         TRACE_(uiperf)( "visual %p property %s tick %llu.\n", iface, #name, GetTickCount64() ); \
         hr = visual_apply_implicit_animation(impl,L## #name); \
         compositor_notify_commit_needed(impl_from_ICompositor(impl->compositor)); \
@@ -2568,8 +2637,18 @@ static HRESULT WINAPI visual_put_Clip( IVisual *iface, ICompositionClip *value )
 
 static HRESULT WINAPI visual_get_Parent( IVisual *iface, IContainerVisual **value )
 {
+    struct sprite_visual *impl = sprite_visual_from_IVisual( iface );
+    IVisual *owner;
+
     if (!value) return E_POINTER;
     *value = NULL;
+    EnterCriticalSection( &visual_graph_cs );
+    if (impl->collection && (owner = impl->collection->owner))
+    {
+        *value = &sprite_visual_from_IVisual( owner )->IContainerVisual_iface;
+        IContainerVisual_AddRef( *value );
+    }
+    LeaveCriticalSection( &visual_graph_cs );
     return S_OK;
 }
 
@@ -5767,6 +5846,8 @@ static BOOL running_animations_tick(void)
         {
             running_animation_value( animation, 1.0f, value );
             running_animation_write( animation, value );
+            TRACE_(uitree)("animation on %p field %p ended at %f\n", animation->owner,
+                    animation->flag ? (void *)animation->flag : (void *)animation->field, value[0]);
             running_animation_free( animation );
             continue;
         }
@@ -5876,6 +5957,11 @@ static BOOL running_animation_start( ICompositor *compositor, IUnknown *owner,
         end = running->start + running->delay + running->duration * running->iterations;
         scoped_batches_extend( end );
     }
+    TRACE_(uitree)( "running %p owner %p field %p keys %u first %f/%f last %f/%f delay %s duration %s iterations %d\n",
+            animation, owner, flag ? (void *)flag : (void *)field, running->key_count,
+            running->keys[0].key, running->keys[0].value[0], running->keys[running->key_count - 1].key,
+            running->keys[running->key_count - 1].value[0], wine_dbgstr_longlong( running->delay ),
+            wine_dbgstr_longlong( running->duration ), running->iterations );
     TRACE( "animation %p on %p: %u keys, delay %s, duration %s, iterations %d.\n", animation, owner,
            running->key_count, wine_dbgstr_longlong( running->delay ),
            wine_dbgstr_longlong( running->duration ), running->iterations );
