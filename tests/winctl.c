@@ -10,6 +10,7 @@
  *   winctl.exe acc FILTER [DEPTH]   dump the accessibility tree of a window
  *   winctl.exe acc-click FILTER NAME [ROLE]  move to an accessible object and click it
  *   winctl.exe acc-do FILTER NAME [ROLE]     run its default action (no focus or pointer)
+ *   winctl.exe click-relative FILTER X Y WIDTH HEIGHT  click a scaled window coordinate
  *   winctl.exe ping FILTER [MS]     does the window's UI thread answer?
  *
  * FILTER matches a window class or a substring of its title or process name.
@@ -312,6 +313,25 @@ int wmain(int argc, WCHAR **argv)
         HWND hwnd = find_window(argv[2]);
         if (!hwnd) return 2;
         PostMessageW(hwnd, WM_CLOSE, 0, 0);
+    }
+    else if (!wcscmp(argv[1], L"click-relative") && argc == 7)
+    {
+        HWND hwnd = find_window(argv[2]);
+        int x = _wtoi(argv[3]), y = _wtoi(argv[4]);
+        int width = _wtoi(argv[5]), height = _wtoi(argv[6]);
+        RECT rect;
+
+        if (!hwnd) return 2;
+        if (width <= 0 || height <= 0 || x < 0 || x >= width || y < 0 || y >= height) return 4;
+        if (!GetWindowRect(hwnd, &rect)) return 3;
+        x = rect.left + MulDiv(x, rect.right - rect.left, width);
+        y = rect.top + MulDiv(y, rect.bottom - rect.top, height);
+        SetForegroundWindow(hwnd);
+        move_pointer(x, y);
+        Sleep(60);
+        mouse(MOUSEEVENTF_LEFTDOWN);
+        mouse(MOUSEEVENTF_LEFTUP);
+        wprintf(L"clicked %d,%d\n", x, y);
     }
     else if (!wcscmp(argv[1], L"ping") && argc > 2)
     {
