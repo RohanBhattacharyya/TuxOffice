@@ -28,6 +28,19 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **0.1.16 release built and verified:** packages and checked SHA256SUMS are in
+  `dist/0.1.16/`. The portable runner was rebuilt from committed source in Ubuntu
+  24.04. Clean Arch system installation, 32/64-bit execution, removal and per-user
+  installation pass. Release verification passes the twelve 32-bit and six 64-bit
+  path-conversion checks, ten native picker cancellations per architecture,
+  three helper-failure fallbacks and Publisher's three-round inline picture test
+  (12 assertions, six native pickers, saved/reopened images and PDF pixel checks).
+  The 100-cancellation focus stress run was on the same-source candidate.
+  Host pacman remains **0.1.13-1**; this release has not been installed there.
+  The release includes the final picker focus fix, WoW64 path conversion with
+  redirection, and rejection of an invalid explicit `TUXOFFICE_RUNNER` instead
+  of silently selecting a different runner. Publisher's Pictures ribbon remains
+  incomplete; these checks do not cover its WebView2 rendering/context defects.
 - **Native picker selection coverage:** `tests/native-dialog-results.py` drives
   the real KDE picker through multiple-file Open and Save on both architectures.
   All four 0.1.16 release cases preserve paths with spaces, return every selected
