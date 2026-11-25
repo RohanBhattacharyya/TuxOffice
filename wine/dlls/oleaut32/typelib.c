@@ -1295,6 +1295,8 @@ typedef struct tagTLBContext
 	void *mapping;        /* memory mapping */
 	MSFT_SegDir * pTblDir;
 	ITypeLibImpl* pLibInfo;
+    TLBString **name_table;
+    unsigned int name_count;
 } TLBContext;
 
 
@@ -2198,6 +2200,26 @@ static HRESULT MSFT_ReadAllNames(TLBContext *pcx)
 static TLBString *MSFT_ReadName( TLBContext *pcx, int offset)
 {
     TLBString *tlbstr;
+
+    if (pcx->name_table)
+    {
+        unsigned int low = 0, high = pcx->name_count;
+
+        while (low < high)
+        {
+            unsigned int mid = low + (high - low) / 2;
+
+            tlbstr = pcx->name_table[mid];
+            if (tlbstr->offset < offset) low = mid + 1;
+            else if (tlbstr->offset > offset) high = mid;
+            else
+            {
+                TRACE_(typelib)("%s\n", debugstr_w(tlbstr->str));
+                return tlbstr;
+            }
+        }
+        return NULL;
+    }
 
     LIST_FOR_EACH_ENTRY(tlbstr, &pcx->pLibInfo->name_list, TLBString, entry) {
         if (tlbstr->offset == offset) {
@@ -3506,6 +3528,19 @@ static ITypeLib2* ITypeLib2_Constructor_MSFT(LPVOID pLib, DWORD dwTLBLength)
     }
 
     MSFT_ReadAllNames(&cx);
+    /* Names are read in increasing file-offset order. Keep a temporary index
+     * while resolving references; repeatedly scanning the list is quadratic
+     * for large Office libraries. Allocation failure retains the list lookup. */
+    cx.name_count = list_count(&pTypeLibImpl->name_list);
+    cx.name_table = malloc(cx.name_count * sizeof(*cx.name_table));
+    if (cx.name_table)
+    {
+        TLBString *name;
+
+        i = 0;
+        LIST_FOR_EACH_ENTRY(name, &pTypeLibImpl->name_list, TLBString, entry)
+            cx.name_table[i++] = name;
+    }
     MSFT_ReadAllStrings(&cx);
     MSFT_ReadAllGuids(&cx);
 
@@ -3669,6 +3704,7 @@ static ITypeLib2* ITypeLib2_Constructor_MSFT(LPVOID pLib, DWORD dwTLBLength)
     }
 
     TRACE("(%p)\n", pTypeLibImpl);
+    free(cx.name_table);
     return &pTypeLibImpl->ITypeLib2_iface;
 }
 

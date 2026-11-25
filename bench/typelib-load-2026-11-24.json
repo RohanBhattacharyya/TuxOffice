@@ -1,0 +1,1212 @@
+{
+  "description": "MSFT name-offset index; fresh processes, warm filesystem cache, baseline/candidate/candidate/baseline order; three samples per library per block",
+  "baseline": "e5325b5 (0.1.16)",
+  "office_build": "16.0.20527.20088",
+  "scope": "LoadTypeLibEx and public metadata enumeration; not end-to-end Office or Windows comparison",
+  "samples": {
+    "64": [
+      {
+        "kind": "baseline",
+        "file": "MSACC.OLB",
+        "load_ms": 70.722,
+        "inspect_ms": 55.23,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSACC.OLB",
+        "load_ms": 87.445,
+        "inspect_ms": 67.686,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSACC.OLB",
+        "load_ms": 66.767,
+        "inspect_ms": 52.472,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSWORD.OLB",
+        "load_ms": 131.251,
+        "inspect_ms": 4.931,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSWORD.OLB",
+        "load_ms": 130.417,
+        "inspect_ms": 4.699,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSWORD.OLB",
+        "load_ms": 150.277,
+        "inspect_ms": 5.942,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "baseline",
+        "file": "EXCEL.EXE",
+        "load_ms": 185.867,
+        "inspect_ms": 57.43,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "baseline",
+        "file": "EXCEL.EXE",
+        "load_ms": 175.853,
+        "inspect_ms": 59.805,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "baseline",
+        "file": "EXCEL.EXE",
+        "load_ms": 174.659,
+        "inspect_ms": 73.27,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSPPT.OLB",
+        "load_ms": 43.963,
+        "inspect_ms": 2.113,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSPPT.OLB",
+        "load_ms": 26.523,
+        "inspect_ms": 2.128,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSPPT.OLB",
+        "load_ms": 37.129,
+        "inspect_ms": 2.677,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSOUTL.OLB",
+        "load_ms": 34.797,
+        "inspect_ms": 2.146,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSOUTL.OLB",
+        "load_ms": 16.852,
+        "inspect_ms": 2.175,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSOUTL.OLB",
+        "load_ms": 15.757,
+        "inspect_ms": 2.093,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSACC.OLB",
+        "load_ms": 3.026,
+        "inspect_ms": 7.553,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSACC.OLB",
+        "load_ms": 3.443,
+        "inspect_ms": 7.816,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSACC.OLB",
+        "load_ms": 4.279,
+        "inspect_ms": 9.954,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSWORD.OLB",
+        "load_ms": 5.276,
+        "inspect_ms": 5.123,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSWORD.OLB",
+        "load_ms": 6.574,
+        "inspect_ms": 5.873,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSWORD.OLB",
+        "load_ms": 4.469,
+        "inspect_ms": 4.195,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "candidate",
+        "file": "EXCEL.EXE",
+        "load_ms": 6.423,
+        "inspect_ms": 20.479,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "candidate",
+        "file": "EXCEL.EXE",
+        "load_ms": 5.193,
+        "inspect_ms": 12.36,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "candidate",
+        "file": "EXCEL.EXE",
+        "load_ms": 5.139,
+        "inspect_ms": 13.126,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSPPT.OLB",
+        "load_ms": 2.359,
+        "inspect_ms": 2.274,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSPPT.OLB",
+        "load_ms": 2.016,
+        "inspect_ms": 2.113,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSPPT.OLB",
+        "load_ms": 1.976,
+        "inspect_ms": 2.095,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSOUTL.OLB",
+        "load_ms": 2.904,
+        "inspect_ms": 3.227,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSOUTL.OLB",
+        "load_ms": 2.575,
+        "inspect_ms": 2.481,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSOUTL.OLB",
+        "load_ms": 2.604,
+        "inspect_ms": 2.503,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSACC.OLB",
+        "load_ms": 3.848,
+        "inspect_ms": 10.008,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSACC.OLB",
+        "load_ms": 3.002,
+        "inspect_ms": 7.706,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSACC.OLB",
+        "load_ms": 4.119,
+        "inspect_ms": 8.531,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSWORD.OLB",
+        "load_ms": 4.963,
+        "inspect_ms": 4.428,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSWORD.OLB",
+        "load_ms": 5.603,
+        "inspect_ms": 4.416,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSWORD.OLB",
+        "load_ms": 4.501,
+        "inspect_ms": 4.47,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "candidate",
+        "file": "EXCEL.EXE",
+        "load_ms": 4.995,
+        "inspect_ms": 12.346,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "candidate",
+        "file": "EXCEL.EXE",
+        "load_ms": 6.964,
+        "inspect_ms": 12.329,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "candidate",
+        "file": "EXCEL.EXE",
+        "load_ms": 6.002,
+        "inspect_ms": 12.543,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSPPT.OLB",
+        "load_ms": 2.852,
+        "inspect_ms": 2.877,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSPPT.OLB",
+        "load_ms": 2.069,
+        "inspect_ms": 2.135,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSPPT.OLB",
+        "load_ms": 2.252,
+        "inspect_ms": 2.109,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSOUTL.OLB",
+        "load_ms": 2.194,
+        "inspect_ms": 2.037,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSOUTL.OLB",
+        "load_ms": 3.116,
+        "inspect_ms": 2.76,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSOUTL.OLB",
+        "load_ms": 2.134,
+        "inspect_ms": 2.177,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSACC.OLB",
+        "load_ms": 74.666,
+        "inspect_ms": 74.027,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSACC.OLB",
+        "load_ms": 67.237,
+        "inspect_ms": 53.264,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSACC.OLB",
+        "load_ms": 68.336,
+        "inspect_ms": 52.677,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSWORD.OLB",
+        "load_ms": 132.676,
+        "inspect_ms": 5.236,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSWORD.OLB",
+        "load_ms": 128.972,
+        "inspect_ms": 4.402,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSWORD.OLB",
+        "load_ms": 129.152,
+        "inspect_ms": 4.534,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "baseline",
+        "file": "EXCEL.EXE",
+        "load_ms": 178.222,
+        "inspect_ms": 59.292,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "baseline",
+        "file": "EXCEL.EXE",
+        "load_ms": 189.952,
+        "inspect_ms": 60.856,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "baseline",
+        "file": "EXCEL.EXE",
+        "load_ms": 191.726,
+        "inspect_ms": 62.76,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSPPT.OLB",
+        "load_ms": 25.62,
+        "inspect_ms": 2.226,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSPPT.OLB",
+        "load_ms": 25.187,
+        "inspect_ms": 2.064,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSPPT.OLB",
+        "load_ms": 28.071,
+        "inspect_ms": 2.492,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSOUTL.OLB",
+        "load_ms": 23.067,
+        "inspect_ms": 2.225,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSOUTL.OLB",
+        "load_ms": 16.62,
+        "inspect_ms": 3.386,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSOUTL.OLB",
+        "load_ms": 16.862,
+        "inspect_ms": 2.236,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      }
+    ],
+    "32": [
+      {
+        "kind": "baseline",
+        "file": "MSACC.OLB",
+        "load_ms": 52.167,
+        "inspect_ms": 46.214,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSACC.OLB",
+        "load_ms": 47.818,
+        "inspect_ms": 43.063,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSACC.OLB",
+        "load_ms": 47.788,
+        "inspect_ms": 48.465,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSWORD.OLB",
+        "load_ms": 103.442,
+        "inspect_ms": 4.702,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSWORD.OLB",
+        "load_ms": 111.651,
+        "inspect_ms": 5.797,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSWORD.OLB",
+        "load_ms": 97.865,
+        "inspect_ms": 5.056,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "baseline",
+        "file": "EXCEL.EXE",
+        "load_ms": 149.351,
+        "inspect_ms": 45.777,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "baseline",
+        "file": "EXCEL.EXE",
+        "load_ms": 124.873,
+        "inspect_ms": 48.644,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "baseline",
+        "file": "EXCEL.EXE",
+        "load_ms": 126.041,
+        "inspect_ms": 47.273,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSPPT.OLB",
+        "load_ms": 20.221,
+        "inspect_ms": 2.337,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSPPT.OLB",
+        "load_ms": 21.043,
+        "inspect_ms": 2.194,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSPPT.OLB",
+        "load_ms": 19.88,
+        "inspect_ms": 2.238,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSOUTL.OLB",
+        "load_ms": 11.703,
+        "inspect_ms": 2.203,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSOUTL.OLB",
+        "load_ms": 11.863,
+        "inspect_ms": 2.241,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSOUTL.OLB",
+        "load_ms": 11.597,
+        "inspect_ms": 2.243,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSACC.OLB",
+        "load_ms": 2.777,
+        "inspect_ms": 8.391,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSACC.OLB",
+        "load_ms": 3.235,
+        "inspect_ms": 8.567,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSACC.OLB",
+        "load_ms": 3.252,
+        "inspect_ms": 7.494,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSWORD.OLB",
+        "load_ms": 4.134,
+        "inspect_ms": 4.346,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSWORD.OLB",
+        "load_ms": 5.381,
+        "inspect_ms": 4.566,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSWORD.OLB",
+        "load_ms": 4.851,
+        "inspect_ms": 4.453,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "candidate",
+        "file": "EXCEL.EXE",
+        "load_ms": 5.76,
+        "inspect_ms": 11.842,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "candidate",
+        "file": "EXCEL.EXE",
+        "load_ms": 5.667,
+        "inspect_ms": 12.01,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "candidate",
+        "file": "EXCEL.EXE",
+        "load_ms": 4.637,
+        "inspect_ms": 12.042,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSPPT.OLB",
+        "load_ms": 1.87,
+        "inspect_ms": 2.038,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSPPT.OLB",
+        "load_ms": 2.22,
+        "inspect_ms": 2.071,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSPPT.OLB",
+        "load_ms": 2.352,
+        "inspect_ms": 2.283,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSOUTL.OLB",
+        "load_ms": 2.403,
+        "inspect_ms": 3.389,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSOUTL.OLB",
+        "load_ms": 1.93,
+        "inspect_ms": 2.171,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSOUTL.OLB",
+        "load_ms": 2.001,
+        "inspect_ms": 2.106,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSACC.OLB",
+        "load_ms": 2.813,
+        "inspect_ms": 7.264,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSACC.OLB",
+        "load_ms": 3.625,
+        "inspect_ms": 7.362,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSACC.OLB",
+        "load_ms": 3.019,
+        "inspect_ms": 7.508,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSWORD.OLB",
+        "load_ms": 4.511,
+        "inspect_ms": 4.972,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSWORD.OLB",
+        "load_ms": 4.122,
+        "inspect_ms": 4.283,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSWORD.OLB",
+        "load_ms": 4.13,
+        "inspect_ms": 4.16,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "candidate",
+        "file": "EXCEL.EXE",
+        "load_ms": 7.301,
+        "inspect_ms": 14.282,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "candidate",
+        "file": "EXCEL.EXE",
+        "load_ms": 4.597,
+        "inspect_ms": 11.888,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "candidate",
+        "file": "EXCEL.EXE",
+        "load_ms": 5.736,
+        "inspect_ms": 12.232,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSPPT.OLB",
+        "load_ms": 2.391,
+        "inspect_ms": 2.173,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSPPT.OLB",
+        "load_ms": 2.783,
+        "inspect_ms": 2.198,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSPPT.OLB",
+        "load_ms": 2.079,
+        "inspect_ms": 2.119,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSOUTL.OLB",
+        "load_ms": 1.895,
+        "inspect_ms": 2.059,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSOUTL.OLB",
+        "load_ms": 2.729,
+        "inspect_ms": 2.475,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "candidate",
+        "file": "MSOUTL.OLB",
+        "load_ms": 3.029,
+        "inspect_ms": 3.609,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSACC.OLB",
+        "load_ms": 50.366,
+        "inspect_ms": 42.313,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSACC.OLB",
+        "load_ms": 47.759,
+        "inspect_ms": 45.694,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSACC.OLB",
+        "load_ms": 50.007,
+        "inspect_ms": 42.79,
+        "types": 369,
+        "funcs": 10495,
+        "vars": 1736,
+        "hash": "225f1b58d28eb7ae"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSWORD.OLB",
+        "load_ms": 103.988,
+        "inspect_ms": 4.663,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSWORD.OLB",
+        "load_ms": 140.073,
+        "inspect_ms": 4.762,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSWORD.OLB",
+        "load_ms": 94.264,
+        "inspect_ms": 4.409,
+        "types": 767,
+        "funcs": 11001,
+        "vars": 3756,
+        "hash": "1326253eac828f99"
+      },
+      {
+        "kind": "baseline",
+        "file": "EXCEL.EXE",
+        "load_ms": 125.151,
+        "inspect_ms": 45.41,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "baseline",
+        "file": "EXCEL.EXE",
+        "load_ms": 137.075,
+        "inspect_ms": 45.682,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "baseline",
+        "file": "EXCEL.EXE",
+        "load_ms": 133.844,
+        "inspect_ms": 48.61,
+        "types": 1037,
+        "funcs": 22494,
+        "vars": 2333,
+        "hash": "a6bba3214a7354f4"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSPPT.OLB",
+        "load_ms": 18.831,
+        "inspect_ms": 2.292,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSPPT.OLB",
+        "load_ms": 22.188,
+        "inspect_ms": 2.269,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSPPT.OLB",
+        "load_ms": 20.167,
+        "inspect_ms": 2.416,
+        "types": 348,
+        "funcs": 5222,
+        "vars": 1489,
+        "hash": "52c6c0aeae899001"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSOUTL.OLB",
+        "load_ms": 11.63,
+        "inspect_ms": 2.223,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSOUTL.OLB",
+        "load_ms": 12.738,
+        "inspect_ms": 2.229,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      },
+      {
+        "kind": "baseline",
+        "file": "MSOUTL.OLB",
+        "load_ms": 14.189,
+        "inspect_ms": 2.453,
+        "types": 495,
+        "funcs": 5872,
+        "vars": 882,
+        "hash": "b03549e606862e14"
+      }
+    ]
+  }
+}

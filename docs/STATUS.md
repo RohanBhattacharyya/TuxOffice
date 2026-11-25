@@ -28,6 +28,22 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Faster Office type-library loading:** MSFT name references previously scanned
+  the full linked list for every reference. A temporary sorted offset index now
+  permits binary search while parsing, with the original scan retained if its
+  allocation fails. The index is freed before returning the library. Across six
+  samples per architecture/library, median x64 `LoadTypeLibEx` times change from
+  70 to 4 ms (Access), 131 to 5 ms (Word), 182 to 6 ms (Excel), 27 to 2 ms
+  (PowerPoint), and 17 to 3 ms (Outlook). The x86 samples also improve. Every run
+  preserves type/function/variable counts and metadata fingerprints. Raw samples
+  and measurement scope are in `bench/typelib-load-2026-11-24.json`; the reusable
+  `tests/typelib-load.c` probe measures a caller-supplied library without
+  registering it or creating Office objects. The existing type-library suite
+  executes 7,690 x64 and 7,707 x86 checks on baseline and candidate with identical
+  results: no failing assertions, 28 existing successes inside todo blocks, and
+  15 remaining todos (one x64 resource-layout skip). This is a measured library
+  parsing improvement; Windows and whole-Office performance parity remain
+  unverified. This change is not yet packaged.
 - **Labels wizard diagnosis narrowed:** its `mlbl_frmMain` class loads and
   compiles successfully. VBA's `TipCreateInstanceEx` then returns
   `DISP_E_MEMBERNOTFOUND` (`0x80020003`). Its `_HrFromErr` wrapper ORs in
