@@ -182,6 +182,7 @@ GnuTLS, libsecret, …) and the `libsystemd` headers.
 | `TUXOFFICE_THEME=light\|dark` | Override the desktop's colour scheme for Office |
 | `TUXOFFICE_SCALE` | Override the detected display scale |
 | `TUXOFFICE_X11=1` | Run through XWayland instead of the native Wayland driver |
+| `TUXOFFICE_SPLASH=0` | Don't show TuxOffice's launch window while an app starts |
 
 ## How it works
 

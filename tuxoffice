@@ -45,7 +45,59 @@ APPS=(
 
 msg()  { printf '\033[1;34m::\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mwarning:\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; local m="$*"; splash error "${m^}"; exit 1; }
+
+# A window that shows the app is starting, from the moment the launcher runs
+# until the app shows its own first window (lib/splash.c). Steps that take a
+# while report to it with: splash status TEXT, splash progress [PERCENT].
+# Wine removes $SPLASH_DIR/ready when Office shows a window, which closes it.
+# TUXOFFICE_SPLASH=0 turns it off.
+SPLASH_DIR=""
+splash_start() { # app id
+  local runner helper name accent theme=()
+  [[ ${TUXOFFICE_SPLASH:-1} != 0 && -n ${WAYLAND_DISPLAY:-}${DISPLAY:-} ]] || return 0
+  runner=$(find_runner) || return 0
+  helper="$runner/bin/tuxoffice-splash"
+  [[ -x $helper ]] || return 0
+  name=$(app_field "$1" name) || return 0
+  case $1 in # each app's brand colour, for the progress bar
+    word) accent=185ABD ;; excel) accent=107C41 ;; powerpoint) accent=C43E1C ;;
+    outlook) accent=0F6CBD ;; onenote) accent=7719AA ;; access) accent=A4373A ;; *) accent=077568 ;;
+  esac
+  # The theme sync_app_theme last saw; asking the portal here could delay the window.
+  case ${TUXOFFICE_THEME:-system} in
+    dark) theme=(--dark) ;;
+    light) ;;
+    *) [[ $(cat "$TUX_CACHE/app-theme" 2>/dev/null) == 0 ]] && theme=(--dark) ;;
+  esac
+  mkdir -p "$TUX_HOME/profiles"
+  SPLASH_DIR=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/tuxoffice-splash.XXXXXX") || { SPLASH_DIR=""; return 0; }
+  : >"$SPLASH_DIR/status"
+  : >"$SPLASH_DIR/ready"
+  # From a subshell, so the window is not a child process of Office's.
+  ( "$helper" --dir "$SPLASH_DIR" --watch $$ --name "$name" --app-id "tuxoffice-$1" --accent "$accent" \
+      "${theme[@]}" --logo "$TUX_SRC/lib/splash-logo.png" --version "$TUX_VERSION" \
+      --record "$TUX_HOME/profiles/$1.launch" </dev/null >/dev/null 2>&1 & )
+  splash status "Starting ${name#Microsoft }…"
+}
+
+splash() { # command [text]
+  [[ -n $SPLASH_DIR ]] || return 0
+  { printf '%s\n' "$*" >>"$SPLASH_DIR/status"; } 2>/dev/null || true
+}
+
+# Reads curl's --progress-bar output and shows the percentage in the window.
+splash_download_progress() {
+  local chunk percent last=-1
+  while IFS= read -r -d $'\r' chunk || [[ -n $chunk ]]; do
+    if [[ $chunk =~ ([0-9]+)(\.[0-9]+)?%[[:space:]]*$ ]]; then
+      percent=${BASH_REMATCH[1]}
+      ((percent == last)) || { splash progress "$percent"; last=$percent; }
+    elif [[ $chunk == *curl:* ]]; then
+      grep -a 'curl:' <<<"$chunk" >&2 || true
+    fi
+  done
+}
 
 # The runner to use: TUXOFFICE_RUNNER, one built from wine/ with
 # runner/build.sh, the one a distribution package installed, then stock Soda.
@@ -97,7 +149,16 @@ fetch() { # url dest [sha256]
   local url=$1 dest=$2 sum=${3:-}
   if [[ ! -s "$dest" ]]; then
     msg "downloading $(basename "$dest")"
-    curl -fsSL --retry 3 -o "$dest.part" "$url" && mv "$dest.part" "$dest"
+    if [[ -n $SPLASH_DIR ]]; then
+      local status=0
+      curl -fL --retry 3 --progress-bar -o "$dest.part" "$url" 2> >(splash_download_progress) || status=$?
+      wait $! 2>/dev/null || true # the last percentage, before the next status
+      splash progress
+      ((status == 0)) || return "$status"
+    else
+      curl -fsSL --retry 3 -o "$dest.part" "$url" || return
+    fi
+    mv "$dest.part" "$dest"
   fi
   if [[ -n "$sum" ]]; then
     echo "$sum  $dest" | sha256sum -c --quiet - || { rm -f "$dest"; die "checksum mismatch: $dest"; }
@@ -243,6 +304,7 @@ update_runner() {
   fi
   mkdir -p "$TUX_CACHE"
   msg "updating the prefix for the new runner" >&2
+  splash status "Applying the TuxOffice update…"
   # The update registers the 32-bit mscoree.dll again. With .NET 4.8 installed
   # that is Microsoft's shim, which cannot find its runtime there and shows a
   # modal "This application could not be started" box; wineboot then waits on
@@ -277,6 +339,7 @@ update_prefix() {
   [[ -f $stamp && $(<"$stamp") == "$PREFIX_REVISION" ]] && return 0
   mkdir -p "$TUX_CACHE"
   msg "updating the Office environment"
+  splash status "Updating the Office environment…"
   configure_shell
   configure_virtual_registry || return 0
   printf '%s\n' "$PREFIX_REVISION" >"$stamp"
@@ -298,6 +361,7 @@ install_dotnet() {
     [[ -x "$TUX_HOME/tools/winetricks" ]] || fetch "$WINETRICKS_URL" "$TUX_HOME/tools/winetricks"
     chmod +x "$TUX_HOME/tools/winetricks"
     msg "installing Microsoft .NET Framework 4.8 (a download of about 120 MB; this takes several minutes)"
+    splash status "Installing .NET Framework 4.8…"
     W_OPT_UNATTENDED=1 "$TUX_HOME/tools/winetricks" -q dotnet48 >"$TUX_CACHE/dotnet48.log" 2>&1 || return 1
     dotnet_installed || return 1
   fi
@@ -326,7 +390,9 @@ install_webview2() {
   mkdir -p "$TUX_CACHE"
   if ! webview2_installed; then
     msg "installing Microsoft Edge WebView2 (a download of about 300 MB)"
+    splash status "Downloading Microsoft Edge WebView2…"
     fetch "$WEBVIEW2_URL" "$installer" >"$TUX_CACHE/webview2.log" 2>&1 || return 1
+    splash status "Installing Microsoft Edge WebView2…"
     wine "$installer" /silent /install >>"$TUX_CACHE/webview2.log" 2>&1
     webview2_installed || return 1
     rm -f "$installer"
@@ -416,6 +482,7 @@ refresh_root_certs() {
   [[ -f $stamp && $(<"$stamp") == "$state" ]] && return 0
   mkdir -p "$TUX_CACHE" "$TUX_PREFIX/drive_c/tuxoffice"
   install -m0644 "$resources/root-certs.exe" "$TUX_PREFIX/drive_c/tuxoffice/root-certs.exe"
+  splash status "Importing trusted certificates…"
   if wine 'C:\tuxoffice\root-certs.exe' >"$TUX_CACHE/root-certs.log" 2>&1; then
     printf '%s\n' "$state" >"$stamp"
   else
@@ -827,8 +894,9 @@ cmd_run() {
   (($#)) || die "usage: tuxoffice run <word|excel|powerpoint|outlook|onenote|access|publisher> [files...]"
   local app=$1; shift
   local exe; exe=$(app_field "$app" exe) || die "unknown app: $app"
+  splash_start "$app"
   runner_env
-  [[ -f "$OFFICE_ROOT/$exe" ]] || die "$exe not installed"
+  [[ -f "$OFFICE_ROOT/$exe" ]] || die "$(app_field "$app" name) is not installed; run: tuxoffice install"
   fix_locker
   update_runner
   update_prefix
@@ -854,6 +922,12 @@ cmd_run() {
   python3 -I "$TUX_SRC/lib/readahead.py" "$pdir/$app.d" "$pdir/$app.list" &
   export SODA_ADAPTIVE_TRACE_DIR="$pdir/$app.d"
 
+  if [[ -n $SPLASH_DIR ]]; then
+    local name; name=$(app_field "$app" name)
+    splash status "Starting ${name#Microsoft }…"
+    splash launch
+    export TUXOFFICE_SPLASH_READY="$SPLASH_DIR/ready"
+  fi
   exec wine "C:\\Program Files\\Microsoft Office\\root\\Office16\\$exe" "${args[@]}"
 }
 
