@@ -28,3 +28,5 @@ winegcc -b x86_64-windows -mconsole -municode -o "$destination/typelib-load.exe"
 winegcc -b i386-windows -mconsole -municode -o "$destination/typelib-load32.exe" "$HERE/typelib-load.c" -loleaut32 -lole32
 winegcc -b x86_64-windows -mconsole -o "$destination/typelib-dual.exe" "$HERE/typelib-dual.c" -loleaut32 -lole32 -luuid -luser32
 winegcc -b i386-windows -mconsole -o "$destination/typelib-dual32.exe" "$HERE/typelib-dual.c" -loleaut32 -lole32 -luuid -luser32
+winegcc -b x86_64-windows -mconsole -o "$destination/ado-interfaces.exe" "$HERE/ado-interfaces.c" -loleaut32 -lole32 -luuid -luser32
+winegcc -b i386-windows -mconsole -o "$destination/ado-interfaces32.exe" "$HERE/ado-interfaces.c" -loleaut32 -lole32 -luuid -luser32

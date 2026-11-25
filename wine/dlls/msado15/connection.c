@@ -132,8 +132,8 @@ static HRESULT WINAPI connection_QueryInterface( _Connection *iface, REFIID riid
 
     *obj = NULL;
 
-    if (IsEqualGUID( riid, &IID__Connection ) ||
-        IsEqualGUID( riid, &IID_Connection15) ||
+    if (is_ado_interface(riid, &IID__Connection) ||
+        is_ado_interface(riid, &IID_Connection15) ||
         IsEqualGUID( riid, &IID__ADO) ||
         IsEqualGUID( riid, &IID_IDispatch ) ||
         IsEqualGUID( riid, &IID_IUnknown ))

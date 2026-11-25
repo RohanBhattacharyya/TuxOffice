@@ -7,6 +7,7 @@ SOURCES = \
 	main.c \
 	msado15_classes.idl \
 	msado15_tlb.idl \
+	msado15_61_tlb.idl \
 	recordset.c \
 	rowset.c \
 	stream.c

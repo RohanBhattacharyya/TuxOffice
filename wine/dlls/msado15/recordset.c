@@ -411,8 +411,8 @@ static HRESULT WINAPI field_QueryInterface( Field *iface, REFIID riid, void **ob
     struct field *field = impl_from_Field( iface );
     TRACE( "%p, %s, %p\n", iface, debugstr_guid(riid), obj );
 
-    if (IsEqualGUID( riid, &IID_Field ) ||
-        IsEqualGUID( riid, &IID_Field20 ) ||
+    if (is_ado_interface(riid, &IID_Field) ||
+        is_ado_interface(riid, &IID_Field20) ||
         IsEqualGUID( riid, &IID__ADO ) ||
         IsEqualGUID( riid, &IID_IDispatch ) ||
         IsEqualGUID( riid, &IID_IUnknown ))
@@ -1253,9 +1253,9 @@ static HRESULT WINAPI fields_QueryInterface( Fields *iface, REFIID riid, void **
     struct fields *fields = impl_from_Fields( iface );
     TRACE( "%p, %s, %p\n", iface, debugstr_guid(riid), obj );
 
-    if (IsEqualGUID( riid, &IID_Fields ) ||
-        IsEqualGUID( riid, &IID_Fields20 ) ||
-        IsEqualGUID( riid, &IID_Fields15 ) ||
+    if (is_ado_interface(riid, &IID_Fields) ||
+        is_ado_interface(riid, &IID_Fields20) ||
+        is_ado_interface(riid, &IID_Fields15) ||
         IsEqualGUID( riid, &IID_IDispatch ) ||
         IsEqualGUID( riid, &IID_IUnknown ))
     {
@@ -1749,9 +1749,9 @@ static HRESULT WINAPI recordset_QueryInterface( _Recordset *iface, REFIID riid, 
     *obj = NULL;
 
     if (IsEqualIID(riid, &IID_IUnknown)    || IsEqualIID(riid, &IID_IDispatch)   ||
-        IsEqualIID(riid, &IID__ADO)        || IsEqualIID(riid, &IID_Recordset15) ||
-        IsEqualIID(riid, &IID_Recordset20) || IsEqualIID(riid, &IID_Recordset21) ||
-        IsEqualIID(riid, &IID__Recordset))
+        IsEqualIID(riid, &IID__ADO)        || is_ado_interface(riid, &IID_Recordset15) ||
+        is_ado_interface(riid, &IID_Recordset20) || is_ado_interface(riid, &IID_Recordset21) ||
+        is_ado_interface(riid, &IID__Recordset))
     {
         *obj = iface;
     }

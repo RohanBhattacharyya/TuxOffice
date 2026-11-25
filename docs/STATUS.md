@@ -28,6 +28,22 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **ADO 6.1 reference and interface support:** native VBA tracing identifies the
+  Labels size-query failure as a missing ADO 6.1 type library. Loading that
+  reference throws `TYPE_E_CANTLOADLIBRARY` before expression lookup can reach
+  VBA's `Mid` fallback. The runner now builds and registers a second, correctly
+  identified ADO 6.1 type-library resource alongside 2.8 and accepts the matching
+  interface IDs on its implemented objects. Both use the same existing vtables;
+  the generated `ADO_LONGPTR` scalar is 64 bits on Win64 and 32 bits on Win32.
+  `tests/ado-interfaces.c` passes 140 checks on each architecture, including
+  modern/legacy object identity, actual recordset/command/stream calls,
+  invocation through 6.1 type information and cross-apartment marshalling. The
+  existing ADO suite passes 1,012 checks per architecture, with its 39 existing
+  TODOs and one ODBC skip. In native Access, Labels now displays all 439 matching
+  sizes and advances past the previous Null error. The later field list is
+  still blank, including with the source table explicitly selected. Labels
+  completion and full ADO feature coverage remain unverified. This change is
+  not yet packaged or installed on the host.
 - **Faster Office type-library loading:** MSFT name references previously scanned
   the full linked list for every reference. A temporary sorted offset index now
   permits binary search while parsing, with the original scan retained if its

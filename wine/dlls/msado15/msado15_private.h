@@ -43,6 +43,9 @@ typedef enum tid_t {
     LAST_tid
 } tid_t;
 
+/* ADO 6.1 reguided these interfaces without changing their vtables. */
+BOOL is_ado_interface(REFIID requested, REFIID legacy);
+
 HRESULT get_typeinfo(tid_t tid, ITypeInfo **typeinfo);
 
 #endif /* _WINE_MSADO15_PRIVATE_H_ */

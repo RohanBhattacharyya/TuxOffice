@@ -16,6 +16,57 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+/* ADO 6.1 keeps the vtables but uses the script-friendly interface IDs. */
+#ifdef MSADO15_VERSION_61
+#define MSADO15_UUID_Command15 00001508-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Command25 0000154E-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID__Command 986761E8-7269-4890-AA65-AD7C03697A6D
+#define MSADO15_UUID_ConnectionEventsVt 00001402-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_ConnectionEvents 00001400-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_RecordsetEvents 00001266-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Connection15 00001515-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID__Connection 00001550-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID__Record 00001562-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID__Stream 00001565-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Recordset15 0000150E-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Recordset20 0000154F-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Recordset21 00001555-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID__Recordset 00001556-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Field20 0000154C-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Field 00001569-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Fields15 00001506-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Fields20 0000154D-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Fields 00001564-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID__Parameter 0000150C-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Parameters 0000150D-0000-0010-8000-00AA006D2EA4
+#define MSADO15_LIBID b691e011-1797-432e-907a-4d8c69339129
+#define MSADO15_VERSION 6.1
+#else
+#define MSADO15_UUID_Command15 00000508-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Command25 0000054E-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID__Command B08400BD-F9D1-4D02-B856-71D5DBA123E9
+#define MSADO15_UUID_ConnectionEventsVt 00000402-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_ConnectionEvents 00000400-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_RecordsetEvents 00000266-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Connection15 00000515-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID__Connection 00000550-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID__Record 00000562-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID__Stream 00000565-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Recordset15 0000050E-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Recordset20 0000054F-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Recordset21 00000555-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID__Recordset 00000556-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Field20 0000054C-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Field 00000569-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Fields15 00000506-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Fields20 0000054D-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Fields 00000564-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID__Parameter 0000050C-0000-0010-8000-00AA006D2EA4
+#define MSADO15_UUID_Parameters 0000050D-0000-0010-8000-00AA006D2EA4
+#define MSADO15_LIBID 2a75196c-d9eb-4129-b803-931327f72d5c
+#define MSADO15_VERSION 2.8
+#endif
+
 import "oaidl.idl";
 
 interface _ADO;
@@ -51,6 +102,7 @@ interface ConnectionEventsVt;
 dispinterface ConnectionEvents;
 dispinterface RecordsetEvents;
 
+/* WIDL emits VT_I8 on Win64 and VT_I4 on Win32 for this signed scalar. */
 typedef [uuid(54D8B4B9-663B-4a9c-95F6-0E749ABD70F1)] LONG_PTR ADO_LONGPTR;
 
 typedef [uuid(0000052A-0000-0010-8000-00AA006D2EA4)] enum ErrorValueEnum
@@ -617,7 +669,7 @@ interface _ADO : IDispatch
 };
 
 [
-    uuid(0000054c-0000-0010-8000-00aa006d2ea4),
+    uuid(MSADO15_UUID_Field20),
     odl,
     dual,
     nonextensible,
@@ -709,7 +761,7 @@ interface Field20 : _ADO
 };
 
 [
-    uuid(00000569-0000-0010-8000-00aa006d2ea4),
+    uuid(MSADO15_UUID_Field),
     odl,
     dual,
     nonextensible,
@@ -723,7 +775,7 @@ interface Field : Field20
 };
 
 [
-    uuid(00000506-0000-0010-8000-00aa006d2ea4),
+    uuid(MSADO15_UUID_Fields15),
     odl,
     dual,
     nonextensible,
@@ -738,7 +790,7 @@ interface Fields15 : _Collection
 };
 
 [
-    uuid(0000054d-0000-0010-8000-00aa006d2ea4),
+    uuid(MSADO15_UUID_Fields20),
     odl,
     dual,
     nonextensible,
@@ -759,7 +811,7 @@ interface Fields20 : Fields15
 };
 
 [
-    uuid(00000564-0000-0010-8000-00aa006d2ea4),
+    uuid(MSADO15_UUID_Fields),
     odl,
     dual,
     nonextensible,
@@ -787,7 +839,7 @@ interface Fields : Fields20
 };
 
 [
-    uuid(0000050e-0000-0010-8000-00aa006d2ea4),
+    uuid(MSADO15_UUID_Recordset15),
     odl,
     dual,
     nonextensible,
@@ -1048,7 +1100,7 @@ interface Recordset15 : _ADO
 };
 
 [
-    uuid(0000054f-0000-0010-8000-00aa006d2ea4),
+    uuid(MSADO15_UUID_Recordset20),
     odl,
     dual,
     nonextensible,
@@ -1119,7 +1171,7 @@ interface Recordset20 : Recordset15
 };
 
 [
-    uuid(00000555-0000-0010-8000-00aa006d2ea4),
+    uuid(MSADO15_UUID_Recordset21),
     odl,
     dual,
     nonextensible,
@@ -1142,7 +1194,7 @@ interface Recordset21 : Recordset20
 };
 
 [
-    uuid(00000556-0000-0010-8000-00aa006d2ea4),
+    uuid(MSADO15_UUID__Recordset),
     odl,
     dual,
     nonextensible,
@@ -1213,7 +1265,7 @@ interface Errors : _Collection
 };
 
 [
-    uuid(00000515-0000-0010-8000-00aa006d2ea4),
+    uuid(MSADO15_UUID_Connection15),
     odl,
     dual,
     oleautomation
@@ -1340,7 +1392,7 @@ interface Connection15 : _ADO
 };
 
 [
-    uuid(00000550-0000-0010-8000-00aa006d2ea4),
+    uuid(MSADO15_UUID__Connection),
     odl,
     dual,
     oleautomation
@@ -1352,7 +1404,7 @@ interface _Connection : Connection15
 };
 
 [
-    uuid(0000050c-0000-0010-8000-00aa006d2ea4),
+    uuid(MSADO15_UUID__Parameter),
     odl,
     dual,
     nonextensible,
@@ -1448,7 +1500,7 @@ interface _DynaCollection : _Collection
 };
 
 [
-    uuid(0000050d-0000-0010-8000-00aa006d2ea4),
+    uuid(MSADO15_UUID_Parameters),
     odl,
     dual,
     nonextensible,
@@ -1463,7 +1515,7 @@ interface Parameters : _DynaCollection
 };
 
 [
-    uuid(00000508-0000-0010-8000-00aa006d2ea4),
+    uuid(MSADO15_UUID_Command15),
     odl,
     dual,
     nonextensible,
@@ -1545,7 +1597,7 @@ interface Command15 : _ADO
 };
 
 [
-    uuid(0000054e-0000-0010-8000-00aa006d2ea4),
+    uuid(MSADO15_UUID_Command25),
     odl,
     dual,
     nonextensible,
@@ -1562,7 +1614,7 @@ interface Command25 : Command15
 };
 
 [
-    uuid(b08400bd-f9d1-4d02-b856-71d5dba123e9),
+    uuid(MSADO15_UUID__Command),
     odl,
     dual,
     nonextensible,
@@ -1596,7 +1648,7 @@ interface _Command : Command25
 };
 
 [
-    uuid(00000402-0000-0010-8000-00aa006d2ea4),
+    uuid(MSADO15_UUID_ConnectionEventsVt),
     odl,
     hidden
 ]
@@ -1660,7 +1712,7 @@ interface ConnectionEventsVt : IUnknown
 };
 
 [
-    uuid(00000400-0000-0010-8000-00aa006d2ea4)
+    uuid(MSADO15_UUID_ConnectionEvents)
 ]
 dispinterface ConnectionEvents
 {
@@ -1733,7 +1785,7 @@ dispinterface ConnectionEvents
 };
 
 [
-    uuid(00000562-0000-0010-8000-00aa006d2ea4),
+    uuid(MSADO15_UUID__Record),
     odl,
     dual,
     nonextensible,
@@ -1836,7 +1888,7 @@ interface _Record : _ADO
 };
 
 [
-    uuid(00000565-0000-0010-8000-00aa006d2ea4),
+    uuid(MSADO15_UUID__Stream),
     odl,
     dual,
     nonextensible,
@@ -1954,7 +2006,7 @@ interface _Stream : IDispatch
 };
 
 [
-    uuid(00000266-0000-0010-8000-00aa006d2ea4)
+    uuid(MSADO15_UUID_RecordsetEvents)
 ]
 dispinterface RecordsetEvents
 {
@@ -2129,8 +2181,11 @@ interface ADORecordsetConstruction : IDispatch
 };
 
 [
-    uuid(2a75196c-d9eb-4129-b803-931327f72d5c),
-    version(2.8)
+    uuid(MSADO15_LIBID),
+#ifdef MSADO15_VERSION_61
+    id(2),
+#endif
+    version(MSADO15_VERSION)
 ]
 library ADODB
 {

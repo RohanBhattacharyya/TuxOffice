@@ -92,7 +92,7 @@ static HRESULT WINAPI parameters_QueryInterface(Parameters *iface, REFIID riid, 
         IsEqualIID(riid, &IID_IDispatch)   ||
         IsEqualIID(riid, &IID__Collection) ||
         IsEqualIID(riid, &IID__DynaCollection)  ||
-        IsEqualIID(riid, &IID_Parameters))
+        is_ado_interface(riid, &IID_Parameters))
     {
         *obj = iface;
     }
@@ -265,9 +265,9 @@ static HRESULT WINAPI command_QueryInterface( _Command *iface, REFIID riid, void
     if (IsEqualIID(riid, &IID_IUnknown)   ||
         IsEqualIID(riid, &IID_IDispatch)  ||
         IsEqualIID(riid, &IID__ADO)       ||
-        IsEqualIID(riid, &IID_Command15)  ||
-        IsEqualIID(riid, &IID_Command25)  ||
-        IsEqualIID(riid, &IID__Command))
+        is_ado_interface(riid, &IID_Command15)  ||
+        is_ado_interface(riid, &IID_Command25)  ||
+        is_ado_interface(riid, &IID__Command))
     {
         *obj = iface;
     }
@@ -467,7 +467,7 @@ static HRESULT WINAPI parameter_QueryInterface(_Parameter *iface, REFIID riid, v
 
     if (IsEqualIID(riid, &IID_IUnknown)   ||
         IsEqualIID(riid, &IID_IDispatch)  ||
-        IsEqualIID(riid, &IID__Parameter))
+        is_ado_interface(riid, &IID__Parameter))
     {
         *obj = iface;
     }

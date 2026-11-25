@@ -74,7 +74,7 @@ static HRESULT WINAPI stream_QueryInterface( _Stream *iface, REFIID riid, void *
 {
     TRACE( "%p, %s, %p\n", iface, debugstr_guid(riid), obj );
 
-    if (IsEqualGUID( riid, &IID__Stream ) || IsEqualGUID( riid, &IID_IDispatch ) ||
+    if (is_ado_interface(riid, &IID__Stream) || IsEqualGUID( riid, &IID_IDispatch ) ||
         IsEqualGUID( riid, &IID_IUnknown ))
     {
         *obj = iface;

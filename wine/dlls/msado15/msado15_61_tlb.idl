@@ -1,0 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
+#pragma makedep regtypelib
+#define MSADO15_VERSION_61
+#include "msado15_backcompat.idl"

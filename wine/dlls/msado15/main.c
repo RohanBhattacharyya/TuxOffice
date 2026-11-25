@@ -17,6 +17,7 @@
  */
 
 #include <stdarg.h>
+#include <string.h>
 #include "windef.h"
 #include "winbase.h"
 #define COBJMACROS
@@ -195,4 +196,26 @@ HRESULT get_typeinfo(tid_t tid, ITypeInfo **typeinfo)
     *typeinfo = typeinfos[tid];
     ITypeInfo_AddRef(*typeinfo);
     return S_OK;
+}
+
+BOOL is_ado_interface(REFIID requested, REFIID legacy)
+{
+    static const DWORD reguided[] =
+    {
+        0x266, 0x400, 0x402, 0x403, 0x505, 0x506, 0x508, 0x50c, 0x50d,
+        0x50e, 0x515, 0x54c, 0x54d, 0x54e, 0x54f, 0x550, 0x555, 0x556,
+        0x562, 0x564, 0x565, 0x569
+    };
+    static const IID command61 = {0x986761e8,0x7269,0x4890,{0xaa,0x65,0xad,0x7c,0x03,0x69,0x7a,0x6d}};
+    unsigned int i;
+
+    if (IsEqualIID(requested, legacy)) return TRUE;
+    if (IsEqualIID(legacy, &IID__Command)) return IsEqualIID(requested, &command61);
+    if (legacy->Data2 || legacy->Data3 != 0x10 ||
+            requested->Data1 != legacy->Data1 + 0x1000 ||
+            memcmp((const BYTE *)requested + sizeof(DWORD),
+                   (const BYTE *)legacy + sizeof(DWORD), sizeof(IID) - sizeof(DWORD))) return FALSE;
+    for (i = 0; i < ARRAY_SIZE(reguided); ++i)
+        if (legacy->Data1 == reguided[i]) return TRUE;
+    return FALSE;
 }
