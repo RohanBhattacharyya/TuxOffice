@@ -132,10 +132,13 @@ Set cbf = app.CreateForm()
 cbfName = cbf.Name
 cbf.HasModule = True
 cbf.Module.InsertText "Public Function TuxValue()" & vbCrLf & "TuxValue = 7" & vbCrLf & "End Function" & vbCrLf
+cbf.Module.InsertText "Private Sub Form_Open(Cancel As Integer)" & vbCrLf & "Me.Tag = ""onopen passed""" & vbCrLf & "End Sub" & vbCrLf
+cbf.OnOpen = "[Event Procedure]"
 app.DoCmd.Close 2, cbfName, 1
 checked = Empty : checked = (Err.Number = 0) : Check "save form with code", checked
 app.DoCmd.OpenForm cbfName
 checked = Empty : checked = (app.Forms(cbfName).TuxValue() = 7) : Check "run code behind form", checked
+checked = Empty : checked = (app.Forms(cbfName).Tag = "onopen passed") : Check "form open event", checked
 app.DoCmd.Close 2, cbfName
 app.DoCmd.DeleteObject 2, cbfName
 checked = Empty : checked = (Err.Number = 0 And app.CurrentProject.AllForms.Count = 1) : Check "delete form with code", checked

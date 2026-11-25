@@ -28,6 +28,17 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Labels wizard diagnosis narrowed:** its `mlbl_frmMain` class loads and
+  compiles successfully. VBA's `TipCreateInstanceEx` then returns
+  `DISP_E_MEMBERNOTFOUND` (`0x80020003`). Its `_HrFromErr` wrapper ORs in
+  `0x800a0000`, producing `0x800a0003`; Access displays the unrelated VBA error
+  text "Return without GoSub" and wraps it as event error 2473. The failing
+  class-creation method is `CVbeProjItem::CreateItemInstance`. Interpreter
+  Return/GoSub error breakpoints do not trigger. A newly created form's real
+  `OnOpen` event passes, as do basic VBA error-handler cases. The wizard remains
+  unresolved; the missing dispatch member during class creation is the next
+  investigation target. The tested Wine `ITypeInfo::Invoke` failure path did
+  not produce this result in the captured wizard run.
 - **0.1.16 release built and verified:** packages and checked SHA256SUMS are in
   `dist/0.1.16/`. The portable runner was rebuilt from committed source in Ubuntu
   24.04. Clean Arch system installation, 32/64-bit execution, removal and per-user
