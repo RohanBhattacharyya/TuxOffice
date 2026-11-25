@@ -487,6 +487,25 @@ BOOL WAYLAND_WindowPosChanging(HWND hwnd, UINT swp_flags, BOOL shaped, const str
     return TRUE;
 }
 
+/* A popup owned by a window of another process cannot be a subsurface of its
+ * owner's surface, and an xdg_toplevel for it takes the keyboard focus away
+ * from the owner. Leave such click-through, non-activating popups, like the
+ * tooltips of a web view embedded in an application's dialog, unmapped. */
+static BOOL is_foreign_tooltip(HWND hwnd)
+{
+    DWORD style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
+    DWORD exstyle = NtUserGetWindowLongW(hwnd, GWL_EXSTYLE);
+    DWORD pid = 0;
+    HWND owner;
+
+    if ((style & (WS_POPUP | WS_CHILD)) != WS_POPUP) return FALSE;
+    if ((exstyle & (WS_EX_NOACTIVATE | WS_EX_TRANSPARENT)) != (WS_EX_NOACTIVATE | WS_EX_TRANSPARENT)) return FALSE;
+    if (!(owner = NtUserGetWindowRelative(hwnd, GW_OWNER))) return FALSE;
+    if (!(owner = NtUserGetAncestor(owner, GA_ROOT))) return FALSE;
+    NtUserGetWindowThread(owner, &pid);
+    return pid && pid != GetCurrentProcessId();
+}
+
 static BOOL is_mso_border_effect_window(HWND hwnd)
 {
     static const WCHAR border_effect[] = u"MSO_BORDEREFFECT_WINDOW_CLASS";
@@ -597,6 +616,7 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
     HWND active = NULL, border_parent, owner;
     BOOL managed, orphan_border, moved_only;
     BOOL border_effect = is_mso_border_effect_window(hwnd);
+    BOOL foreign_tooltip = is_foreign_tooltip(hwnd);
     BOOL fullscreen = swp_flags & WINE_SWP_FULLSCREEN;
     RECT region_clip = {0};
     BOOL region_clipped;
@@ -648,7 +668,7 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
      * reparents the GPU surface root -> child -> root on its next present,
      * exposing the GDI background between those commits. Foreign roots
      * still need the existing standalone/import fallback. */
-    if (orphan_border || (!surface && (!NtUserIsWindowVisible(hwnd) ||
+    if (orphan_border || foreign_tooltip || (!surface && (!NtUserIsWindowVisible(hwnd) ||
         (toplevel != hwnd && (!data->client_surface || (root != hwnd && toplevel_surface))))))
     {
         if ((client = data->client_surface))
