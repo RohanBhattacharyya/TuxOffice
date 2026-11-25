@@ -1875,15 +1875,264 @@ void wayland_update_overlays(struct wayland_win_data *data, struct wayland_shm_b
     }
 }
 
+/* A popup owned by a window of another process, such as the pane or a
+ * dropdown of a web view hosted in an Office window, cannot be a subsurface
+ * of its owner's surface in its own process: that surface belongs to another
+ * Wayland client. The popup's process shares its pixels with the owner's
+ * process instead, which shows them in a subsurface of the toplevel. */
+struct wayland_foreign_popup
+{
+    struct wl_list link;
+    HWND hwnd;
+    HANDLE section;
+    struct wayland_foreign_popup_shared *shared;
+    LONG serial;
+    RECT rect;   /* in window surface coordinates of the toplevel */
+    RECT screen; /* the popup's window rectangle */
+    struct wl_surface *wl_surface;
+    struct wl_subsurface *wl_subsurface;
+    struct wp_viewport *wp_viewport;
+    struct wayland_shm_buffer *buffers[2];
+};
+
+static void wayland_foreign_popup_destroy(struct wayland_foreign_popup *popup)
+{
+    UINT i;
+
+    TRACE("hwnd=%p\n", popup->hwnd);
+
+    wl_list_remove(&popup->link);
+    for (i = 0; i < ARRAY_SIZE(popup->buffers); i++)
+        if (popup->buffers[i]) wayland_shm_buffer_unref(popup->buffers[i]);
+    if (popup->wp_viewport) wp_viewport_destroy(popup->wp_viewport);
+    if (popup->wl_subsurface) wl_subsurface_destroy(popup->wl_subsurface);
+    if (popup->wl_surface) wl_surface_destroy(popup->wl_surface);
+    if (popup->shared) NtUnmapViewOfSection(GetCurrentProcess(), popup->shared);
+    if (popup->section) NtClose(popup->section);
+    free(popup);
+}
+
+static struct wayland_foreign_popup *wayland_foreign_popup_create(struct wayland_win_data *toplevel_data, HWND hwnd)
+{
+    struct wayland_surface *surface = toplevel_data->wayland_surface;
+    struct wayland_foreign_popup *popup;
+
+    if (!(popup = calloc(1, sizeof(*popup)))) return NULL;
+    wl_list_insert(&toplevel_data->foreign_popups, &popup->link);
+    popup->hwnd = hwnd;
+
+    /* Pointer input on it goes to the popup, found by its position. */
+    if (!(popup->wl_surface = wl_compositor_create_surface(process_wayland.wl_compositor)))
+        goto err;
+    wl_surface_set_user_data(popup->wl_surface, hwnd);
+    if (!(popup->wp_viewport = wp_viewporter_get_viewport(process_wayland.wp_viewporter, popup->wl_surface)))
+        goto err;
+    if (!(popup->wl_subsurface = wl_subcompositor_get_subsurface(process_wayland.wl_subcompositor,
+                                                                 popup->wl_surface, surface->wl_surface)))
+        goto err;
+    /* new frames show without waiting for a commit of the toplevel */
+    wl_subsurface_set_desync(popup->wl_subsurface);
+
+    TRACE("hwnd=%p\n", hwnd);
+    return popup;
+
+err:
+    ERR("Failed to create foreign popup surface for hwnd=%p\n", hwnd);
+    wayland_foreign_popup_destroy(popup);
+    return NULL;
+}
+
+static struct wayland_foreign_popup *wayland_find_foreign_popup(struct wayland_win_data *data, HWND hwnd)
+{
+    struct wayland_foreign_popup *popup;
+
+    wl_list_for_each(popup, &data->foreign_popups, link)
+        if (popup->hwnd == hwnd) return popup;
+    return NULL;
+}
+
+static void foreign_popup_buffer_release(void *data, struct wl_buffer *buffer)
+{
+    struct wayland_shm_buffer *shm_buffer = data;
+    shm_buffer->busy = FALSE;
+    wayland_shm_buffer_unref(shm_buffer);
+}
+
+static const struct wl_buffer_listener foreign_popup_buffer_listener =
+{
+    foreign_popup_buffer_release
+};
+
+static void wayland_foreign_popup_attach(struct wayland_foreign_popup *popup)
+{
+    static const int bpp = WINEWAYLAND_BYTES_PER_PIXEL;
+    const struct wayland_foreign_popup_shared *shared = popup->shared;
+    int width = shared->width, height = shared->height;
+    struct wayland_shm_buffer *buffer = NULL;
+    UINT i;
+
+    for (i = 0; i < ARRAY_SIZE(popup->buffers); i++)
+    {
+        if (!(buffer = popup->buffers[i])) continue;
+        if (!buffer->busy && buffer->width == width && buffer->height == height &&
+            buffer->format == shared->format)
+            break;
+    }
+    if (i == ARRAY_SIZE(popup->buffers))
+    {
+        for (i = 0; i < ARRAY_SIZE(popup->buffers); i++)
+            if (!popup->buffers[i] || !popup->buffers[i]->busy) break;
+        if (i == ARRAY_SIZE(popup->buffers)) i = 0;
+        if (popup->buffers[i]) wayland_shm_buffer_unref(popup->buffers[i]);
+        if (!(buffer = popup->buffers[i] = wayland_shm_buffer_create(width, height, shared->format)))
+            return;
+        wl_buffer_add_listener(buffer->wl_buffer, &foreign_popup_buffer_listener, buffer);
+    }
+
+    memcpy(buffer->map_data, (const char *)shared + WAYLAND_FOREIGN_POPUP_PIXELS, width * height * bpp);
+    buffer->busy = TRUE;
+    wayland_shm_buffer_ref(buffer);
+    wl_surface_attach(popup->wl_surface, buffer->wl_buffer, 0, 0);
+    wl_surface_damage_buffer(popup->wl_surface, 0, 0, width, height);
+    wl_surface_commit(popup->wl_surface);
+}
+
+/**********************************************************************
+ *          wayland_foreign_popup_update
+ *
+ * Shows the latest pixels and position of a popup of another process that
+ * this toplevel owns, or hides it when section is 0.
+ */
+void wayland_foreign_popup_update(HWND toplevel, HWND popup_hwnd, HANDLE section)
+{
+    UINT dpi = NtUserGetWinMonitorDpi(toplevel, MDT_RAW_DPI);
+    struct wayland_foreign_popup *popup;
+    struct wayland_win_data *data;
+    RECT screen, toplevel_rect, rect;
+    BOOL visible, moved = FALSE;
+    SIZE_T view_size = 0;
+    int x, y, width, height;
+
+    /* query the window geometry before taking the win_data lock */
+    visible = section && NtUserIsWindowVisible(popup_hwnd) &&
+              NtUserGetWindowRect(popup_hwnd, &screen, dpi) &&
+              NtUserGetWindowRect(toplevel, &toplevel_rect, dpi);
+
+    if (!(data = wayland_win_data_get(toplevel)))
+    {
+        if (section) NtClose(section);
+        return;
+    }
+    popup = wayland_find_foreign_popup(data, popup_hwnd);
+    if (popup && section != popup->section && popup->section)
+    {
+        NtUnmapViewOfSection(GetCurrentProcess(), popup->shared);
+        NtClose(popup->section);
+        popup->shared = NULL;
+        popup->section = 0;
+    }
+    if (!visible || !data->wayland_surface)
+    {
+        if (popup) wayland_foreign_popup_destroy(popup);
+        else if (section) NtClose(section);
+        wayland_win_data_release(data);
+        return;
+    }
+    if (!popup && !(popup = wayland_foreign_popup_create(data, popup_hwnd)))
+    {
+        NtClose(section);
+        wayland_win_data_release(data);
+        return;
+    }
+    if (!popup->section)
+    {
+        popup->section = section;
+        if (NtMapViewOfSection(section, GetCurrentProcess(), (void **)&popup->shared, 0, 0, NULL, &view_size,
+                               ViewShare, 0, PAGE_READONLY) ||
+            popup->shared->magic != WAYLAND_FOREIGN_POPUP_MAGIC ||
+            view_size < WAYLAND_FOREIGN_POPUP_PIXELS + (SIZE_T)popup->shared->width * popup->shared->height *
+                        WINEWAYLAND_BYTES_PER_PIXEL)
+        {
+            WARN("invalid section %p for popup %p\n", section, popup_hwnd);
+            wayland_foreign_popup_destroy(popup);
+            wayland_win_data_release(data);
+            return;
+        }
+        popup->serial = popup->shared->serial - 1;
+    }
+
+    rect = screen;
+    OffsetRect(&rect, -toplevel_rect.left, -toplevel_rect.top);
+    if (memcmp(&popup->rect, &rect, sizeof(rect)) || !popup->wl_subsurface)
+    {
+        moved = TRUE;
+        popup->rect = rect;
+        wayland_surface_coords_from_window(data->wayland_surface, rect.left, rect.top, &x, &y);
+        wayland_surface_coords_from_window(data->wayland_surface, rect.right - rect.left, rect.bottom - rect.top,
+                                           &width, &height);
+        wl_subsurface_set_position(popup->wl_subsurface, x, y);
+        wp_viewport_set_destination(popup->wp_viewport, max(1, width), max(1, height));
+    }
+    popup->screen = screen;
+
+    if (popup->serial != popup->shared->serial)
+    {
+        /* the window surface's buffer may be larger than the window */
+        width = min(rect.right - rect.left, popup->shared->width);
+        height = min(rect.bottom - rect.top, popup->shared->height);
+        wp_viewport_set_source(popup->wp_viewport, 0, 0, wl_fixed_from_int(max(1, width)),
+                               wl_fixed_from_int(max(1, height)));
+        popup->serial = popup->shared->serial;
+        wayland_foreign_popup_attach(popup);
+        wl_display_flush(process_wayland.wl_display);
+    }
+    TRACE("popup %p rect %s moved %d\n", popup_hwnd, wine_dbgstr_rect(&rect), moved);
+
+    if (moved) data->restack_pending = TRUE;
+    wayland_win_data_release(data);
+    /* a position applies with the next commit of the toplevel */
+    if (moved) wayland_restack_client_surfaces(toplevel);
+}
+
+/**********************************************************************
+ *          wayland_foreign_popup_to_screen
+ *
+ * Maps a position on the surface of a foreign popup to the screen.
+ */
+BOOL wayland_foreign_popup_to_screen(HWND hwnd, double sx, double sy, POINT *point)
+{
+    HWND toplevel = NtUserGetWindowRelative(hwnd, GW_OWNER);
+    struct wayland_foreign_popup *popup;
+    struct wayland_win_data *data;
+    BOOL ret = FALSE;
+    int x, y;
+
+    if (!toplevel || !(toplevel = NtUserGetAncestor(toplevel, GA_ROOT))) return FALSE;
+    if (!(data = wayland_win_data_get(toplevel))) return FALSE;
+    if (data->wayland_surface && (popup = wayland_find_foreign_popup(data, hwnd)))
+    {
+        wayland_surface_coords_to_window(data->wayland_surface, sx, sy, &x, &y);
+        point->x = min(popup->screen.left + x, popup->screen.right - 1);
+        point->y = min(popup->screen.top + y, popup->screen.bottom - 1);
+        ret = TRUE;
+    }
+    wayland_win_data_release(data);
+    return ret;
+}
+
 /**********************************************************************
  *          wayland_destroy_overlays
  */
 void wayland_destroy_overlays(struct wayland_win_data *data)
 {
+    struct wayland_foreign_popup *popup, *next_popup;
     struct wayland_overlay *overlay, *next;
 
     wl_list_for_each_safe(overlay, next, &data->overlays, link)
         wayland_overlay_destroy(overlay);
+    /* they are subsurfaces of the toplevel's surface as well */
+    wl_list_for_each_safe(popup, next_popup, &data->foreign_popups, link)
+        wayland_foreign_popup_destroy(popup);
 }
 
 static struct wayland_overlay *wayland_find_overlay(struct wayland_win_data *data, HWND hwnd)
@@ -1952,6 +2201,7 @@ void wayland_restack_client_surfaces(HWND toplevel)
     struct wayland_win_data *toplevel_data, *data;
     struct wayland_surface *surface, *popup;
     struct wayland_overlay *overlay, *next;
+    struct wayland_foreign_popup *foreign;
     struct restack_rects *rects = NULL;
     RECT *covered = NULL, toplevel_client, bounds, overlaid, rect;
     struct wl_surface *below;
@@ -2068,6 +2318,12 @@ void wayland_restack_client_surfaces(HWND toplevel)
         if (popup->toplevel_hwnd != toplevel || !popup->wl_subsurface) continue;
         wl_subsurface_place_above(popup->wl_subsurface, below);
         below = popup->wl_surface;
+    }
+    /* popups of other processes too, which only this process can show */
+    wl_list_for_each(foreign, &toplevel_data->foreign_popups, link)
+    {
+        wl_subsurface_place_above(foreign->wl_subsurface, below);
+        below = foreign->wl_surface;
     }
 
     wl_surface_commit(surface->wl_surface);

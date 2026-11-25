@@ -143,7 +143,13 @@ static void pointer_handle_motion_internal(wl_fixed_t sx, wl_fixed_t sy)
     struct wayland_win_data *data;
 
     if (!(hwnd = wayland_pointer_get_focused_hwnd())) return;
-    if (!(data = wayland_win_data_get(hwnd))) return;
+    if (!(data = wayland_win_data_get(hwnd)))
+    {
+        /* a popup of another process, shown by this one */
+        if (!wayland_foreign_popup_to_screen(hwnd, wl_fixed_to_double(sx), wl_fixed_to_double(sy), &screen))
+            return;
+        goto send;
+    }
     if (!(surface = data->wayland_surface))
     {
         wayland_win_data_release(data);
@@ -167,6 +173,7 @@ static void pointer_handle_motion_internal(wl_fixed_t sx, wl_fixed_t sy)
 
     wayland_win_data_release(data);
 
+send:
     input.type = INPUT_MOUSE;
     input.mi.dx = screen.x;
     input.mi.dy = screen.y;

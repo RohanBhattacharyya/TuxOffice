@@ -53,6 +53,7 @@ static int wayland_win_data_cmp_rb(const void *key,
 static pthread_mutex_t win_data_mutex = PTHREAD_MUTEX_INITIALIZER;
 static struct rb_tree win_data_rb = { wayland_win_data_cmp_rb };
 static BOOL is_mso_border_effect_window(HWND hwnd);
+static void foreign_popup_release(struct wayland_win_data *data);
 
 /***********************************************************************
  *           wayland_win_data_create
@@ -76,6 +77,7 @@ static struct wayland_win_data *wayland_win_data_create(HWND hwnd, const struct 
     data->rects = *rects;
     data->mso_border_effect = is_mso_border_effect_window(hwnd);
     wl_list_init(&data->overlays);
+    wl_list_init(&data->foreign_popups);
 
     pthread_mutex_lock(&win_data_mutex);
 
@@ -104,6 +106,9 @@ static void wayland_win_data_destroy(struct wayland_win_data *data)
 
     pthread_mutex_unlock(&win_data_mutex);
 
+    if (data->foreign_root)
+        NtUserPostMessage(data->foreign_root, WM_WAYLAND_FOREIGN_POPUP, (WPARAM)data->hwnd, 0);
+    foreign_popup_release(data);
     wayland_destroy_overlays(data);
     if (data->wayland_surface) wayland_surface_destroy(data->wayland_surface);
     if (data->window_contents) wayland_shm_buffer_unref(data->window_contents);
@@ -487,23 +492,125 @@ BOOL WAYLAND_WindowPosChanging(HWND hwnd, UINT swp_flags, BOOL shaped, const str
     return TRUE;
 }
 
-/* A popup owned by a window of another process cannot be a subsurface of its
- * owner's surface, and an xdg_toplevel for it takes the keyboard focus away
- * from the owner. Leave such click-through, non-activating popups, like the
- * tooltips of a web view embedded in an application's dialog, unmapped. */
-static BOOL is_foreign_tooltip(HWND hwnd)
+/* WebView2 hosted through a composition visual, as Office's Help and other
+ * task panes, falls back to an unowned, non-activating tool window over the
+ * host's pane when it cannot use DirectComposition. Its host is the window
+ * of the process that started this one under the middle of the popup. */
+static HWND get_host_window(HWND hwnd)
+{
+    DWORD exstyle = NtUserGetWindowLongW(hwnd, GWL_EXSTYLE), pid;
+    PROCESS_BASIC_INFORMATION info;
+    HWND *list, host = 0;
+    ULONG count = 128, i;
+    NTSTATUS status;
+    POINT center;
+    RECT rect;
+
+    if ((exstyle & (WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)) != (WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)) return 0;
+    if (NtQueryInformationProcess(GetCurrentProcess(), ProcessBasicInformation, &info, sizeof(info), NULL))
+        return 0;
+    if (!NtUserGetWindowRect(hwnd, &rect, NtUserGetDpiForWindow(hwnd))) return 0;
+    center.x = (rect.left + rect.right) / 2;
+    center.y = (rect.top + rect.bottom) / 2;
+
+    for (;;)
+    {
+        if (!(list = malloc(count * sizeof(*list)))) return 0;
+        if (!(status = NtUserBuildHwndList(0, 0, FALSE, FALSE, 0, count, list, &count))) break;
+        free(list);
+        if (status != STATUS_BUFFER_TOO_SMALL) return 0;
+    }
+    /* toplevels from the top; the list ends with HWND_BOTTOM */
+    for (i = 0; i + 1 < count && !host; i++)
+    {
+        if (list[i] == hwnd || !NtUserIsWindowVisible(list[i])) continue;
+        NtUserGetWindowThread(list[i], &pid);
+        if (pid != info.InheritedFromUniqueProcessId) continue;
+        if (NtUserGetWindowLongW(list[i], GWL_STYLE) & WS_POPUP && !NtUserGetWindowRelative(list[i], GW_OWNER) &&
+            (NtUserGetWindowLongW(list[i], GWL_STYLE) & WS_CAPTION) != WS_CAPTION) continue;
+        if (NtUserGetWindowRect(list[i], &rect, NtUserGetDpiForWindow(hwnd)) &&
+            center.x >= rect.left && center.x < rect.right && center.y >= rect.top && center.y < rect.bottom)
+            host = list[i];
+    }
+    free(list);
+    return host;
+}
+
+/* A popup owned by a window of another process, as the panes, tooltips and
+ * dropdowns of a web view hosted in an Office window, cannot be a subsurface
+ * of its owner's surface, and an xdg_toplevel for it would take the keyboard
+ * focus from the owner and land anywhere. The owner's process shows it. */
+static HWND get_foreign_popup_root(HWND hwnd, DWORD *pid)
 {
     DWORD style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
-    DWORD exstyle = NtUserGetWindowLongW(hwnd, GWL_EXSTYLE);
-    DWORD pid = 0;
     HWND owner;
 
-    if ((style & (WS_POPUP | WS_CHILD)) != WS_POPUP) return FALSE;
-    if ((exstyle & (WS_EX_NOACTIVATE | WS_EX_TRANSPARENT)) != (WS_EX_NOACTIVATE | WS_EX_TRANSPARENT)) return FALSE;
-    if (!(owner = NtUserGetWindowRelative(hwnd, GW_OWNER))) return FALSE;
-    if (!(owner = NtUserGetAncestor(owner, GA_ROOT))) return FALSE;
-    NtUserGetWindowThread(owner, &pid);
-    return pid && pid != GetCurrentProcessId();
+    *pid = 0;
+    if ((style & (WS_POPUP | WS_CHILD)) != WS_POPUP || (style & WS_CAPTION) == WS_CAPTION) return 0;
+    if (!(owner = NtUserGetWindowRelative(hwnd, GW_OWNER)) && !(owner = get_host_window(hwnd))) return 0;
+    if (!(owner = NtUserGetAncestor(owner, GA_ROOT))) return 0;
+    NtUserGetWindowThread(owner, pid);
+    return *pid && *pid != GetCurrentProcessId() ? owner : 0;
+}
+
+static void foreign_popup_release(struct wayland_win_data *data)
+{
+    if (data->foreign_shared) NtUnmapViewOfSection(GetCurrentProcess(), data->foreign_shared);
+    if (data->foreign_section) NtClose(data->foreign_section);
+    data->foreign_shared = NULL;
+    data->foreign_section = 0;
+    data->foreign_remote = 0;
+}
+
+/* Copies the popup's pixels into the section shared with its owner's process,
+ * and returns the handle of that section in that process. */
+static HANDLE foreign_popup_export(struct wayland_win_data *data, struct wayland_shm_buffer *buffer)
+{
+    SIZE_T pixels = (SIZE_T)buffer->width * buffer->height * WINEWAYLAND_BYTES_PER_PIXEL, view_size = 0;
+    struct wayland_foreign_popup_shared *shared = data->foreign_shared;
+    OBJECT_ATTRIBUTES attr;
+    LARGE_INTEGER size;
+    HANDLE process;
+    CLIENT_ID cid;
+
+    if (shared && (shared->width != buffer->width || shared->height != buffer->height))
+        foreign_popup_release(data);
+    if (!data->foreign_section)
+    {
+        size.QuadPart = WAYLAND_FOREIGN_POPUP_PIXELS + pixels;
+        if (NtCreateSection(&data->foreign_section, SECTION_ALL_ACCESS, NULL, &size, PAGE_READWRITE, SEC_COMMIT, 0))
+            return 0;
+        if (NtMapViewOfSection(data->foreign_section, GetCurrentProcess(), (void **)&data->foreign_shared, 0, 0,
+                               NULL, &view_size, ViewShare, 0, PAGE_READWRITE))
+        {
+            foreign_popup_release(data);
+            return 0;
+        }
+        InitializeObjectAttributes(&attr, NULL, 0, NULL, NULL);
+        cid.UniqueProcess = ULongToHandle(data->foreign_pid);
+        cid.UniqueThread = 0;
+        if (!NtOpenProcess(&process, PROCESS_DUP_HANDLE, &attr, &cid))
+        {
+            NtDuplicateObject(GetCurrentProcess(), data->foreign_section, process, &data->foreign_remote,
+                              0, 0, DUPLICATE_SAME_ACCESS);
+            NtClose(process);
+        }
+        if (!data->foreign_remote)
+        {
+            WARN("cannot share popup %p with process %04x\n", data->hwnd, (int)data->foreign_pid);
+            foreign_popup_release(data);
+            return 0;
+        }
+        shared = data->foreign_shared;
+        shared->width = buffer->width;
+        shared->height = buffer->height;
+        shared->magic = WAYLAND_FOREIGN_POPUP_MAGIC;
+    }
+    shared = data->foreign_shared;
+    shared->format = buffer->format;
+    memcpy((char *)shared + WAYLAND_FOREIGN_POPUP_PIXELS, buffer->map_data, pixels);
+    InterlockedIncrement(&shared->serial);
+    return data->foreign_remote;
 }
 
 static BOOL is_mso_border_effect_window(HWND hwnd)
@@ -616,7 +723,10 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
     HWND active = NULL, border_parent, owner;
     BOOL managed, orphan_border, moved_only;
     BOOL border_effect = is_mso_border_effect_window(hwnd);
-    BOOL foreign_tooltip = is_foreign_tooltip(hwnd);
+    DWORD foreign_pid;
+    HWND foreign_root = get_foreign_popup_root(hwnd, &foreign_pid), notify_root = 0;
+    HANDLE notify_section = 0;
+    BOOL foreign_visible = foreign_root && NtUserIsWindowVisible(hwnd);
     BOOL fullscreen = swp_flags & WINE_SWP_FULLSCREEN;
     RECT region_clip = {0};
     BOOL region_clipped;
@@ -668,7 +778,21 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
      * reparents the GPU surface root -> child -> root on its next present,
      * exposing the GDI background between those commits. Foreign roots
      * still need the existing standalone/import fallback. */
-    if (orphan_border || foreign_tooltip || (!surface && (!NtUserIsWindowVisible(hwnd) ||
+    /* tell the owner's process where a shown popup moved, or that it is hidden */
+    if (data->foreign_root && (data->foreign_root != foreign_root || !foreign_visible))
+    {
+        notify_root = data->foreign_root;
+        foreign_popup_release(data);
+    }
+    else if (foreign_root && data->foreign_remote)
+    {
+        notify_root = foreign_root;
+        notify_section = data->foreign_remote;
+    }
+    data->foreign_root = foreign_visible ? foreign_root : 0;
+    data->foreign_pid = foreign_pid;
+
+    if (orphan_border || foreign_root || (!surface && (!NtUserIsWindowVisible(hwnd) ||
         (toplevel != hwnd && (!data->client_surface || (root != hwnd && toplevel_surface))))))
     {
         if ((client = data->client_surface))
@@ -703,6 +827,7 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
 
     wayland_win_data_release(data);
 
+    if (notify_root) NtUserPostMessage(notify_root, WM_WAYLAND_FOREIGN_POPUP, (WPARAM)hwnd, (LPARAM)notify_section);
     if (toplevel) wayland_restack_client_surfaces(toplevel);
 }
 
@@ -885,6 +1010,9 @@ LRESULT WAYLAND_WindowMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     {
     case WM_WAYLAND_FOREIGN_PARENT_CHANGED:
         wayland_refresh_foreign_child(hwnd, (HWND)wp);
+        return 0;
+    case WM_WAYLAND_FOREIGN_POPUP:
+        wayland_foreign_popup_update(hwnd, (HWND)wp, (HANDLE)lp);
         return 0;
     case WM_WAYLAND_INIT_DISPLAY_DEVICES:
         NtUserCallNoParam(NtUserCallNoParam_DisplayModeChanged);
@@ -1101,6 +1229,8 @@ BOOL set_window_surface_contents(HWND hwnd, struct wayland_shm_buffer *shm_buffe
     struct wayland_surface *wayland_surface;
     struct wayland_win_data *data;
     BOOL committed = FALSE;
+    HANDLE notify_section = 0;
+    HWND notify_root = 0;
 
     if (!(data = wayland_win_data_get(hwnd))) return FALSE;
 
@@ -1124,6 +1254,11 @@ BOOL set_window_surface_contents(HWND hwnd, struct wayland_shm_buffer *shm_buffe
          * retrying a flush that cannot yet be presented. */
         committed = TRUE;
     }
+    else if ((notify_root = data->foreign_root))
+    {
+        notify_section = foreign_popup_export(data, shm_buffer);
+        committed = TRUE;
+    }
     /* Update the latest window buffer for the wayland surface. Note that we
      * only care whether the buffer contains the latest window contents,
      * it's irrelevant if it was actually committed or not. */
@@ -1133,6 +1268,8 @@ BOOL set_window_surface_contents(HWND hwnd, struct wayland_shm_buffer *shm_buffe
 
     wayland_win_data_release(data);
 
+    if (notify_section)
+        NtUserPostMessage(notify_root, WM_WAYLAND_FOREIGN_POPUP, (WPARAM)hwnd, (LPARAM)notify_section);
     return committed;
 }
 

@@ -72,6 +72,7 @@ enum wayland_window_message
     WM_WAYLAND_KEYBOARD_LEAVE,
     WM_WAYLAND_ACTIVATE_FOREIGN,
     WM_WAYLAND_FOREIGN_PARENT_CHANGED,
+    WM_WAYLAND_FOREIGN_POPUP,
 };
 
 enum wayland_surface_config_state
@@ -415,12 +416,35 @@ struct wayland_win_data
     BOOL restack_pending;
     /* surfaces showing child windows above the client surfaces of this toplevel */
     struct wl_list overlays;
+    /* surfaces showing popups of other processes that this toplevel owns */
+    struct wl_list foreign_popups;
+    /* this popup is owned by a window of another process, which shows it */
+    HWND foreign_root;
+    DWORD foreign_pid;
+    HANDLE foreign_section;
+    HANDLE foreign_remote; /* the section in the root's process */
+    struct wayland_foreign_popup_shared *foreign_shared;
+};
+
+/* The pixels of a popup owned by a window of another process, shared with
+ * that process, which shows them in a subsurface of the owner's surface. */
+#define WAYLAND_FOREIGN_POPUP_MAGIC  0x50465757
+#define WAYLAND_FOREIGN_POPUP_PIXELS 0x1000
+struct wayland_foreign_popup_shared
+{
+    UINT magic;
+    UINT width;
+    UINT height;
+    UINT format;
+    LONG serial;
 };
 
 struct wayland_win_data *wayland_win_data_get(HWND hwnd);
 struct wayland_win_data *wayland_win_data_get_nolock(HWND hwnd);
 void wayland_win_data_release(struct wayland_win_data *data);
 void wayland_destroy_overlays(struct wayland_win_data *data);
+void wayland_foreign_popup_update(HWND toplevel, HWND popup, HANDLE section);
+BOOL wayland_foreign_popup_to_screen(HWND popup, double sx, double sy, POINT *screen);
 void wayland_update_overlays(struct wayland_win_data *data, struct wayland_shm_buffer *contents,
                              HRGN damage_region);
 
