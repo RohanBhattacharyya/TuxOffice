@@ -25,6 +25,7 @@ int wmain(int argc, WCHAR **argv)
 {
     BOOL save = argc < 2 || !wcscmp(argv[1], L"save");
     IFileDialog *dialog;
+    IFileOpenDialog *open;
     IShellItemArray *items;
     IShellItem *folder, *item;
     DWORD count, i, options;
@@ -51,6 +52,8 @@ int wmain(int argc, WCHAR **argv)
     }
 
     hr = IFileDialog_Show(dialog, NULL);
+    printf("show %#lx\n", hr);
+    fflush(stdout);
     if (hr == HRESULT_FROM_WIN32(ERROR_CANCELLED)) printf("cancelled\n");
     else if (FAILED(hr)) printf("failed %#lx\n", hr);
     else
@@ -65,18 +68,24 @@ int wmain(int argc, WCHAR **argv)
                 IShellItem_Release(item);
             }
         }
-        else if (SUCCEEDED(IFileOpenDialog_GetResults((IFileOpenDialog *)dialog, &items)))
+        /* IFileDialog may be implemented by IFileDialog2. Query the separate
+         * open interface rather than treating the next vtable slots as it. */
+        else if (SUCCEEDED(IFileDialog_QueryInterface(dialog, &IID_IFileOpenDialog, (void **)&open)))
         {
-            IShellItemArray_GetCount(items, &count);
-            for (i = 0; i < count; i++)
+            if (SUCCEEDED(IFileOpenDialog_GetResults(open, &items)))
             {
-                IShellItemArray_GetItemAt(items, i, &item);
-                IShellItem_GetDisplayName(item, SIGDN_FILESYSPATH, &path);
-                printf("result %ls\n", path);
-                CoTaskMemFree(path);
-                IShellItem_Release(item);
+                IShellItemArray_GetCount(items, &count);
+                for (i = 0; i < count; i++)
+                {
+                    IShellItemArray_GetItemAt(items, i, &item);
+                    IShellItem_GetDisplayName(item, SIGDN_FILESYSPATH, &path);
+                    printf("result %ls\n", path);
+                    CoTaskMemFree(path);
+                    IShellItem_Release(item);
+                }
+                IShellItemArray_Release(items);
             }
-            IShellItemArray_Release(items);
+            IFileOpenDialog_Release(open);
         }
         IFileDialog_GetFileTypeIndex(dialog, &type);
         printf("type %u\n", type);

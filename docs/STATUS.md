@@ -28,6 +28,14 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Native picker selection coverage:** `tests/native-dialog-results.py` drives
+  the real KDE picker through multiple-file Open and Save on both architectures.
+  All four 0.1.16 release cases preserve paths with spaces, return every selected
+  file and append the default `.docx` extension for a new save destination.
+  The previous probe incorrectly cast its IFileDialog pointer to IFileOpenDialog;
+  this called IFileDialog2's extra slots and crashed after a successful selection.
+  It now queries the open interface explicitly. This was a test-fixture defect,
+  distinct from Office's unresolved Pictures workflow.
 - **32-bit native chooser path conversion:** the WoW64 entry for
   `wine_nt_to_unix_file_name` returned `STATUS_NOT_SUPPORTED`. As a result the
   32-bit common item dialog could not construct the portal helper's output
