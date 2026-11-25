@@ -43,7 +43,20 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   results: no failing assertions, 28 existing successes inside todo blocks, and
   15 remaining todos (one x64 resource-layout skip). This is a measured library
   parsing improvement; Windows and whole-Office performance parity remain
-  unverified. This change is not yet packaged.
+  unverified. This change is included in 0.1.17.
+- **0.1.17 built and installation-tested:** release source is `72aa4a1`, with
+  the type-library changes in `373db7d` and `a64912f`. All four package formats
+  and verified SHA256SUMS are in `dist/0.1.17/`. Clean Arch system installation,
+  32/64-bit execution, removal and per-user installation pass. The packaged
+  runner passes the new 180-check regression on both architectures, 24 Access
+  UI checks in one round, and six Publisher inline checks with two native file
+  dialogs, save/reopen and PDF pixel verification. The preceding same-source
+  candidate additionally passed the three-round 64-check Access and 12-check
+  Publisher UI suites, the five-check Excel-to-Word VBA test, and Access's 42/44
+  object-model baseline. The host remains on pacman's **0.1.13-1**; no host
+  installation or Office-prefix change was made. Publisher's Pictures gallery,
+  the rest of Labels, Access XML export/compaction, broader Outlook coverage and
+  Windows performance parity remain unfinished.
 - **Shared metadata for dual interfaces:** alternate `ITypeInfo` views previously
   received shallow copies of an editable description. Access obtains both views
   before adding its form-control getters; the original view then has no getters,
@@ -58,8 +71,8 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   the different type kinds while their metadata and lifetime are shared. The full
   type-library suite runs 7,690 x64 and 7,707 x86 checks without failing assertions; eight formerly failing
   view-identity/reference-count assertions now pass on each architecture. The
-  28 pre-existing successes inside unrelated todo blocks remain. This fix is not
-  packaged or installed on the host.
+  28 pre-existing successes inside unrelated todo blocks remain. The fix is in
+  0.1.17; it has not been installed on the host.
 - **Reverse name binding:** Access marks generated type information with
   `TYPEFLAG_FREVERSEBIND`, requesting base members to take precedence over child
   members. Wine ignored the flag, so fixing the shared metadata exposed field
@@ -87,6 +100,15 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   to `0x800a0003`, not an interpreter GoSub failure. Earlier source-line
   breakpoint tracing missed Wine's Invoke entry; machine-entry breakpoints
   established the actual missing metadata.
+  Follow-up tracing finds VBA's `InStr` and `IIf` functions, but raw `Mid`
+  binding returns no descriptor; `_B_var_Mid` resolves. The VBA compiler tries
+  that private alias, while the failing wizard query does not. An ADO 6.1
+  reference (`{B691E011-1797-432E-907A-4D8C69339129}`) also reports
+  `IsBroken=False` but fails `FullPath` with `TYPE_E_LIBNOTREGISTERED`. Wine
+  currently supplies the older ADO 2.8 type library. A temporary path mapping in
+  the isolated prefix did not clear the wizard failure and was removed; no
+  ADO alias or substitute library is shipped. The relationship between these
+  findings remains unproven.
 - **0.1.16 release built and verified:** packages and checked SHA256SUMS are in
   `dist/0.1.16/`. The portable runner was rebuilt from committed source in Ubuntu
   24.04. Clean Arch system installation, 32/64-bit execution, removal and per-user
