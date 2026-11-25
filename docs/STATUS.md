@@ -28,6 +28,22 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **ADO provider cleanup:** normal connection creation now initializes the
+  borrowed-provider ownership flag, and `Open` releases its temporary
+  `IDBProperties` interface. The previous build reproducibly retained a provider
+  reference after closing and sometimes skipped `Uninitialize` entirely.
+  `tests/ado-lifetime.c` checks explicit Close, releasing an open connection,
+  and failed initialization with a process-local provider fixture. All three
+  cases return provider/session references to zero and balance initialization
+  on both architectures. The existing ADO suite passes 1,012 checks on each
+  architecture (39 existing todos, one unavailable ODBC-driver skip).
+- **Access ribbon stress coverage:** `tests/access-ui.py` passes 64 checks over
+  25 UI steps: three rounds each of single forms, multiple-item forms,
+  datasheets and split forms, actual keyboard edits, persistence after reopening,
+  and a ribbon-generated report with PDF text verification. Captured form views
+  display their bound data, including both panes of the split form. Publisher's
+  UI test now removes stale output files and requires every expected assertion:
+  a COM error during VBScript argument evaluation must not silently skip a check.
 - **Native chooser keyboard focus:** cancelling the real KDE picker left a
   caller's edit control unfocused; only its top-level window was activated.
   The common item dialog now saves the caller's focus and restores it after

@@ -31,6 +31,8 @@ work = prefix / "drive_c/tuxoffice/publisher-ui"
 work.mkdir(parents=True, exist_ok=True)
 progress = work / "progress.txt"
 progress.unlink(missing_ok=True)
+for artifact in ("publisher-ui.pub", "publisher-ui.pdf"):
+    (work / artifact).unlink(missing_ok=True)
 (work / "typed").unlink(missing_ok=True)
 for marker in work.glob("stage-*"):
     marker.unlink()
@@ -194,6 +196,13 @@ try:
             results.append(stage)
             print(stage, flush=True)
         time.sleep(.2)
+    expected = {"interactive textbox", "save", "PDF"}
+    expected.update(f"{name} {i}" for name in ("picture cancel", "picture insert", "reopen picture")
+                    for i in range(1, rounds + 1))
+    passed = {line.removeprefix("PASS ") for line in lines if line.startswith("PASS ")}
+    # VBScript's On Error Resume Next can skip a whole Check call if a COM
+    # expression fails while its arguments are evaluated. Require every check.
+    assert passed == expected, f"Missing checks: {sorted(expected - passed)}; unexpected: {sorted(passed - expected)}"
     sp.run(["pdftoppm", "-singlefile", "-scale-to", "1200", "-png", str(work / "publisher-ui.pdf"),
             str(out / "publisher-pdf")], check=True, stdout=sp.DEVNULL, stderr=sp.DEVNULL)
     data = Image.open(out / "publisher-pdf.png").convert("RGB").tobytes()
