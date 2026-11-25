@@ -28,6 +28,32 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Launch window (25 November):** `tuxoffice run` showed nothing until
+  Office's own splash, which after a cold start took 4.5 s in the test
+  session, 13.9 s right after a runner update (`wineboot -u`), and minutes
+  while .NET or WebView2 install. The launcher now starts
+  `tuxoffice-splash` (`lib/splash.c`, built into the runner) first: a native
+  Wayland window (xdg-shell, fractional scaling; X11 through libX11 when
+  there is no Wayland display) with the TuxOffice logo, the app's name, a
+  status line and a bar in the app's brand colour. Slow steps report to it:
+  "Applying the TuxOffice update…", "Installing .NET Framework 4.8…",
+  "Downloading Microsoft Edge WebView2…" with curl's percentage, "Importing
+  trusted certificates…". Before `exec wine` the bar follows the time the
+  last launches of that app took (`profiles/APP.launch`); without a
+  measurement it sweeps back and forth. win32u removes the file named by
+  `TUXOFFICE_SPLASH_READY` when the process first shows a toplevel of at
+  least 100x50, which closes the window 0.35 s later; it also closes when
+  Office's process (the launcher's, after `exec`) exits, as a second
+  instance does after handing its files to the running one, and after 120 s.
+  Launch errors (`die`) stay in it, in red, until clicked or for 30 s. It
+  uses the launch's `XDG_ACTIVATION_TOKEN`, so the desktop's launch feedback
+  ends when it appears. First frame 60–140 ms after it starts. Checked in the
+  isolated session: cold Word, Word again while running, Excel opening a
+  workbook, error, dark theme, X11 under rootful Xwayland; focus goes to
+  Office's window each time. Word, Excel and PowerPoint suites pass.
+  `TUXOFFICE_SPLASH=0` turns it off. `fetch` now also returns curl's
+  failure instead of continuing without the file.
+
 - **Publisher took the focus back whenever it lost it (reported on 0.1.21):**
   with a picture or shape selected, switching to any other application made
   Publisher show "You can only type into a text box, table, and certain
