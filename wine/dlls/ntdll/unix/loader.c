@@ -1513,9 +1513,53 @@ static NTSTATUS wow64_debugstr_pc( void *args )
 
 static NTSTATUS wow64_compat_wine_nt_to_unix_file_name( void *args )
 {
-    FIXME( "Not supported.\n" );
+    struct
+    {
+        ULONG attr;
+        ULONG nameA;
+        ULONG size;
+        unsigned int disposition;
+    } const *params32 = args;
+    struct
+    {
+        ULONG Length;
+        ULONG RootDirectory;
+        ULONG ObjectName;
+        ULONG Attributes;
+        ULONG SecurityDescriptor;
+        ULONG SecurityQualityOfService;
+    } const *attr32 = ULongToPtr( params32->attr );
+    struct
+    {
+        USHORT Length;
+        USHORT MaximumLength;
+        ULONG Buffer;
+    } const *name32;
+    OBJECT_ATTRIBUTES attr;
+    UNICODE_STRING name;
+    struct compat_wine_nt_to_unix_file_name_params params =
+    {
+        .attr = &attr,
+        .nameA = ULongToPtr( params32->nameA ),
+        .size = ULongToPtr( params32->size ),
+        .disposition = params32->disposition,
+    };
 
-    return STATUS_NOT_SUPPORTED;
+    if (!attr32 || attr32->Length != sizeof(*attr32)) return STATUS_INVALID_PARAMETER;
+    attr.Length = sizeof(attr);
+    attr.RootDirectory = ULongToHandle( attr32->RootDirectory );
+    attr.ObjectName = NULL;
+    attr.Attributes = attr32->Attributes;
+    attr.SecurityDescriptor = ULongToPtr( attr32->SecurityDescriptor );
+    attr.SecurityQualityOfService = ULongToPtr( attr32->SecurityQualityOfService );
+    if ((name32 = ULongToPtr( attr32->ObjectName )))
+    {
+        name.Length = name32->Length;
+        name.MaximumLength = name32->MaximumLength;
+        name.Buffer = ULongToPtr( name32->Buffer );
+        attr.ObjectName = &name;
+    }
+    return wow64_wine_nt_to_unix_file_name( &params );
 }
 
 const unixlib_entry_t unix_call_wow64_funcs[] =

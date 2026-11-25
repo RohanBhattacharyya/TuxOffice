@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """Cancel the real native chooser and check keyboard focus returns to an edit.
 
-Usage: isolated-run.py SESSION python3 tests/native-dialog-focus.py OUTDIR
+Usage: isolated-run.py SESSION python3 tests/native-dialog-focus.py OUTDIR [64|32]
 Requires native-dialog-focus.exe from build-helpers.sh, KWin and libei.
 Set DIALOG_FOCUS_ROUNDS to repeat up to 100 times.
 """
@@ -16,6 +16,9 @@ import time
 
 root = Path(__file__).resolve().parent.parent
 out = Path(sys.argv[1]).resolve()
+architecture = sys.argv[2] if len(sys.argv) > 2 else "64"
+assert architecture in ("64", "32")
+probe = "native-dialog-focus32.exe" if architecture == "32" else "native-dialog-focus.exe"
 assert os.environ.get("TUXOFFICE_PREFIX", "").endswith("/home/prefix"), "Use an isolated prefix"
 out.mkdir(parents=True, exist_ok=True)
 eis = out / "eis-input"
@@ -28,7 +31,7 @@ try:
     sp.run([str(root / "tuxoffice"), "kill"], check=True)
     for attempt in range(rounds):
         with (out / f"focus-{attempt}.log").open("w+") as log:
-            process = sp.Popen([str(root / "tuxoffice"), "wine", "C:/tuxoffice/native-dialog-focus.exe"],
+            process = sp.Popen([str(root / "tuxoffice"), "wine", "C:/tuxoffice/" + probe],
                                stdout=log, stderr=log,
                                env=dict(os.environ, WINEDEBUG=os.environ.get("DIALOG_FOCUS_WINEDEBUG", "-all")))
             deadline = time.monotonic() + 45

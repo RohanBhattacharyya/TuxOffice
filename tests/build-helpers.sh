@@ -19,4 +19,7 @@ winegcc -b x86_64-windows -mconsole -o "$destination/caption-buttons.exe" "$HERE
 winegcc -b x86_64-windows -mconsole -o "$destination/msgbox-close.exe" "$HERE/msgbox-close.c" -luser32
 winegcc -b x86_64-windows -mconsole -municode -o "$destination/file-dialog-probe.exe" "$HERE/file-dialog-probe.c" -lole32 -lshell32 -luuid
 winegcc -b x86_64-windows -mconsole -o "$destination/native-dialog-focus.exe" "$HERE/native-dialog-focus.c" -lole32 -luuid -luser32
+winegcc -b i386-windows -mconsole -o "$destination/native-dialog-focus32.exe" "$HERE/native-dialog-focus.c" -lole32 -luuid -luser32
 winegcc -b x86_64-windows -mconsole -o "$destination/ado-lifetime.exe" "$HERE/ado-lifetime.c" -lole32 -loleaut32 -luuid
+winegcc -b x86_64-windows -mconsole -o "$destination/native-path.exe" "$HERE/native-path.c" -lntdll
+winegcc -b i386-windows -mconsole -o "$destination/native-path32.exe" "$HERE/native-path.c" -lntdll

@@ -3216,8 +3216,6 @@ static BOOL replace_steam_input_path( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *r
     return TRUE;
 }
 
-#ifndef _WIN64
-
 static const WCHAR catrootW[] = {'s','y','s','t','e','m','3','2','\\','c','a','t','r','o','o','t',0};
 static const WCHAR catroot2W[] = {'s','y','s','t','e','m','3','2','\\','c','a','t','r','o','o','t','2',0};
 static const WCHAR driversstoreW[] = {'s','y','s','t','e','m','3','2','\\','d','r','i','v','e','r','s','s','t','o','r','e',0};
@@ -3314,8 +3312,15 @@ static void get_redirect( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *redir )
 {
     const WCHAR *name = attr->ObjectName->Buffer;
     unsigned int i, prefix_len = 0, len = attr->ObjectName->Length / sizeof(WCHAR);
+#ifdef _WIN64
+    TEB *teb = NtCurrentTeb();
 
-    if (!NtCurrentTeb64()) return;
+    if (!is_wow64()) return;
+#else
+    TEB64 *teb = NtCurrentTeb64();
+
+    if (!teb) return;
+#endif
 
     /* CW-Bug-Id: #23185 Emulate Steam Input native hooks for native SDL */
     if (replace_steam_input_path( attr, redir )) return;
@@ -3337,7 +3342,7 @@ static void get_redirect( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *redir )
         if (!is_same_file( &windir, &st ))
         {
             if (!is_same_file( &sysdir, &st )) return;
-            if (NtCurrentTeb64()->TlsSlots[WOW64_TLS_FILESYSREDIR]) return;
+            if (teb->TlsSlots[WOW64_TLS_FILESYSREDIR]) return;
             if (name[0] == '\\') return;
 
             /* only check for paths that should NOT be redirected */
@@ -3361,7 +3366,7 @@ static void get_redirect( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *redir )
 
     if (replace_path( attr, redir, prefix_len, sysnativeW, system32W )) return;
 
-    if (NtCurrentTeb64()->TlsSlots[WOW64_TLS_FILESYSREDIR]) return;
+    if (teb->TlsSlots[WOW64_TLS_FILESYSREDIR]) return;
 
     for (i = 0; i < ARRAY_SIZE( no_redirect ); i++)
         if (starts_with_path( name + prefix_len, len - prefix_len, no_redirect[i] )) return;
@@ -3369,9 +3374,6 @@ static void get_redirect( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *redir )
     if (replace_path( attr, redir, prefix_len, system32W, syswow64W )) return;
     if (replace_path( attr, redir, prefix_len, regeditW, syswow64_regeditW )) return;
 }
-
-#endif
-
 
 #define IS_OPTION_TRUE(ch) ((ch) == 'y' || (ch) == 'Y' || (ch) == 't' || (ch) == 'T' || (ch) == '1')
 
@@ -8454,5 +8456,23 @@ NTSTATUS WINAPI unixcall_compat_wine_nt_to_unix_file_name( void *args )
     }
     free( buffer );
     free( nt_name.Buffer );
+    return status;
+}
+
+/* Unlike NT file syscalls, private Unix calls bypass wow64.dll's file-name
+ * redirection. Apply it here before converting the widened object attributes. */
+NTSTATUS wow64_wine_nt_to_unix_file_name( struct compat_wine_nt_to_unix_file_name_params *params )
+{
+    static pthread_once_t redirects_once = PTHREAD_ONCE_INIT;
+    struct compat_wine_nt_to_unix_file_name_params redirected = *params;
+    OBJECT_ATTRIBUTES attr = *params->attr;
+    UNICODE_STRING name = {0};
+    NTSTATUS status;
+
+    pthread_once( &redirects_once, init_redirects );
+    get_redirect( &attr, &name );
+    redirected.attr = &attr;
+    status = unixcall_compat_wine_nt_to_unix_file_name( &redirected );
+    free( name.Buffer );
     return status;
 }

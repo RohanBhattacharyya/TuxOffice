@@ -28,6 +28,20 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **32-bit native chooser path conversion:** the WoW64 entry for
+  `wine_nt_to_unix_file_name` returned `STATUS_NOT_SUPPORTED`. As a result the
+  32-bit common item dialog could not construct the portal helper's output
+  path and silently opened Wine's fallback. The entry now widens the caller's
+  object attributes and Unicode string before calling the existing conversion.
+  Private Unix calls also bypass wow64.dll's redirection, so this path reuses
+  Wine's existing redirector, including Sysnative and the thread's disable flag.
+  `tests/native-path.c` checks Unicode file identity, short-buffer sizing,
+  directory-relative names and a missing output file on both architectures.
+  File identity checks cover System32, Sysnative, directory handles and disabled
+  redirection. The baseline fails with `STATUS_NOT_SUPPORTED`; a first candidate
+  also failed three redirection cases. The reviewed candidate passes all twelve
+  32-bit checks, all six 64-bit checks and ten real 32-bit KDE cancellations.
+  The focus driver accepts a `32` argument to preserve this coverage.
 - **Native picker return race repaired:** tracing the intermittent failure
   showed `SetForegroundWindow` returning FALSE while the compositor's keyboard
   enter notification was still queued. Wine had deactivated the owner when
