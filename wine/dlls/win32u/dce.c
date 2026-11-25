@@ -1080,9 +1080,17 @@ static struct window_surface *get_cross_process_surface( HWND hwnd, HWND top_win
     if (user_driver_draws_foreign_windows()) return NULL;
     if (!get_window_thread( top_win, &top_pid )) return NULL;
 
-    /* draw the outermost ancestor that the toplevel's process does not own */
+    /* Draw the outermost ancestor that the toplevel's process does not own,
+     * which its parent then shows. A window of that process itself, such as
+     * a popup another process paints into, shows what is drawn into it. */
     for (;;)
     {
+        if (!get_window_thread( embed, &pid )) return NULL;
+        if (pid == top_pid)
+        {
+            parent = embed;
+            break;
+        }
         if (!(parent = NtUserGetAncestor( embed, GA_PARENT )) || parent == desktop) return NULL;
         if (!get_window_thread( parent, &pid )) return NULL;
         if (pid == top_pid) break;
