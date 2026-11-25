@@ -28,6 +28,35 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Access Labels completes with the ADO type-index fixes:** native VBA's
+  `GEN_PROJECT::TypeInfoFromCompressedTypeId` requests ADO 6.1 types at public
+  indexes including 68, 70, 71, 72, 83 and 92. The previous 68-type library
+  cannot satisfy these requests, so form type-information loading fails before
+  the wizard can call `FillFields`. The new library supplies all 120 public
+  entries, including deprecated interfaces, missing enums and construction
+  interfaces, in the native index order. WIDL's optional `--typelib-order=file`
+  preserves that ABI without changing its normal dependency traversal. The
+  oleaut32 reader now honors the MSFT index table instead of assuming that
+  descriptions occur in index order; internal references retain segment offsets.
+  No Office callback or executable is replaced. The preceding callback
+  investigation below is historical; the empty field list now has a demonstrated
+  cause and fix. Source commits are `2ebe422`, `92a0c34` and `b3bbb26`.
+- **Labels and COM regression coverage:** `tests/access-labels.py` passes three
+  rounds and 28 object-model assertions, using the actual Create ribbon and
+  wizard. Each round selects a field, creates and sorts a label report, exports
+  through the native KDE save dialog, verifies all 25 PDF values in order, and
+  saves and reopens the report in print preview. Test commit is `ccd0b66`.
+  The new metadata probe passes 8,114 checks per architecture against the full
+  public layout; the reordered-library regression passes 118 checks per
+  architecture and fails ten checks per architecture against 0.1.18. Existing
+  dual-view, ADO-interface and stream regressions pass 180, 140 and 82 checks
+  per architecture. WIDL's ordering/input-validation test passes 32 checks.
+  The full type-library suite executes 7,690/7,707 checks with no failing
+  assertions; its 28 pre-existing successes inside TODO blocks still cause a
+  nonzero suite result. Native Access's typed ADO test passes seven checks and
+  Excel-to-Word VBA passes five. Access retains its 42/44 object-model baseline:
+  XML export and compaction still fail. This is a Labels/metadata milestone,
+  not full ADO, Publisher, Outlook or Windows performance parity.
 - **0.1.18 built and installation-tested:** release source is `457f430`, with
   ADO changes in `8751807` and `84faa56`. All four formats and checked SHA256SUMS
   are in `dist/0.1.18/`. Clean Arch system installation, 32/64-bit Wine execution,
