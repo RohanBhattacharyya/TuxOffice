@@ -365,6 +365,24 @@ HRESULT WINAPI HlinkParseDisplayName(LPBC pibc, LPCWSTR pwzDisplayName, BOOL fNo
             eaten++;
         }
     }else {
+        static const WCHAR *url_schemes[] = { L"http:", L"https:", L"ftp:" };
+        unsigned int i;
+
+        /* A web address needs no parsing; create its URL moniker directly.
+         * Applications may intercept the moniker parsers: Office hooks both
+         * MkParseDisplayNameEx and MkParseDisplayName to restrict monikers,
+         * and they then fail for the pictures it downloads. */
+        for (i = 0; i < ARRAY_SIZE(url_schemes); i++)
+        {
+            if (wcsnicmp(pwzDisplayName, url_schemes[i], wcslen(url_schemes[i]))) continue;
+            hres = CreateURLMoniker(NULL, pwzDisplayName, ppimk);
+            if(SUCCEEDED(hres)) {
+                *pcchEaten = lstrlenW(pwzDisplayName);
+                return hres;
+            }
+            break;
+        }
+
         hres = MkParseDisplayNameEx(pibc, pwzDisplayName, pcchEaten, ppimk);
         if(SUCCEEDED(hres))
             return hres;
