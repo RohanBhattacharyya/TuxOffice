@@ -405,6 +405,7 @@ static HRESULT WINAPI connection_Open( _Connection *iface, BSTR connect_str, BST
     if ((hr = IDataInitialize_GetDataSource( datainit, NULL, CLSCTX_INPROC_SERVER, connect_str, &IID_IDBInitialize,
                                              (IUnknown **)&connection->dso )) != S_OK) goto done;
     if ((hr = IDBInitialize_QueryInterface( connection->dso, &IID_IDBProperties, (void **)&props )) != S_OK) goto done;
+    IDBProperties_Release( props );
 
     /* TODO - Update username/password if required. */
     if ((userid && *userid) || (password && *password))
@@ -1014,6 +1015,7 @@ HRESULT Connection_create( void **obj )
     connection->location = adUseServer;
     connection->session = NULL;
     connection->dso = NULL;
+    connection->wrapped_dso = FALSE;
 
     connection->cp_connev.conn = connection;
     connection->cp_connev.riid = &DIID_ConnectionEvents;
