@@ -73,6 +73,7 @@ enum wayland_window_message
     WM_WAYLAND_ACTIVATE_FOREIGN,
     WM_WAYLAND_FOREIGN_PARENT_CHANGED,
     WM_WAYLAND_FOREIGN_POPUP,
+    WM_WAYLAND_FOREIGN_CURSOR,
 };
 
 enum wayland_surface_config_state
@@ -445,6 +446,7 @@ void wayland_win_data_release(struct wayland_win_data *data);
 void wayland_destroy_overlays(struct wayland_win_data *data);
 void wayland_foreign_popup_update(HWND toplevel, HWND popup, HANDLE section);
 BOOL wayland_foreign_popup_to_screen(HWND popup, double sx, double sy, POINT *screen);
+void wayland_set_foreign_cursor(LPARAM shape);
 void wayland_update_overlays(struct wayland_win_data *data, struct wayland_shm_buffer *contents,
                              HRGN damage_region);
 

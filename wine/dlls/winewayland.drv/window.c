@@ -1014,6 +1014,9 @@ LRESULT WAYLAND_WindowMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_WAYLAND_FOREIGN_POPUP:
         wayland_foreign_popup_update(hwnd, (HWND)wp, (HANDLE)lp);
         return 0;
+    case WM_WAYLAND_FOREIGN_CURSOR:
+        wayland_set_foreign_cursor(lp);
+        return 0;
     case WM_WAYLAND_INIT_DISPLAY_DEVICES:
         NtUserCallNoParam(NtUserCallNoParam_DisplayModeChanged);
         return 0;

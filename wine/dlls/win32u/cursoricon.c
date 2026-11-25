@@ -105,6 +105,27 @@ INT WINAPI NtUserShowCursor( BOOL show )
 /***********************************************************************
  *	     NtUserSetCursor (win32u.@)
  */
+/* The cursor of a window in another process's toplevel, as a web view in an
+ * application's dialog, or of a non-activating popup over such a toplevel,
+ * reaches the toplevel's process, which cannot read our cursor handles.
+ * Drivers that cannot draw on foreign windows pass it on themselves. */
+static void set_foreign_window_cursor( HCURSOR cursor )
+{
+    DWORD pid, self = GetCurrentProcessId();
+    HWND hwnd, root;
+    POINT pt;
+
+    if (user_driver_draws_foreign_windows()) return;
+    if (!NtUserGetCursorPos( &pt ) || !(hwnd = NtUserWindowFromPoint( pt.x, pt.y ))) return;
+    if (!get_window_thread( hwnd, &pid ) || pid != self) return;
+    if ((root = NtUserGetAncestor( hwnd, GA_ROOT )) && root != hwnd)
+    {
+        if (!get_window_thread( root, &pid ) || pid == self) return;
+    }
+    else if (!(get_window_long( hwnd, GWL_EXSTYLE ) & WS_EX_NOACTIVATE)) return;
+    user_driver->pSetCursor( hwnd, cursor );
+}
+
 HCURSOR WINAPI NtUserSetCursor( HCURSOR cursor )
 {
     struct cursoricon_object *obj;
@@ -123,6 +144,7 @@ HCURSOR WINAPI NtUserSetCursor( HCURSOR cursor )
     SERVER_END_REQ;
     if (!ret) return 0;
 
+    if (cursor != old_cursor) set_foreign_window_cursor( cursor );
     check_for_events( QS_INPUT );
 
     if (!(obj = get_icon_ptr( old_cursor ))) return 0;

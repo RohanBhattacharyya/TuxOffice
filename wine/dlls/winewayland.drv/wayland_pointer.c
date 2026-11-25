@@ -1256,10 +1256,100 @@ void wayland_pointer_clear_constraint(void)
 /***********************************************************************
  *           WAYLAND_SetCursor
  */
+/* The process owning the window under the pointer chooses the cursor, but a
+ * window without a surface of its own in another process's toplevel, as a
+ * web view in an Office dialog or one of its popups the owner shows, gets no
+ * pointer events here: the owner's process has the pointer and sets it. */
+static HWND get_foreign_cursor_root(HWND hwnd)
+{
+    struct wayland_win_data *data;
+    HWND root = 0;
+    DWORD pid = 0;
+
+    if ((data = wayland_win_data_get(hwnd)))
+    {
+        if (data->wayland_surface) root = (HWND)-1;
+        else if (data->foreign_root) root = data->foreign_root;
+        wayland_win_data_release(data);
+    }
+    if (root == (HWND)-1) return 0;
+    if (!root && !(root = NtUserGetAncestor(hwnd, GA_ROOT))) return 0;
+    if (root == hwnd && !(root = NtUserGetWindowRelative(hwnd, GW_OWNER))) return 0;
+    if (!(root = NtUserGetAncestor(root, GA_ROOT))) return 0;
+    NtUserGetWindowThread(root, &pid);
+    return pid && pid != GetCurrentProcessId() ? root : 0;
+}
+
+/* A cursor shape for another process: 0 hides it. */
+static LPARAM get_foreign_cursor_shape(HCURSOR hcursor)
+{
+    enum wp_cursor_shape_device_v1_shape shape = 0;
+    ICONINFOEXW info = {0};
+
+    if (!hcursor) return 0;
+    if (process_wayland.wp_cursor_shape_manager_v1 && get_icon_info(hcursor, &info))
+    {
+        shape = cursor_shape_from_info(&info, wp_cursor_shape_manager_v1_get_version(
+                                       process_wayland.wp_cursor_shape_manager_v1));
+        if (info.hbmColor) NtGdiDeleteObjectApp(info.hbmColor);
+        if (info.hbmMask) NtGdiDeleteObjectApp(info.hbmMask);
+    }
+    return shape ? shape : WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT;
+}
+
+/**********************************************************************
+ *          wayland_set_foreign_cursor
+ *
+ * Shows the cursor that another process chose for the window under the
+ * pointer, which is inside one of our surfaces.
+ */
+void wayland_set_foreign_cursor(LPARAM shape)
+{
+    struct wayland_pointer *pointer = &process_wayland.pointer;
+
+    TRACE("shape=%ld\n", (long)shape);
+
+    pthread_mutex_lock(&pointer->mutex);
+    if (pointer->focused_hwnd && pointer->wl_pointer)
+    {
+        if (shape && process_wayland.wp_cursor_shape_manager_v1 &&
+            (pointer->wp_cursor_shape_device_v1 ||
+             (pointer->wp_cursor_shape_device_v1 = wp_cursor_shape_manager_v1_get_pointer(
+                  process_wayland.wp_cursor_shape_manager_v1, pointer->wl_pointer))))
+        {
+            wp_cursor_shape_device_v1_set_shape(pointer->wp_cursor_shape_device_v1,
+                                                pointer->enter_serial, shape);
+            wayland_pointer_clear_cursor_surface();
+        }
+        else if (!shape)
+        {
+            wl_pointer_set_cursor(pointer->wl_pointer, pointer->enter_serial, NULL, 0, 0);
+            wayland_pointer_clear_cursor_shape();
+        }
+        wl_display_flush(process_wayland.wl_display);
+    }
+    pthread_mutex_unlock(&pointer->mutex);
+}
+
 void WAYLAND_SetCursor(HWND hwnd, HCURSOR hcursor)
 {
+    DWORD delay, steps;
+    HWND root;
+
     TRACE("hwnd=%p hcursor=%p\n", hwnd, hcursor);
 
+    if (hwnd && (root = get_foreign_cursor_root(hwnd)))
+    {
+        NtUserPostMessage(root, WM_WAYLAND_FOREIGN_CURSOR, 0, get_foreign_cursor_shape(hcursor));
+        return;
+    }
+    /* That process set the cursor of its window over ours: keep the shape
+     * it passed on, as we cannot read its cursor handle. */
+    if (hcursor && !NtUserGetCursorFrameInfo(hcursor, 0, &delay, &steps))
+    {
+        TRACE("cursor %p of another process\n", hcursor);
+        return;
+    }
     wayland_set_cursor(hwnd, hcursor, TRUE);
 }
 
