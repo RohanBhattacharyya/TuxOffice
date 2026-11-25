@@ -48,13 +48,22 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   Images inserts a picture; Publisher's Insert Pictures dialog renders,
   Browse opens the KDE chooser, and Bing search inserts a picture. Typing,
   clicks and repaints reach the page.
-- **Focus taken by tooltips:** hovering a WebView2 control shows a
-  click-through, non-activating tooltip owned by the browser's child window.
-  winewayland made it an xdg_toplevel, KWin focused it, and Office's dialog
-  took the focus back from the page on reactivation, so typing went nowhere.
-  Such popups of foreign windows are now left unmapped (`1ea4d2e`). Other
-  popups of foreign windows (e.g. a `<select>` dropdown) still become
-  toplevels; compositing them through the owner process is open.
+- **Popups of the browser process (`633d688`, `8d541bd`):** WebView2's
+  tooltips, `<select>` dropdowns and Office's Help pane are popups of the
+  browser process, owned by (or, for the Help pane, placed over) an Office
+  window. winewayland made them xdg_toplevels: KWin focused them, so the
+  dialog took the focus back and typing went nowhere (first worked around
+  in `1ea4d2e` by leaving tooltips unmapped), dropdowns were invisible and
+  the Help pane was a separate window somewhere on the desktop. The popup's
+  process now copies its pixels into a section shared with the owner's
+  process, which shows them in a desynchronized subsurface above its own
+  popups; pointer input on it maps back to the popup. WebView2's fallback
+  for visual hosting is an unowned, non-activating tool window; its host is
+  the window under it of the process that started the browser. Drawing by
+  Chromium's GPU process into a browser-process toplevel is shared as well.
+  Checked: a `<select>` opens in place, fades in to opaque, and real
+  compositor clicks choose an option; PowerPoint's Help pane renders inside
+  its pane; Publisher's Bing search still takes typing after hovering.
 - **Publisher picture download:** Publisher downloads the chosen picture
   with `HlinkParseDisplayName` + `HlinkResolveMonikerForData`. Office
   patches `MkParseDisplayNameEx` (urlmon) and `MkParseDisplayName` (ole32)
@@ -79,6 +88,10 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   Windows matches that name is unverified. The Office Add-ins store dialog
   is hosted in the IE WebBrowser control (Wine Gecko), not WebView2, and
   stays on its loading spinner.
+- **0.1.20** (`45f8a3f`, packages in `dist/0.1.20/`) contains the rendering,
+  focus workaround, hlink and setup changes but not the popup compositing,
+  which came after it. Its runner passes the cross-process test, renders
+  the probe page and passes the Word/Excel/PowerPoint suite.
 
 - **0.1.19 built and installation-tested:** final binary source is `78d6ae5`.
   All four formats and verified SHA256SUMS are in `dist/0.1.19/`. Clean Arch
