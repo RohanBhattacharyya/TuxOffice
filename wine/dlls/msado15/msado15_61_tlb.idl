@@ -1,4 +1,205 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #pragma makedep regtypelib
+#pragma makedep depend msado15_61_tlb.order
 #define MSADO15_VERSION_61
+#define MSADO15_NO_LIBRARY
 #include "msado15_backcompat.idl"
+
+#define MSADO15_DEPRECATED
+#define Field20 Field20_Deprecated
+#define Field Field_Deprecated
+#define Fields15 Fields15_Deprecated
+#define Fields20 Fields20_Deprecated
+#define Fields Fields_Deprecated
+#define Recordset15 Recordset15_Deprecated
+#define Recordset20 Recordset20_Deprecated
+#define Recordset21 Recordset21_Deprecated
+#define _Recordset _Recordset_Deprecated
+#define Connection15 Connection15_Deprecated
+#define _Connection _Connection_Deprecated
+#define _Parameter _Parameter_Deprecated
+#define Parameters Parameters_Deprecated
+#define Command15 Command15_Deprecated
+#define Command25 Command25_Deprecated
+#define _Command _Command_Deprecated
+#define ConnectionEventsVt ConnectionEventsVt_Deprecated
+#define ConnectionEvents ConnectionEvents_Deprecated
+#define _Record _Record_Deprecated
+#define _Stream _Stream_Deprecated
+#define RecordsetEvents RecordsetEvents_Deprecated
+#define Field15 Field15_Deprecated
+#define RecordsetEventsVt RecordsetEventsVt_Deprecated
+#include "msado15_interfaces.idl"
+#undef Field20
+#undef Field
+#undef Fields15
+#undef Fields20
+#undef Fields
+#undef Recordset15
+#undef Recordset20
+#undef Recordset21
+#undef _Recordset
+#undef Connection15
+#undef _Connection
+#undef _Parameter
+#undef Parameters
+#undef Command15
+#undef Command25
+#undef _Command
+#undef ConnectionEventsVt
+#undef ConnectionEvents
+#undef _Record
+#undef _Stream
+#undef RecordsetEvents
+#undef Field15
+#undef RecordsetEventsVt
+
+[uuid(b691e011-1797-432e-907a-4d8c69339129), version(6.1), id(2)]
+library ADODB
+{
+    importlib("stdole2.tlb");
+    enum CursorTypeEnum;
+    enum CursorOptionEnum;
+    enum LockTypeEnum;
+    enum ExecuteOptionEnum;
+    enum ConnectOptionEnum;
+    enum ObjectStateEnum;
+    enum CursorLocationEnum;
+    enum DataTypeEnum;
+    enum FieldAttributeEnum;
+    enum EditModeEnum;
+    enum RecordStatusEnum;
+    enum GetRowsOptionEnum;
+    enum PositionEnum;
+    enum BookmarkEnum;
+    enum MarshalOptionsEnum;
+    enum AffectEnum;
+    enum ResyncEnum;
+    enum CompareEnum;
+    enum FilterGroupEnum;
+    enum SearchDirectionEnum;
+    enum PersistFormatEnum;
+    enum StringFormatEnum;
+    enum ConnectPromptEnum;
+    enum ConnectModeEnum;
+    enum RecordCreateOptionsEnum;
+    enum RecordOpenOptionsEnum;
+    enum IsolationLevelEnum;
+    enum XactAttributeEnum;
+    enum PropertyAttributesEnum;
+    enum ErrorValueEnum;
+    enum ParameterAttributesEnum;
+    enum ParameterDirectionEnum;
+    enum CommandTypeEnum;
+    enum EventStatusEnum;
+    enum EventReasonEnum;
+    enum SchemaEnum;
+    enum FieldStatusEnum;
+    enum SeekEnum;
+    enum ADCPROP_UPDATECRITERIA_ENUM;
+    enum ADCPROP_ASYNCTHREADPRIORITY_ENUM;
+    enum ADCPROP_AUTORECALC_ENUM;
+    enum ADCPROP_UPDATERESYNC_ENUM;
+    enum MoveRecordOptionsEnum;
+    enum CopyRecordOptionsEnum;
+    enum StreamTypeEnum;
+    enum LineSeparatorEnum;
+    enum StreamOpenOptionsEnum;
+    enum StreamWriteEnum;
+    enum SaveOptionsEnum;
+    enum FieldEnum;
+    enum StreamReadEnum;
+    enum RecordTypeEnum;
+    typedef [public, hidden] SearchDirectionEnum SearchDirection;
+    interface _Collection;
+    interface _DynaCollection;
+    interface _ADO;
+    interface Properties;
+    interface Property;
+    interface Error;
+    interface Errors;
+    interface ADOConnectionConstruction15;
+    interface ADOConnectionConstruction;
+    interface ADORecordConstruction;
+    interface ADOStreamConstruction;
+    interface ADOCommandConstruction;
+    interface ADORecordsetConstruction;
+    interface Field20;
+    interface Field;
+    interface Fields15;
+    interface Fields20;
+    interface Fields;
+    interface Recordset15;
+    interface Recordset20;
+    interface Recordset21;
+    interface _Recordset;
+    interface Connection15;
+    interface _Connection;
+    interface _Parameter;
+    interface Parameters;
+    interface Command15;
+    interface Command25;
+    interface _Command;
+    interface ConnectionEventsVt;
+    dispinterface ConnectionEvents;
+    interface _Record;
+    interface _Stream;
+    dispinterface RecordsetEvents;
+    interface Field15;
+    interface RecordsetEventsVt;
+    interface Field20_Deprecated;
+    interface Field_Deprecated;
+    interface Fields15_Deprecated;
+    interface Fields20_Deprecated;
+    interface Fields_Deprecated;
+    interface Recordset15_Deprecated;
+    interface Recordset20_Deprecated;
+    interface Recordset21_Deprecated;
+    interface _Recordset_Deprecated;
+    interface Connection15_Deprecated;
+    interface _Connection_Deprecated;
+    interface _Parameter_Deprecated;
+    interface Parameters_Deprecated;
+    interface Command15_Deprecated;
+    interface Command25_Deprecated;
+    interface _Command_Deprecated;
+    interface ConnectionEventsVt_Deprecated;
+    dispinterface ConnectionEvents_Deprecated;
+    interface _Record_Deprecated;
+    interface _Stream_Deprecated;
+    dispinterface RecordsetEvents_Deprecated;
+    interface Field15_Deprecated;
+    interface RecordsetEventsVt_Deprecated;
+    [uuid(00000514-0000-0010-8000-00aa006d2ea4), licensed]
+    coclass Connection
+    {
+        [default] interface _Connection;
+        [default, source] dispinterface ConnectionEvents;
+    };
+    [uuid(00000560-0000-0010-8000-00aa006d2ea4), licensed]
+    coclass Record
+    {
+        [default] interface _Record;
+    };
+    [uuid(00000566-0000-0010-8000-00aa006d2ea4), licensed]
+    coclass Stream
+    {
+        [default] interface _Stream;
+    };
+    [uuid(00000507-0000-0010-8000-00aa006d2ea4), licensed]
+    coclass Command
+    {
+        [default] interface _Command;
+    };
+    [uuid(00000535-0000-0010-8000-00aa006d2ea4), licensed]
+    coclass Recordset
+    {
+        [default] interface _Recordset;
+        [default, source] dispinterface RecordsetEvents;
+    };
+    [uuid(0000050b-0000-0010-8000-00aa006d2ea4), licensed]
+    coclass Parameter
+    {
+        [default] interface _Parameter;
+    };
+};

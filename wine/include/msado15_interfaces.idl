@@ -1,0 +1,1579 @@
+/*
+ * Copyright 2019 Hans Leidekker for CodeWeavers
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ */
+
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
+#pragma makedep install
+/* Shared vtables. The 6.1 typelib includes these again under deprecated names. */
+#include "msado15_uuids.idl"
+
+interface Field20;
+interface Field;
+interface Fields15;
+interface Fields20;
+interface Fields;
+interface Recordset15;
+interface Recordset20;
+interface Recordset21;
+interface _Recordset;
+interface Connection15;
+interface _Connection;
+interface _Parameter;
+interface Parameters;
+interface Command15;
+interface Command25;
+interface _Command;
+interface ConnectionEventsVt;
+dispinterface ConnectionEvents;
+interface _Record;
+interface _Stream;
+dispinterface RecordsetEvents;
+interface Field15;
+interface RecordsetEventsVt;
+
+[
+    uuid(MSADO15_UUID_Field20),
+    odl,
+    dual,
+    nonextensible,
+    oleautomation,
+    hidden
+]
+interface Field20 : _ADO
+{
+    [id(0x00000455), propget]
+    HRESULT ActualSize(
+        [out, retval] ADO_LONGPTR *size);
+
+    [id(0x0000040c), propget]
+    HRESULT Attributes(
+        [out, retval] LONG *attrs);
+
+    [id(0x0000044f), propget]
+    HRESULT DefinedSize(
+        [out, retval] ADO_LONGPTR *size);
+
+    [id(0x0000044c), propget]
+    HRESULT Name(
+        [out, retval] BSTR *str);
+
+    [id(0x0000044e), propget]
+    HRESULT Type(
+        [out, retval] DataTypeEnum *type);
+
+    [id(00000000), propget]
+    HRESULT Value(
+        [out, retval] VARIANT *val);
+
+    [id(00000000), propput]
+    HRESULT Value(
+        [in] VARIANT val);
+
+    [id(0x60030007), propget]
+    HRESULT Precision(
+        [out, retval] unsigned char *precision);
+
+    [id(0x60030008), propget]
+    HRESULT NumericScale(
+        [out, retval] unsigned char *scale);
+
+    [id(0x00000453)]
+    HRESULT AppendChunk(
+        [in] VARIANT data);
+
+    [id(0x00000454)]
+    HRESULT GetChunk(
+        [in] LONG length,
+        [out, retval] VARIANT *var);
+
+    [id(0x00000450), propget]
+    HRESULT OriginalValue(
+        [out, retval] VARIANT *val);
+
+    [id(0x00000451), propget]
+    HRESULT UnderlyingValue(
+        [out, retval] VARIANT *val);
+
+    [id(0x6003000d), propget]
+    HRESULT DataFormat(
+        [out, retval] IUnknown **format);
+
+    [id(0x6003000d), propputref]
+    HRESULT DataFormat(
+        [in] IUnknown *format);
+
+    [id(0x60030007), propput]
+    HRESULT Precision(
+        [in] unsigned char precision);
+
+    [id(0x60030008), propput]
+    HRESULT NumericScale(
+        [in] unsigned char scale);
+
+    [id(0x0000044e), propput]
+    HRESULT Type(
+        [in] DataTypeEnum type);
+
+    [id(0x0000044f), propput]
+    HRESULT DefinedSize(
+        [in] ADO_LONGPTR size);
+
+    [id(0x0000040c), propput]
+    HRESULT Attributes(
+        [in] LONG attrs);
+};
+
+[
+    uuid(MSADO15_UUID_Field),
+    odl,
+    dual,
+    nonextensible,
+    oleautomation,
+#ifdef MSADO15_VERSION_61
+    hidden
+#endif
+]
+interface Field : Field20
+{
+    [id(0x0000045c), propget]
+    HRESULT Status(
+        [out, retval] LONG *status);
+};
+
+[
+    uuid(MSADO15_UUID_Fields15),
+    odl,
+    dual,
+    nonextensible,
+    oleautomation,
+#ifdef MSADO15_VERSION_61
+    hidden
+#endif
+]
+interface Fields15 : _Collection
+{
+    [id(00000000), propget]
+    HRESULT Item(
+        [in] VARIANT index,
+        [out, retval] Field **object);
+};
+
+[
+    uuid(MSADO15_UUID_Fields20),
+    odl,
+    dual,
+    nonextensible,
+    oleautomation,
+#ifdef MSADO15_VERSION_61
+    hidden
+#endif
+]
+interface Fields20 : Fields15
+{
+    [id(0x60030001)]
+    HRESULT _Append(
+        [in] BSTR name,
+        [in] DataTypeEnum type,
+        [in, defaultvalue(0)] ADO_LONGPTR size,
+        [in, defaultvalue(adFldUnspecified)] FieldAttributeEnum attr);
+
+    [id(0x60030002)]
+    HRESULT Delete(
+        [in] VARIANT index);
+};
+
+[
+    uuid(MSADO15_UUID_Fields),
+    odl,
+    dual,
+    nonextensible,
+    oleautomation,
+#ifdef MSADO15_VERSION_61
+    hidden
+#endif
+]
+interface Fields : Fields20
+{
+    [id(0x60040001)]
+    HRESULT Append(
+        [in] BSTR name,
+        [in] DataTypeEnum type,
+        [in, defaultvalue(0)] ADO_LONGPTR size,
+        [in, defaultvalue(adFldUnspecified)] FieldAttributeEnum attr,
+        [in, optional] VARIANT value);
+
+    [id(0x60040002)]
+    HRESULT Update();
+
+    [id(0x60040003)]
+    HRESULT Resync(
+        [in, defaultvalue(adResyncAllValues)] ResyncEnum resync_values);
+
+    [id(0x60040004)]
+    HRESULT CancelUpdate();
+};
+
+[
+    uuid(MSADO15_UUID_Recordset15),
+    odl,
+    dual,
+    nonextensible,
+    oleautomation,
+#ifdef MSADO15_VERSION_61
+    hidden
+#endif
+]
+interface Recordset15 : _ADO
+{
+    [id(0x000003e8), propget]
+    HRESULT AbsolutePosition(
+        [out, retval] PositionEnum_Param *position);
+
+    [id(0x000003e8), propput]
+    HRESULT AbsolutePosition(
+        [in] PositionEnum_Param position);
+
+    [id(0x000003e9), propputref]
+    HRESULT ActiveConnection(
+        [in] IDispatch *connection);
+
+    [id(0x000003e9), propput]
+    HRESULT ActiveConnection(
+        [in] VARIANT connection);
+
+    [id(0x000003e9), propget]
+    HRESULT ActiveConnection(
+        [out, retval] VARIANT *connection);
+
+    [id(0x000003ea), propget]
+    HRESULT BOF(
+        [out, retval] VARIANT_BOOL *bof);
+
+    [id(0x000003eb), propget]
+    HRESULT Bookmark(
+        [out, retval] VARIANT *bookmark);
+
+    [id(0x000003eb), propput]
+    HRESULT Bookmark(
+        [in] VARIANT bookmark);
+
+    [id(0x000003ec), propget]
+    HRESULT CacheSize(
+        [out, retval] LONG *size);
+
+    [id(0x000003ec), propput]
+    HRESULT CacheSize(
+        [in] LONG size);
+
+    [id(0x000003ed), propget]
+    HRESULT CursorType(
+        [out, retval] CursorTypeEnum *cursor_type);
+
+    [id(0x000003ed), propput]
+    HRESULT CursorType(
+        [in] CursorTypeEnum cursor_type);
+
+    [id(0x000003ee), propget]
+    HRESULT EOF(
+        [out, retval] VARIANT_BOOL *eof);
+
+    [id(00000000), propget]
+    HRESULT Fields(
+        [out, retval] Fields **object);
+
+    [id(0x000003f0), propget]
+    HRESULT LockType(
+        [out, retval] LockTypeEnum *lock_type);
+
+    [id(0x000003f0), propput]
+    HRESULT LockType(
+        [in] LockTypeEnum lock_type);
+
+    [id(0x000003f1), propget]
+    HRESULT MaxRecords(
+        [out, retval] ADO_LONGPTR *max_records);
+
+    [id(0x000003f1), propput]
+    HRESULT MaxRecords(
+        [in] ADO_LONGPTR max_records);
+
+    [id(0x000003f2), propget]
+    HRESULT RecordCount(
+        [out, retval] ADO_LONGPTR *count);
+
+    [id(0x000003f3), propputref]
+    HRESULT Source(
+        [in] IDispatch *source);
+
+    [id(0x000003f3), propput]
+    HRESULT Source(
+        [in] BSTR source);
+
+    [id(0x000003f3), propget]
+    HRESULT Source(
+        [out, retval] VARIANT *source);
+
+    [id(0x000003f4)]
+    HRESULT AddNew(
+        [in, optional] VARIANT field_list,
+        [in, optional] VARIANT values);
+
+    [id(0x000003f5)]
+    HRESULT CancelUpdate();
+
+    [id(0x000003f6)]
+    HRESULT Close();
+
+    [id(0x000003f7)]
+    HRESULT Delete(
+        [in, defaultvalue(adAffectCurrent)] AffectEnum affect_records);
+
+    [id(0x000003f8)]
+    HRESULT GetRows(
+        [in, defaultvalue(-1)] LONG rows,
+        [in, optional] VARIANT start,
+        [in, optional] VARIANT fields,
+        [out, retval] VARIANT *var);
+
+    [id(0x000003f9)]
+    HRESULT Move(
+        [in] ADO_LONGPTR num_records,
+        [in, optional] VARIANT start);
+
+    [id(0x000003fa)]
+    HRESULT MoveNext();
+
+    [id(0x000003fb)]
+    HRESULT MovePrevious();
+
+    [id(0x000003fc)]
+    HRESULT MoveFirst();
+
+    [id(0x000003fd)]
+    HRESULT MoveLast();
+
+    [id(0x000003fe)]
+    HRESULT Open(
+        [in, optional] VARIANT source,
+        [in, optional] VARIANT active_connection,
+        [in, defaultvalue(adOpenUnspecified)] CursorTypeEnum cursor_type,
+        [in, defaultvalue(adLockUnspecified)] LockTypeEnum lock_type,
+        [in, defaultvalue(-1)] LONG options);
+
+    [id(0x000003ff)]
+    HRESULT Requery(
+        [in, defaultvalue(-1)] LONG options);
+
+    [id(0x60030022), hidden]
+    HRESULT _xResync(
+        [in, defaultvalue(adAffectAll)] AffectEnum affect_records);
+
+    [id(0x00000401)]
+    HRESULT Update(
+        [in, optional] VARIANT fields,
+        [in, optional] VARIANT values);
+
+    [id(0x00000417), propget]
+    HRESULT AbsolutePage(
+        [out, retval] PositionEnum_Param *position);
+
+    [id(0x00000417), propput]
+    HRESULT AbsolutePage(
+        [in] PositionEnum_Param position);
+
+    [id(0x00000402), propget]
+    HRESULT EditMode(
+        [out, retval] EditModeEnum *mode);
+
+    [id(0x00000406), propget]
+    HRESULT Filter(
+        [out, retval] VARIANT *criteria);
+
+    [id(0x00000406), propput]
+    HRESULT Filter(
+        [in] VARIANT criteria);
+
+    [id(0x0000041a), propget]
+    HRESULT PageCount(
+        [out, retval] ADO_LONGPTR *count);
+
+    [id(0x00000418), propget]
+    HRESULT PageSize(
+        [out, retval] LONG *size);
+
+    [id(0x00000418), propput]
+    HRESULT PageSize(
+        [in] LONG size);
+
+    [id(0x00000407), propget]
+    HRESULT Sort(
+        [out, retval] BSTR *criteria);
+
+    [id(0x00000407), propput]
+    HRESULT Sort(
+        [in] BSTR criteria);
+
+    [id(0x00000405), propget]
+    HRESULT Status(
+        [out, retval] LONG *status);
+
+    [id(0x0000041e), propget]
+    HRESULT State(
+        [out, retval] LONG *state);
+
+    [id(0x60030030), hidden]
+    HRESULT _xClone(
+        [out, retval] _Recordset **object);
+
+    [id(0x0000040b)]
+    HRESULT UpdateBatch(
+        [in, defaultvalue(adAffectAll)] AffectEnum affect_records);
+
+    [id(0x00000419)]
+    HRESULT CancelBatch(
+        [in, defaultvalue(adAffectAll)] AffectEnum affect_records);
+
+    [id(0x0000041b), propget]
+    HRESULT CursorLocation(
+        [out, retval] CursorLocationEnum *cursor_loc);
+
+    [id(0x0000041b), propput]
+    HRESULT CursorLocation(
+        [in] CursorLocationEnum cursor_loc);
+
+    [id(0x0000041c)]
+    HRESULT NextRecordset(
+        [out, optional] VARIANT *records_affected,
+        [out, retval] _Recordset **record_set);
+
+    [id(0x0000040c)]
+    HRESULT Supports(
+        [in] CursorOptionEnum cursor_options,
+        [out, retval] VARIANT_BOOL *ret);
+
+    [id(0xfffffff8), propget, hidden]
+    HRESULT Collect(
+        [in] VARIANT index,
+        [out, retval] VARIANT *var);
+
+    [id(0xfffffff8), propput, hidden]
+    HRESULT Collect(
+        [in] VARIANT index,
+        [in] VARIANT var);
+
+    [id(0x0000041d), propget]
+    HRESULT MarshalOptions(
+        [out, retval] MarshalOptionsEnum *options);
+
+    [id(0x0000041d), propput]
+    HRESULT MarshalOptions(
+        [in] MarshalOptionsEnum options);
+
+    [id(0x00000422)]
+    HRESULT Find(
+        [in] BSTR criteria,
+        [in, defaultvalue(0)] LONG skip_records,
+        [in, defaultvalue(adSearchForward)] SearchDirectionEnum search_direction,
+        [in, optional] VARIANT start);
+};
+
+[
+    uuid(MSADO15_UUID_Recordset20),
+    odl,
+    dual,
+    nonextensible,
+    oleautomation,
+#ifdef MSADO15_VERSION_61
+    hidden
+#endif
+]
+interface Recordset20 : Recordset15
+{
+    [id(0x0000041f)]
+    HRESULT Cancel();
+
+    [id(0x00000420), propget]
+    HRESULT DataSource(
+        [out, retval] IUnknown **data_source);
+
+    [id(0x00000420), propputref]
+    HRESULT DataSource(
+        [in] IUnknown *data_source);
+
+    [hidden]
+    HRESULT _xSave(
+        [in, optional] BSTR filename,
+        [in, defaultvalue(adPersistADTG)] PersistFormatEnum persist_format);
+
+    [id(0x00000425), propget]
+    HRESULT ActiveCommand(
+        [out, retval] IDispatch **cmd);
+
+    [id(0x00000427), propput]
+    HRESULT StayInSync(
+        [in] VARIANT_BOOL stay_in_sync);
+
+    [id(0x00000427), propget]
+    HRESULT StayInSync(
+        [out, retval] VARIANT_BOOL *stay_in_sync);
+
+    [id(0x00000426)]
+    HRESULT GetString(
+        [in, defaultvalue(adClipString)] StringFormatEnum string_format,
+        [in, defaultvalue(-1)] LONG num_rows,
+        [in, optional] BSTR column_delimiter,
+        [in, optional] BSTR row_delimiter,
+        [in, optional] BSTR null_expr,
+        [out, retval] BSTR *ret_string);
+
+    [id(0x00000428), propget]
+    HRESULT DataMember(
+        [out, retval] BSTR *data_member);
+
+    [id(0x00000428), propput]
+    HRESULT DataMember(
+        [in] BSTR data_member);
+
+    [id(0x00000429)]
+    HRESULT CompareBookmarks(
+        [in] VARIANT bookmark1,
+        [in] VARIANT bookmark2,
+        [out, retval] CompareEnum *compare);
+
+    [id(0x0000040a)]
+    HRESULT Clone(
+        [in, defaultvalue(adLockUnspecified)] LockTypeEnum lock_type,
+        [out, retval] _Recordset **object);
+
+    [id(0x00000400)]
+    HRESULT Resync(
+        [in, defaultvalue(adAffectAll)] AffectEnum affect_records,
+        [in, defaultvalue(adResyncAllValues)] ResyncEnum resync_values);
+};
+
+[
+    uuid(MSADO15_UUID_Recordset21),
+    odl,
+    dual,
+    nonextensible,
+    oleautomation,
+#ifdef MSADO15_VERSION_61
+    hidden
+#endif
+]
+interface Recordset21 : Recordset20
+{
+    [id(0x0000042a)]
+    HRESULT Seek(
+        [in] VARIANT key_values,
+        [in, defaultvalue(adSeekFirstEQ)] SeekEnum seek_option);
+
+    [id(0x0000042b), propput]
+    HRESULT Index(
+        [in] BSTR index);
+
+    [id(0x0000042b), propget]
+    HRESULT Index(
+        [out, retval] BSTR *index);
+};
+
+[
+    uuid(MSADO15_UUID__Recordset),
+    odl,
+    dual,
+    nonextensible,
+    oleautomation,
+#ifdef MSADO15_VERSION_61
+    hidden
+#endif
+]
+interface _Recordset : Recordset21
+{
+    [id(0x00000421)]
+    HRESULT Save(
+        [in, optional] VARIANT destination,
+        [in, defaultvalue(adPersistADTG)] PersistFormatEnum persist_format);
+};
+
+[
+    uuid(MSADO15_UUID_Connection15),
+    odl,
+    dual,
+    oleautomation,
+#ifdef MSADO15_VERSION_61
+    hidden
+#endif
+]
+interface Connection15 : _ADO
+{
+    [id(00000000), propget]
+    HRESULT ConnectionString(
+        [out, retval] BSTR *str);
+
+    [id(00000000), propput]
+    HRESULT ConnectionString(
+        [in] BSTR str);
+
+    [id(0x00000002), propget]
+    HRESULT CommandTimeout(
+        [out, retval] LONG *timeout);
+
+    [id(0x00000002), propput]
+    HRESULT CommandTimeout(
+        [in] LONG timeout);
+
+    [id(0x00000003), propget]
+    HRESULT ConnectionTimeout(
+        [out, retval] LONG *timeout);
+
+    [id(0x00000003), propput]
+    HRESULT ConnectionTimeout(
+        [in] LONG timeout);
+
+    [id(0x00000004), propget]
+    HRESULT Version(
+        [out, retval] BSTR *str);
+
+    [id(0x00000005)]
+    HRESULT Close();
+
+    [id(0x00000006)]
+    HRESULT Execute(
+        [in] BSTR command,
+        [out, optional] VARIANT *records_affected,
+        [in, defaultvalue(-1)] LONG options,
+        [out, retval] _Recordset **record_set);
+
+    [id(0x00000007)]
+    HRESULT BeginTrans(
+        [out, retval] LONG *transaction_level);
+
+    [id(0x00000008)]
+    HRESULT CommitTrans();
+
+    [id(0x00000009)]
+    HRESULT RollbackTrans();
+
+    [id(0x0000000a)]
+    HRESULT Open(
+        [in, defaultvalue("")] BSTR connection_str,
+        [in, defaultvalue("")] BSTR user_id,
+        [in, defaultvalue("")] BSTR password,
+        [in, defaultvalue(-1)] LONG options);
+
+    [id(0x0000000b), propget]
+    HRESULT Errors(
+        [out, retval] Errors **object);
+
+    [id(0x0000000c), propget]
+    HRESULT DefaultDatabase(
+        [out, retval] BSTR *str);
+
+    [id(0x0000000c), propput]
+    HRESULT DefaultDatabase(
+        [in] BSTR str);
+
+    [id(0x0000000d), propget]
+    HRESULT IsolationLevel(
+        [out, retval] IsolationLevelEnum *level);
+
+    [id(0x0000000d), propput]
+    HRESULT IsolationLevel(
+        [in] IsolationLevelEnum level);
+
+    [id(0x0000000e), propget]
+    HRESULT Attributes(
+        [out, retval] LONG *attr);
+
+    [id(0x0000000e), propput]
+    HRESULT Attributes(
+        [in] LONG attr);
+
+    [id(0x0000000f), propget]
+    HRESULT CursorLocation(
+        [out, retval] CursorLocationEnum *cursor_loc);
+
+    [id(0x0000000f), propput]
+    HRESULT CursorLocation(
+        [in] CursorLocationEnum cursor_loc);
+
+    [id(0x00000010), propget]
+    HRESULT Mode(
+        [out, retval] ConnectModeEnum *mode);
+
+    [id(0x00000010), propput]
+    HRESULT Mode(
+        [in] ConnectModeEnum mode);
+
+    [id(0x00000011), propget]
+    HRESULT Provider(
+        [out, retval] BSTR *str);
+
+    [id(0x00000011), propput]
+    HRESULT Provider(
+        [in] BSTR str);
+
+    [id(0x00000012), propget]
+    HRESULT State(
+        [out, retval] LONG *state);
+
+    [id(0x00000013)]
+    HRESULT OpenSchema(
+        [in] SchemaEnum schema,
+        [in, optional] VARIANT restrictions,
+        [in, optional] VARIANT schema_id,
+        [out, retval] _Recordset **record_set);
+};
+
+[
+#ifdef MSADO15_DEPRECATED
+    hidden,
+#endif
+    uuid(MSADO15_UUID__Connection),
+    odl,
+    dual,
+    oleautomation
+]
+interface _Connection : Connection15
+{
+    [id(0x00000015)]
+    HRESULT Cancel();
+};
+
+[
+    uuid(MSADO15_UUID__Parameter),
+    odl,
+    dual,
+    nonextensible,
+    oleautomation,
+#ifdef MSADO15_VERSION_61
+    hidden
+#endif
+]
+interface _Parameter : _ADO
+{
+    [id(0x60030000), propget]
+    HRESULT Name(
+        [out, retval] BSTR *str);
+
+    [id(0x60030000), propput]
+    HRESULT Name(
+        [in] BSTR str);
+
+    [id(00000000), propget]
+    HRESULT Value(
+        [out, retval] VARIANT *val);
+
+    [id(00000000), propput]
+    HRESULT Value(
+        [in] VARIANT val);
+
+    [id(0x60030004), propget]
+    HRESULT Type(
+        [out, retval] DataTypeEnum *data_type);
+
+    [id(0x60030004), propput]
+    HRESULT Type(
+        [in] DataTypeEnum data_type);
+
+    [id(0x60030006), propput]
+    HRESULT Direction(
+        [in] ParameterDirectionEnum direction);
+
+    [id(0x60030006), propget]
+    HRESULT Direction(
+        [out, retval] ParameterDirectionEnum *direction);
+
+    [id(0x60030008), propput]
+    HRESULT Precision(
+        [in] unsigned char precision);
+
+    [id(0x60030008), propget]
+    HRESULT Precision(
+        [out, retval] unsigned char *precision);
+
+    [id(0x6003000a), propput]
+    HRESULT NumericScale(
+        [in] unsigned char scale);
+
+    [id(0x6003000a), propget]
+    HRESULT NumericScale(
+        [out, retval] unsigned char *scale);
+
+    [id(0x6003000c), propput]
+    HRESULT Size(
+        [in] ADO_LONGPTR size);
+
+    [id(0x6003000c), propget]
+    HRESULT Size(
+        [out, retval] ADO_LONGPTR *size);
+
+    [id(0x6003000e)]
+    HRESULT AppendChunk(
+        [in] VARIANT val);
+
+    [id(0x6003000f), propget]
+    HRESULT Attributes(
+        [out, retval] LONG *attrs);
+
+    [id(0x6003000f), propput]
+    HRESULT Attributes(
+        [in] LONG attrs);
+};
+
+[
+#ifdef MSADO15_DEPRECATED
+    hidden,
+#endif
+    uuid(MSADO15_UUID_Parameters),
+    odl,
+    dual,
+    nonextensible,
+    oleautomation
+]
+interface Parameters : _DynaCollection
+{
+    [id(00000000), propget]
+    HRESULT Item(
+        [in] VARIANT index,
+        [out, retval] _Parameter **object);
+};
+
+[
+    uuid(MSADO15_UUID_Command15),
+    odl,
+    dual,
+    nonextensible,
+    oleautomation,
+#ifdef MSADO15_VERSION_61
+    hidden
+#endif
+]
+interface Command15 : _ADO
+{
+    [id(0x60030000), propget]
+    HRESULT ActiveConnection(
+        [out, retval] _Connection **object);
+
+    [id(0x60030000), propputref]
+    HRESULT ActiveConnection(
+        [in] _Connection *object);
+
+    [id(0x60030000), propput]
+    HRESULT ActiveConnection(
+        [in] VARIANT object);
+
+    [id(0x60030003), propget]
+    HRESULT CommandText(
+        [out, retval] BSTR *str);
+
+    [id(0x60030003), propput]
+    HRESULT CommandText(
+        [in] BSTR str);
+
+    [id(0x60030005), propget]
+    HRESULT CommandTimeout(
+        [out, retval] LONG *timeout);
+
+    [id(0x60030005), propput]
+    HRESULT CommandTimeout(
+        [in] LONG timeout);
+
+    [id(0x60030007), propget]
+    HRESULT Prepared(
+        [out, retval] VARIANT_BOOL *prepared);
+
+    [id(0x60030007), propput]
+    HRESULT Prepared(
+        [in] VARIANT_BOOL prepared);
+
+    [id(0x60030009)]
+    HRESULT Execute(
+        [out, optional] VARIANT *records_affected,
+        [in, optional] VARIANT *parameters,
+        [in, defaultvalue(-1)] LONG options,
+        [out, retval] _Recordset **record_set);
+
+    [id(0x6003000a)]
+    HRESULT CreateParameter(
+        [in,  defaultvalue("")] BSTR name,
+        [in, defaultvalue(adEmpty)] DataTypeEnum type,
+        [in, defaultvalue(adParamInput)] ParameterDirectionEnum direction,
+        [in, defaultvalue(0)] ADO_LONGPTR size,
+        [in, optional] VARIANT value,
+        [out, retval] _Parameter **parameter);
+
+    [id(00000000), propget]
+    HRESULT Parameters(
+        [out, retval] Parameters **object);
+
+    [id(0x6003000c), propput]
+    HRESULT CommandType(
+        [in] CommandTypeEnum cmd_type);
+
+    [id(0x6003000c), propget]
+    HRESULT CommandType(
+        [out, retval] CommandTypeEnum *cmd_type);
+
+    [id(0x6003000e), propget]
+    HRESULT Name(
+        [out, retval] BSTR *name);
+
+    [id(0x6003000e), propput]
+    HRESULT Name(
+        [in] BSTR name);
+};
+
+[
+    uuid(MSADO15_UUID_Command25),
+    odl,
+    dual,
+    nonextensible,
+    oleautomation,
+#ifdef MSADO15_VERSION_61
+    hidden
+#endif
+]
+interface Command25 : Command15
+{
+    [id(0x60030010), propget]
+    HRESULT State(
+        [out, retval] LONG *state);
+
+    [id(0x60030011)]
+    HRESULT Cancel();
+};
+
+[
+#ifdef MSADO15_DEPRECATED
+    hidden,
+#endif
+    uuid(MSADO15_UUID__Command),
+    odl,
+    dual,
+    nonextensible,
+    oleautomation
+]
+interface _Command : Command25
+{
+    [id(0x60030012), propputref]
+    HRESULT CommandStream(
+        [in] IUnknown *stream);
+
+    [id(0x60030012), propget]
+    HRESULT CommandStream(
+        [out, retval] VARIANT *stream);
+
+    [id(0x60030013), propput]
+    HRESULT Dialect(
+        [in] BSTR dialect);
+
+    [id(0x60030013), propget]
+    HRESULT Dialect(
+        [out, retval] BSTR *dialect);
+
+    [id(0x60030014), propput]
+    HRESULT NamedParameters(
+        [in] VARIANT_BOOL named_parameters);
+
+    [id(0x60030014), propget]
+    HRESULT NamedParameters(
+        [out, retval] VARIANT_BOOL *named_parameters);
+};
+
+[
+    uuid(MSADO15_UUID_ConnectionEventsVt),
+    odl,
+    hidden
+]
+interface ConnectionEventsVt : IUnknown
+{
+    HRESULT InfoMessage(
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Connection *connection);
+
+    HRESULT BeginTransComplete(
+        [in] LONG TransactionLevel,
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Connection *connection);
+
+    HRESULT CommitTransComplete(
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Connection *connection);
+
+    HRESULT RollbackTransComplete(
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Connection *connection);
+
+    HRESULT WillExecute(
+        [in, out] BSTR *source,
+        [in, out] CursorTypeEnum *cursor_type,
+        [in, out] LockTypeEnum *lock_type,
+        [in, out] LONG *options,
+        [in, out] EventStatusEnum *status,
+        [in] _Command *command,
+        [in] _Recordset *record_set,
+        [in] _Connection *connection);
+
+    HRESULT ExecuteComplete(
+        [in] LONG records_affected,
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Command *command,
+        [in] _Recordset *record_set,
+        [in] _Connection *connection);
+
+    HRESULT WillConnect(
+        [in, out] BSTR *string,
+        [in, out] BSTR *userid,
+        [in, out] BSTR *password,
+        [in, out] LONG *options,
+        [in, out] EventStatusEnum *status,
+        [in] _Connection *connection);
+
+    HRESULT ConnectComplete(
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Connection *connection);
+
+    HRESULT Disconnect(
+        [in, out] EventStatusEnum *status,
+        [in] _Connection *connection);
+};
+
+[
+#ifdef MSADO15_DEPRECATED
+    hidden,
+#endif
+    uuid(MSADO15_UUID_ConnectionEvents)
+]
+dispinterface ConnectionEvents
+{
+    properties:
+    methods:
+    [id(00000000)]
+    HRESULT InfoMessage(
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Connection *Connection);
+
+    [id(0x00000001)]
+    HRESULT BeginTransComplete(
+        [in] LONG TransactionLevel,
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Connection *connection);
+
+    [id(0x00000003)]
+    HRESULT CommitTransComplete(
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Connection *connection);
+
+    [id(0x00000002)]
+    HRESULT RollbackTransComplete(
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Connection *connection);
+
+    [id(0x00000004)]
+    HRESULT WillExecute(
+        [in, out] BSTR *source,
+        [in, out] CursorTypeEnum *cursor_type,
+        [in, out] LockTypeEnum *lock_type,
+        [in, out] LONG *options,
+        [in, out] EventStatusEnum *status,
+        [in] _Command *command,
+        [in] _Recordset *record_set,
+        [in] _Connection *connection);
+
+    [id(0x00000005)]
+    HRESULT ExecuteComplete(
+        [in] LONG records_affected,
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Command *command,
+        [in] _Recordset *record_set,
+        [in] _Connection *connection);
+
+    [id(0x00000006)]
+    HRESULT WillConnect(
+        [in, out] BSTR *string,
+        [in, out] BSTR *userid,
+        [in, out] BSTR *password,
+        [in, out] LONG *options,
+        [in, out] EventStatusEnum *status,
+        [in] _Connection *connection);
+
+    [id(0x00000007)]
+    HRESULT ConnectComplete(
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Connection *connection);
+
+    [id(0x00000008)]
+    HRESULT Disconnect(
+        [in, out] EventStatusEnum *status,
+        [in] _Connection *connection);
+};
+
+[
+    uuid(MSADO15_UUID__Record),
+    odl,
+    dual,
+#ifndef MSADO15_VERSION_61
+    nonextensible,
+#endif
+    oleautomation,
+#ifdef MSADO15_VERSION_61
+    hidden
+#endif
+]
+interface _Record : _ADO
+{
+    [id(1), propget]
+    HRESULT ActiveConnection(
+        [out, retval] VARIANT *connection);
+
+    [id(1), propput]
+    HRESULT ActiveConnection(
+        [in] BSTR connection);
+
+    [id(1), propputref]
+    HRESULT ActiveConnection(
+        [in] _Connection *connection);
+
+    [id(2), propget]
+    HRESULT State(
+        [out, retval] ObjectStateEnum *state);
+
+    [id(3), propget]
+    HRESULT Source(
+        [out, retval] VARIANT *source);
+
+    [id(3), propput]
+    HRESULT Source(
+        [in] BSTR source);
+
+    [id(3), propputref]
+    HRESULT Source(
+        [in] IDispatch *source);
+
+    [id(4), propget]
+    HRESULT Mode(
+        [out, retval] ConnectModeEnum *mode);
+
+    [id(4), propput]
+    HRESULT Mode(
+        [in] ConnectModeEnum mode);
+
+    [id(5), propget]
+    HRESULT ParentURL(
+        [out, retval] BSTR *parent_URL);
+
+    [id(6)]
+    HRESULT MoveRecord(
+        [in, defaultvalue("")] BSTR source,
+        [in, defaultvalue("")] BSTR Destination,
+        [in, optional] BSTR UserName,
+        [in, optional] BSTR Password,
+        [in, defaultvalue(adMoveUnspecified)] MoveRecordOptionsEnum Options,
+        [in, optional] VARIANT_BOOL Async,
+        [out, retval] BSTR *pbstrNewURL);
+
+    [id(7)]
+    HRESULT CopyRecord(
+        [in, defaultvalue("")] BSTR source,
+        [in, defaultvalue("")] BSTR destination,
+        [in, optional] BSTR username,
+        [in, optional] BSTR password,
+        [in, defaultvalue(adCopyUnspecified)] CopyRecordOptionsEnum options,
+        [in, optional] VARIANT_BOOL async,
+        [out, retval] BSTR *new_URL);
+
+    [id(8)]
+    HRESULT DeleteRecord(
+        [in] BSTR source,
+        [in, optional] VARIANT_BOOL async);
+
+    [id(9)]
+    HRESULT Open(
+        [in, optional] VARIANT source,
+        [in, optional] VARIANT active_connection,
+        [in, optional] ConnectModeEnum mode,
+        [in, defaultvalue(adFailIfNotExists)] RecordCreateOptionsEnum create_options,
+        [in, defaultvalue(adOpenRecordUnspecified)] RecordOpenOptionsEnum options,
+        [in, optional] BSTR username,
+        [in, optional] BSTR password);
+
+    [id(10)]
+    HRESULT Close();
+
+    [id(0), propget]
+    HRESULT Fields(
+        [out, retval] Fields **fields);
+
+    [id(11), propget]
+    HRESULT RecordType(
+        [out, retval] RecordTypeEnum *type);
+
+    [id(12)]
+    HRESULT GetChildren(
+        [out, retval] _Recordset **record_set);
+
+    [id(13)]
+    HRESULT Cancel();
+};
+
+[
+    uuid(MSADO15_UUID__Stream),
+    odl,
+    dual,
+#ifndef MSADO15_VERSION_61
+    nonextensible,
+#endif
+    oleautomation,
+#ifdef MSADO15_VERSION_61
+    hidden
+#endif
+]
+interface _Stream : IDispatch
+{
+    [id(1), propget]
+    HRESULT Size(
+        [out, retval] ADO_LONGPTR *size);
+
+    [id(2), propget]
+    HRESULT EOS(
+        [out, retval] VARIANT_BOOL *eos);
+
+    [id(3), propget]
+    HRESULT Position(
+        [out, retval] ADO_LONGPTR *position);
+
+    [id(3), propput]
+    HRESULT Position(
+        [in] ADO_LONGPTR position);
+
+    [id(4), propget]
+    HRESULT Type(
+        [out, retval] StreamTypeEnum *type);
+
+    [id(4), propput]
+    HRESULT Type(
+        [in] StreamTypeEnum type);
+
+    [id(5), propget]
+    HRESULT LineSeparator(
+        [out, retval] LineSeparatorEnum *separator);
+
+    [id(5), propput]
+    HRESULT LineSeparator(
+        [in] LineSeparatorEnum separator);
+
+    [id(6), propget]
+    HRESULT State(
+        [out, retval] ObjectStateEnum *state);
+
+    [id(7), propget]
+    HRESULT Mode(
+        [out, retval] ConnectModeEnum *mode);
+
+    [id(7), propput]
+    HRESULT Mode(
+        [in] ConnectModeEnum mode);
+
+    [id(8), propget]
+    HRESULT Charset(
+        [out, retval] BSTR *charset);
+
+    [id(8), propput]
+    HRESULT Charset(
+        [in] BSTR charset);
+
+    [id(9)]
+    HRESULT Read(
+        [in, defaultvalue(adReadAll)] LONG num_bytes,
+        [out, retval] VARIANT *val);
+
+    [id(10)]
+    HRESULT Open(
+        [in, optional] VARIANT source,
+        [in, defaultvalue(adModeUnknown)] ConnectModeEnum mode,
+        [in, defaultvalue(adOpenStreamUnspecified)] StreamOpenOptionsEnum options,
+        [in, optional] BSTR username,
+        [in, optional] BSTR password);
+
+    [id(11)]
+    HRESULT Close(void);
+
+    [id(12)]
+    HRESULT SkipLine(void);
+
+    [id(13)]
+    HRESULT Write(
+        [in] VARIANT buffer);
+
+    [id(14)]
+    HRESULT SetEOS(void);
+
+    [id(15)]
+    HRESULT CopyTo(
+        [in] _Stream *dest,
+        [in, defaultvalue(-1)] ADO_LONGPTR size);
+
+    [id(16)]
+    HRESULT Flush(void);
+
+    [id(17)]
+    HRESULT SaveToFile(
+        [in] BSTR FileName,
+        [in, defaultvalue(adSaveCreateNotExist)] SaveOptionsEnum options);
+
+    [id(18)]
+    HRESULT LoadFromFile(
+        [in] BSTR filename);
+
+    [id(19)]
+    HRESULT ReadText(
+        [in, defaultvalue(adReadAll)] LONG size,
+        [out, retval] BSTR *str);
+
+    [id(20)]
+    HRESULT WriteText(
+        [in] BSTR data,
+        [in, defaultvalue(adWriteChar)] StreamWriteEnum options);
+
+    [id(21)]
+    HRESULT Cancel(void);
+};
+
+[
+#ifdef MSADO15_DEPRECATED
+    hidden,
+#endif
+    uuid(MSADO15_UUID_RecordsetEvents)
+]
+dispinterface RecordsetEvents
+{
+    properties:
+    methods:
+    [id(0x00000009)]
+    HRESULT WillChangeField(
+        [in] LONG count,
+        [in] VARIANT fields,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    [id(0x0000000a)]
+    HRESULT FieldChangeComplete(
+        [in] LONG count,
+        [in] VARIANT fields,
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    [id(0x0000000b)]
+    HRESULT WillChangeRecord(
+        [in] EventReasonEnum reason,
+        [in] LONG count,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    [id(0x0000000c)]
+    HRESULT RecordChangeComplete(
+        [in] EventReasonEnum reason,
+        [in] LONG count,
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    [id(0x0000000d)]
+    HRESULT WillChangeRecordset(
+        [in] EventReasonEnum reason,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    [id(0x0000000e)]
+    HRESULT RecordsetChangeComplete(
+        [in] EventReasonEnum reason,
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    [id(0x0000000f)]
+    HRESULT WillMove(
+        [in] EventReasonEnum reason,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    [id(0x00000010)]
+    HRESULT MoveComplete(
+        [in] EventReasonEnum reason,
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    [id(0x00000011)]
+    HRESULT EndOfRecordset(
+        [in, out] VARIANT_BOOL *more_data,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    [id(0x00000012)]
+    HRESULT FetchProgress(
+        [in] LONG progress,
+        [in] LONG max_progress,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    [id(0x00000013)]
+    HRESULT FetchComplete(
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+};
+
+[uuid(MSADO15_UUID_Field15), odl, dual, nonextensible, oleautomation, hidden]
+interface Field15 : _ADO
+{
+    [id(0x00000455), propget]
+    HRESULT ActualSize(
+        [out, retval] LONG *size);
+
+    [id(0x0000040c), propget]
+    HRESULT Attributes(
+        [out, retval] LONG *attrs);
+
+    [id(0x0000044f), propget]
+    HRESULT DefinedSize(
+        [out, retval] LONG *size);
+
+    [id(0x0000044c), propget]
+    HRESULT Name(
+        [out, retval] BSTR *str);
+
+    [id(0x0000044e), propget]
+    HRESULT Type(
+        [out, retval] DataTypeEnum *type);
+
+    [id(00000000), propget]
+    HRESULT Value(
+        [out, retval] VARIANT *val);
+
+    [id(00000000), propput]
+    HRESULT Value(
+        [in] VARIANT val);
+
+    [id(0x60030007), propget]
+    HRESULT Precision(
+        [out, retval] unsigned char *precision);
+
+    [id(0x60030008), propget]
+    HRESULT NumericScale(
+        [out, retval] unsigned char *scale);
+
+    [id(0x00000453)]
+    HRESULT AppendChunk(
+        [in] VARIANT data);
+
+    [id(0x00000454)]
+    HRESULT GetChunk(
+        [in] LONG length,
+        [out, retval] VARIANT *var);
+
+    [id(0x00000450), propget]
+    HRESULT OriginalValue(
+        [out, retval] VARIANT *val);
+
+    [id(0x00000451), propget]
+    HRESULT UnderlyingValue(
+        [out, retval] VARIANT *val);
+
+};
+
+[uuid(MSADO15_UUID_RecordsetEventsVt), odl, hidden]
+interface RecordsetEventsVt : IUnknown
+{
+    HRESULT WillChangeField(
+        [in] LONG count,
+        [in] VARIANT fields,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    HRESULT FieldChangeComplete(
+        [in] LONG count,
+        [in] VARIANT fields,
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    HRESULT WillChangeRecord(
+        [in] EventReasonEnum reason,
+        [in] LONG count,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    HRESULT RecordChangeComplete(
+        [in] EventReasonEnum reason,
+        [in] LONG count,
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    HRESULT WillChangeRecordset(
+        [in] EventReasonEnum reason,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    HRESULT RecordsetChangeComplete(
+        [in] EventReasonEnum reason,
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    HRESULT WillMove(
+        [in] EventReasonEnum reason,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    HRESULT MoveComplete(
+        [in] EventReasonEnum reason,
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    HRESULT EndOfRecordset(
+        [in, out] VARIANT_BOOL *more_data,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    HRESULT FetchProgress(
+        [in] LONG progress,
+        [in] LONG max_progress,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+
+    HRESULT FetchComplete(
+        [in] Error *error,
+        [in, out] EventStatusEnum *status,
+        [in] _Recordset *record_set);
+};

@@ -1,4 +1,5 @@
 MODULE    = msado15.dll
+msado15_61_tlb_EXTRAIDLFLAGS = --typelib-order=$(srcdir)/msado15_61_tlb.order
 IMPORTS   = oleaut32 ole32
 
 SOURCES = \
