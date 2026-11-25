@@ -28,6 +28,13 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Additional Access wizard failure reproduced:** Create → Labels fails in a
+  fresh process with "The expression On Open ... Return without GoSub."
+  The same 25-row fixture works with the ordinary form/report ribbon paths.
+  This remains unresolved; successful form tests do not cover the VBA wizards.
+- The functional runner now distinguishes an unhandled exception from Wine's
+  "Unhandled token information class" diagnostic. The latter appeared during
+  the Access audit without a process exception and must not be reported as one.
 - **ADO provider cleanup:** normal connection creation now initializes the
   borrowed-provider ownership flag, and `Open` releases its temporary
   `IDBProperties` interface. The previous build reproducibly retained a provider

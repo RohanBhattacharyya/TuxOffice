@@ -91,7 +91,7 @@ reader.join(5)
 sp.run([tux, "kill"], check=False)
 log.close()
 faults = [line for line in (out / f"{app}.log").read_text(errors="replace").splitlines()
-          if "Unhandled" in line or "page fault" in line]
+          if "Unhandled exception" in line or "page fault" in line]
 summary = {
     "app": app,
     "seconds": round(time.monotonic() - start, 1),
