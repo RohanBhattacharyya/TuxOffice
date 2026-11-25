@@ -2729,6 +2729,7 @@ static void TLB_fix_typeinfo_ptr_size(ITypeInfoImpl *info)
 static ITypeInfoImpl * MSFT_DoTypeInfo(
     TLBContext *pcx,
     int count,
+    int offset,
     ITypeLibImpl * pLibInfo)
 {
     MSFT_TypeInfoBase tiBase;
@@ -2738,7 +2739,7 @@ static ITypeInfoImpl * MSFT_DoTypeInfo(
 
     ptiRet = ITypeInfoImpl_Constructor();
     MSFT_ReadLEDWords(&tiBase, sizeof(tiBase) ,pcx ,
-                      pcx->pTblDir->pTypeInfoTab.offset+count*sizeof(tiBase));
+                      pcx->pTblDir->pTypeInfoTab.offset + offset);
 
 /* this is where we are coming from */
     ptiRet->pTypeLib = pLibInfo;
@@ -3507,6 +3508,7 @@ static ITypeLib2* ITypeLib2_Constructor_MSFT(LPVOID pLib, DWORD dwTLBLength)
 {
     TLBContext cx;
     LONG lPSegDir;
+    DWORD index_offset;
     MSFT_Header tlbHeader;
     MSFT_SegDir tlbSegDir;
     ITypeLibImpl * pTypeLibImpl;
@@ -3534,10 +3536,19 @@ static ITypeLib2* ITypeLib2_Constructor_MSFT(LPVOID pLib, DWORD dwTLBLength)
     }
     TRACE_(typelib)("\tdispatchpos = 0x%x\n", tlbHeader.dispatchpos);
 
-    /* there is a small amount of information here until the next important
-     * part:
-     * the segment directory . Try to calculate the amount of data */
-    lPSegDir = sizeof(tlbHeader) + (tlbHeader.nrtypeinfos)*4 + ((tlbHeader.varflags & HELPDLLFLAG)? 4 :0);
+    index_offset = sizeof(tlbHeader) + ((tlbHeader.varflags & HELPDLLFLAG) ? 4 : 0);
+    if (index_offset > dwTLBLength || tlbHeader.nrtypeinfos < 0 ||
+            tlbHeader.nrtypeinfos > (dwTLBLength - index_offset) / sizeof(INT))
+    {
+        free(pTypeLibImpl);
+        return NULL;
+    }
+    lPSegDir = index_offset + tlbHeader.nrtypeinfos * sizeof(INT);
+    if (lPSegDir < 0 || lPSegDir > dwTLBLength || sizeof(tlbSegDir) > dwTLBLength - lPSegDir)
+    {
+        free(pTypeLibImpl);
+        return NULL;
+    }
 
     /* now read the segment directory */
     TRACE("read segment directory (at %ld)\n",lPSegDir);
@@ -3550,6 +3561,29 @@ static ITypeLib2* ITypeLib2_Constructor_MSFT(LPVOID pLib, DWORD dwTLBLength)
         ERR("cannot find the table directory, ptr %#lx\n",lPSegDir);
 	free(pTypeLibImpl);
 	return NULL;
+    }
+
+    /* The index table specifies the public order. Descriptions need not occur
+     * in that order in the type-info segment; references use segment offsets. */
+    if (tlbHeader.nrtypeinfos)
+    {
+        if (tlbSegDir.pTypeInfoTab.offset < 0 || tlbSegDir.pTypeInfoTab.length < sizeof(MSFT_TypeInfoBase) ||
+                tlbSegDir.pTypeInfoTab.offset > dwTLBLength ||
+                tlbSegDir.pTypeInfoTab.length > dwTLBLength - tlbSegDir.pTypeInfoTab.offset)
+        {
+            free(pTypeLibImpl);
+            return NULL;
+        }
+        for (i = 0; i < tlbHeader.nrtypeinfos; ++i)
+        {
+            INT offset;
+            MSFT_ReadLEDWords(&offset, sizeof(offset), &cx, index_offset + i * sizeof(offset));
+            if (offset < 0 || offset > tlbSegDir.pTypeInfoTab.length - sizeof(MSFT_TypeInfoBase))
+            {
+                free(pTypeLibImpl);
+                return NULL;
+            }
+        }
     }
 
     MSFT_ReadAllNames(&cx);
@@ -3714,7 +3748,9 @@ static ITypeLib2* ITypeLib2_Constructor_MSFT(LPVOID pLib, DWORD dwTLBLength)
 
         for(i = 0; i < tlbHeader.nrtypeinfos; i++)
         {
-            *ppTI = MSFT_DoTypeInfo(&cx, i, pTypeLibImpl);
+            INT offset;
+            MSFT_ReadLEDWords(&offset, sizeof(offset), &cx, index_offset + i * sizeof(offset));
+            *ppTI = MSFT_DoTypeInfo(&cx, i, offset, pTypeLibImpl);
 
             ++ppTI;
             (pTypeLibImpl->TypeInfoCount)++;
