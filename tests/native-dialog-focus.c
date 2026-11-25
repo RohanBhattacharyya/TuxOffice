@@ -7,7 +7,7 @@
 
 int main(void)
 {
-    HWND window, edit, before, after;
+    HWND window, edit, before, at_show, after;
     IFileDialog *dialog;
     HRESULT hr;
     DWORD end;
@@ -35,12 +35,14 @@ int main(void)
     hr = CoCreateInstance(&CLSID_FileOpenDialog, NULL, CLSCTX_INPROC_SERVER,
             &IID_IFileDialog, (void **)&dialog);
     if (FAILED(hr)) return 2;
+    at_show = GetFocus();
     hr = IFileDialog_Show(dialog, window);
     after = GetFocus();
-    printf("cancelled=%d initial_edit_focus=%d restored_edit_focus=%d\n",
-            hr == HRESULT_FROM_WIN32(ERROR_CANCELLED), before == edit, after == edit);
+    printf("cancelled=%d initial_edit_focus=%d at_show_edit_focus=%d restored_edit_focus=%d after=%p owner=%p\n",
+            hr == HRESULT_FROM_WIN32(ERROR_CANCELLED), before == edit, at_show == edit, after == edit,
+            after, window);
     IFileDialog_Release(dialog);
     DestroyWindow(window);
     CoUninitialize();
-    return hr == HRESULT_FROM_WIN32(ERROR_CANCELLED) && before == edit && after == edit ? 0 : 1;
+    return hr == HRESULT_FROM_WIN32(ERROR_CANCELLED) && before == edit && at_show == edit && after == edit ? 0 : 1;
 }

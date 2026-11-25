@@ -28,6 +28,15 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **0.1.15 build:** packages are in `dist/0.1.15/`, with verified checksums.
+  Clean Arch system installation, 32/64-bit Wine execution, removal and per-user
+  installation pass. The desktop's pacman installation remains 0.1.13-1.
+  The release's ADO fixture passes on both architectures. Extended native picker
+  focus testing exposed a remaining intermittent race: 26 consecutive real
+  cancellations passed, then the 27th returned NULL focus even though the edit
+  was focused immediately before Show. A shorter release run also failed once.
+  The initial focus restoration repair is therefore incomplete; this is still
+  under investigation, and the test now supports longer runs and detailed logs.
 - **Additional Access wizard failure reproduced:** Create → Labels fails in a
   fresh process with "The expression On Open ... Return without GoSub."
   The same 25-row fixture works with the ordinary form/report ribbon paths.

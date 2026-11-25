@@ -4,6 +4,7 @@
 
 Usage: isolated-run.py SESSION python3 tests/native-dialog-focus.py OUTDIR
 Requires native-dialog-focus.exe from build-helpers.sh, KWin and libei.
+Set DIALOG_FOCUS_ROUNDS to repeat up to 100 times.
 """
 import json
 import os
@@ -21,12 +22,15 @@ eis = out / "eis-input"
 flags = sp.check_output(["pkg-config", "--cflags", "--libs", "libei-1.0", "libsystemd"], text=True).split()
 sp.run(["cc", "-O2", "-o", str(eis), str(root / "tests/eis-input.c"), *flags], check=True)
 results = []
+rounds = int(os.environ.get("DIALOG_FOCUS_ROUNDS", "3"))
+assert 1 <= rounds <= 100
 try:
     sp.run([str(root / "tuxoffice"), "kill"], check=True)
-    for attempt in range(3):
+    for attempt in range(rounds):
         with (out / f"focus-{attempt}.log").open("w+") as log:
             process = sp.Popen([str(root / "tuxoffice"), "wine", "C:/tuxoffice/native-dialog-focus.exe"],
-                               stdout=log, stderr=log, env=dict(os.environ, WINEDEBUG="-all"))
+                               stdout=log, stderr=log,
+                               env=dict(os.environ, WINEDEBUG=os.environ.get("DIALOG_FOCUS_WINEDEBUG", "-all")))
             deadline = time.monotonic() + 45
             try:
                 with tempfile.NamedTemporaryFile(mode="w", suffix=".js") as script:
