@@ -1203,6 +1203,14 @@ static void loaderdrv_GetDC( HDC hdc, HWND hwnd, HWND top_win, const RECT *win_r
     load_driver()->pGetDC( hdc, hwnd, top_win, win_rect, top_rect, flags );
 }
 
+/* Drivers without a GetDC entry point cannot draw into the toplevel of another
+ * process themselves: win32u then shares the pixels with that process instead. */
+BOOL user_driver_draws_foreign_windows(void)
+{
+    if (user_driver == &lazy_load_driver) load_driver();
+    return user_driver->pGetDC != nulldrv_GetDC;
+}
+
 static void loaderdrv_FlashWindowEx( FLASHWINFO *info )
 {
     load_driver()->pFlashWindowEx( info );

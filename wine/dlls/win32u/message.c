@@ -2296,6 +2296,9 @@ static LRESULT handle_internal_message( HWND hwnd, UINT msg, WPARAM wparam, LPAR
         return get_scroll_info( hwnd, (int)wparam, (SCROLLINFO *)lparam );
     case WM_WINE_SETSCROLLINFO:
         return set_scroll_info( hwnd, LOWORD(wparam), (SCROLLINFO *)lparam, HIWORD(wparam) );
+    case WM_WINE_CROSS_PROCESS_SURFACE:
+        composite_cross_process_surface( (HWND)wparam, (HANDLE)lparam );
+        return 0;
     default:
         if (msg >= WM_WINE_FIRST_DRIVER_MSG && msg <= WM_WINE_LAST_DRIVER_MSG)
             return user_driver->pWindowMessage( hwnd, msg, wparam, lparam );

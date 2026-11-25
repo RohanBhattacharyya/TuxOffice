@@ -44,6 +44,7 @@ struct dce
     UINT        flags;
     LONG        count;         /* usage count; 0 or 1 for cache DCEs, always 1 for window DCEs,
                                   always >= 1 for class DCEs */
+    struct window_surface *cross_process; /* surface shared with the toplevel's process */
 };
 
 static struct list dce_list = LIST_INIT(dce_list);
@@ -856,6 +857,355 @@ int force_present_to_surface( const RECT *win_rect )
 }
 
 /***********************************************************************
+ * Cross-process child windows
+ *
+ * A child window can belong to another process than its toplevel, as when a
+ * browser process draws a web view into an application's dialog. Drivers that
+ * draw on the host's windows directly paint such a child themselves. The
+ * others would drop its pixels, as only the toplevel's process has a window
+ * surface for it: there, the drawing process paints into a section that it
+ * shares with the toplevel's process, which copies the damaged area into its
+ * own window surface.
+ */
+
+#define CROSS_PROCESS_MAGIC         0x58505753  /* "SWPX" */
+#define CROSS_PROCESS_PIXELS_OFFSET 0x1000
+
+struct cross_process_shared
+{
+    UINT  magic;
+    UINT  pid;
+    UINT  width;
+    UINT  height;
+    LONG  lock;
+    LONG  pending;
+    DWORD post_time;
+    RECT  dirty;
+};
+
+/* the drawing process side */
+struct cross_process_surface
+{
+    struct window_surface        header;
+    struct list                  entry;
+    HWND                         embed;   /* outermost window drawn into this surface */
+    HWND                         notify;  /* its parent, which the toplevel's process owns */
+    HANDLE                       section;
+    HANDLE                       remote;  /* the section in the toplevel's process */
+    struct cross_process_shared *shared;
+};
+
+/* the toplevel's process side */
+struct cross_process_source
+{
+    struct list                  entry;
+    HWND                         embed;
+    HANDLE                       section;
+    UINT                         pid;
+    struct cross_process_shared *shared;
+    HDC                          hdc;
+    HBITMAP                      bitmap;
+};
+
+static struct list cross_process_surfaces = LIST_INIT( cross_process_surfaces );
+static pthread_mutex_t cross_process_surfaces_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct list cross_process_sources = LIST_INIT( cross_process_sources );
+static pthread_mutex_t cross_process_sources_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void cross_process_shared_lock( struct cross_process_shared *shared )
+{
+    while (InterlockedCompareExchange( &shared->lock, 1, 0 )) NtYieldExecution();
+}
+
+static void cross_process_shared_unlock( struct cross_process_shared *shared )
+{
+    InterlockedExchange( &shared->lock, 0 );
+}
+
+static struct cross_process_surface *get_cross_process_surface_impl( struct window_surface *base )
+{
+    return CONTAINING_RECORD( base, struct cross_process_surface, header );
+}
+
+static void cross_process_surface_set_clip( struct window_surface *base, const RECT *rects, UINT count )
+{
+}
+
+static BOOL cross_process_surface_flush( struct window_surface *base, const RECT *rect, const RECT *dirty,
+                                         const BITMAPINFO *color_info, const void *color_bits, BOOL shape_changed,
+                                         const BITMAPINFO *shape_info, const void *shape_bits )
+{
+    struct cross_process_surface *surface = get_cross_process_surface_impl( base );
+    struct cross_process_shared *shared = surface->shared;
+    DWORD now = NtGetTickCount();
+
+    cross_process_shared_lock( shared );
+    union_rect( &shared->dirty, &shared->dirty, dirty );
+    cross_process_shared_unlock( shared );
+
+    /* one notification at a time; send another if the last one seems lost */
+    if (!InterlockedExchange( &shared->pending, 1 ) || now - shared->post_time > 1000)
+    {
+        shared->post_time = now;
+        TRACE( "hwnd %p dirty %s, notifying %p\n", surface->embed, wine_dbgstr_rect( dirty ), surface->notify );
+
+        NtUserPostMessage( surface->notify, WM_WINE_CROSS_PROCESS_SURFACE,
+                           (WPARAM)surface->embed, (LPARAM)surface->remote );
+    }
+    return TRUE;
+}
+
+static void cross_process_surface_destroy( struct window_surface *base )
+{
+    struct cross_process_surface *surface = get_cross_process_surface_impl( base );
+
+    TRACE( "freeing %p for hwnd %p\n", surface, surface->embed );
+    if (surface->shared) NtUnmapViewOfSection( GetCurrentProcess(), surface->shared );
+    if (surface->section) NtClose( surface->section );
+}
+
+static const struct window_surface_funcs cross_process_surface_funcs =
+{
+    cross_process_surface_set_clip,
+    cross_process_surface_flush,
+    cross_process_surface_destroy
+};
+
+static BOOL get_cross_process_rect( HWND hwnd, RECT *rect )
+{
+    char buffer[sizeof(RGNDATA) + 16 * sizeof(RECT)];
+    NTSTATUS status;
+
+    SERVER_START_REQ( get_visible_region )
+    {
+        req->window = wine_server_user_handle( hwnd );
+        req->flags  = DCX_WINDOW;
+        wine_server_set_reply( req, buffer, sizeof(buffer) );
+        status = wine_server_call( req );
+        *rect = wine_server_get_rect( reply->win_rect );
+    }
+    SERVER_END_REQ;
+    /* the window rectangle is valid even when the region does not fit */
+    return !status || status == STATUS_BUFFER_OVERFLOW;
+}
+
+static void init_cross_process_info( BITMAPINFO *info, UINT width, UINT height )
+{
+    memset( &info->bmiHeader, 0, sizeof(info->bmiHeader) );
+    info->bmiHeader.biSize        = sizeof(info->bmiHeader);
+    info->bmiHeader.biWidth       = width;
+    info->bmiHeader.biHeight      = -(int)height;
+    info->bmiHeader.biPlanes      = 1;
+    info->bmiHeader.biBitCount    = 32;
+    info->bmiHeader.biCompression = BI_RGB;
+    info->bmiHeader.biSizeImage   = width * height * 4;
+}
+
+static struct cross_process_surface *create_cross_process_surface( HWND embed, HWND notify, DWORD pid,
+                                                                   UINT width, UINT height )
+{
+    char buffer[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
+    BITMAPINFO *info = (BITMAPINFO *)buffer;
+    struct cross_process_shared *shared = NULL;
+    struct cross_process_surface *surface;
+    SIZE_T view_size = CROSS_PROCESS_PIXELS_OFFSET;
+    HANDLE section, process, remote = 0;
+    OBJECT_ATTRIBUTES attr;
+    LARGE_INTEGER size;
+    HBITMAP bitmap;
+    CLIENT_ID cid;
+    RECT rect;
+    void *bits;
+
+    size.QuadPart = CROSS_PROCESS_PIXELS_OFFSET + (ULONGLONG)width * height * 4;
+    if (NtCreateSection( &section, SECTION_ALL_ACCESS, NULL, &size, PAGE_READWRITE, SEC_COMMIT, 0 )) return NULL;
+    if (NtMapViewOfSection( section, GetCurrentProcess(), (void **)&shared, 0, 0, NULL, &view_size,
+                            ViewShare, 0, PAGE_READWRITE ))
+    {
+        NtClose( section );
+        return NULL;
+    }
+
+    init_cross_process_info( info, width, height );
+    SetRect( &rect, 0, 0, width, height );
+    if (!(bitmap = NtGdiCreateDIBSection( 0, section, CROSS_PROCESS_PIXELS_OFFSET, info, DIB_RGB_COLORS,
+                                          0, 0, 0, &bits )) ||
+        !(surface = (struct cross_process_surface *)window_surface_create( sizeof(*surface), &cross_process_surface_funcs,
+                                                                           embed, &rect, info, bitmap )))
+    {
+        if (bitmap) NtGdiDeleteObjectApp( bitmap );
+        NtUnmapViewOfSection( GetCurrentProcess(), shared );
+        NtClose( section );
+        return NULL;
+    }
+    surface->embed   = embed;
+    surface->notify  = notify;
+    surface->section = section;
+    surface->shared  = shared;
+
+    InitializeObjectAttributes( &attr, NULL, 0, NULL, NULL );
+    cid.UniqueProcess = ULongToHandle( pid );
+    cid.UniqueThread  = 0;
+    if (!NtOpenProcess( &process, PROCESS_DUP_HANDLE, &attr, &cid ))
+    {
+        NtDuplicateObject( GetCurrentProcess(), section, process, &remote, 0, 0, DUPLICATE_SAME_ACCESS );
+        NtClose( process );
+    }
+    if (!remote)
+    {
+        WARN( "cannot share the surface of %p with process %04x\n", embed, (int)pid );
+        window_surface_release( &surface->header );
+        return NULL;
+    }
+    surface->remote = remote;
+
+    shared->pid    = GetCurrentProcessId();
+    shared->width  = width;
+    shared->height = height;
+    reset_bounds( &shared->dirty );
+    shared->magic  = CROSS_PROCESS_MAGIC;
+
+    TRACE( "created %p for hwnd %p %ux%u, toplevel process %04x\n", surface, embed, width, height, (int)pid );
+    return surface;
+}
+
+/* Find the surface for a window whose toplevel belongs to another process. */
+static struct window_surface *get_cross_process_surface( HWND hwnd, HWND top_win, RECT *embed_rect )
+{
+    struct cross_process_surface *surface, *next;
+    HWND embed = hwnd, parent, desktop = NtUserGetDesktopWindow();
+    DWORD top_pid, pid;
+    UINT width, height;
+
+    if (user_driver_draws_foreign_windows()) return NULL;
+    if (!get_window_thread( top_win, &top_pid )) return NULL;
+
+    /* draw the outermost ancestor that the toplevel's process does not own */
+    for (;;)
+    {
+        if (!(parent = NtUserGetAncestor( embed, GA_PARENT )) || parent == desktop) return NULL;
+        if (!get_window_thread( parent, &pid )) return NULL;
+        if (pid == top_pid) break;
+        embed = parent;
+    }
+    if (!get_cross_process_rect( embed, embed_rect )) return NULL;
+    width = embed_rect->right - embed_rect->left;
+    height = embed_rect->bottom - embed_rect->top;
+    if (!width || !height || width > 16384 || height > 16384) return NULL;
+
+    pthread_mutex_lock( &cross_process_surfaces_lock );
+    LIST_FOR_EACH_ENTRY_SAFE( surface, next, &cross_process_surfaces, struct cross_process_surface, entry )
+    {
+        if (surface->embed == embed && surface->notify == parent &&
+            surface->shared->width == width && surface->shared->height == height)
+        {
+            window_surface_add_ref( &surface->header );
+            pthread_mutex_unlock( &cross_process_surfaces_lock );
+            return &surface->header;
+        }
+        if (surface->embed == embed || !is_window( surface->embed ))
+        {
+            list_remove( &surface->entry );
+            register_window_surface( &surface->header, NULL );
+            window_surface_release( &surface->header );
+        }
+    }
+    if ((surface = create_cross_process_surface( embed, parent, top_pid, width, height )))
+    {
+        list_add_head( &cross_process_surfaces, &surface->entry );
+        register_window_surface( NULL, &surface->header );
+        window_surface_add_ref( &surface->header );
+    }
+    pthread_mutex_unlock( &cross_process_surfaces_lock );
+    return surface ? &surface->header : NULL;
+}
+
+static void free_cross_process_source( struct cross_process_source *source )
+{
+    list_remove( &source->entry );
+    if (source->hdc) NtGdiDeleteObjectApp( source->hdc );
+    if (source->bitmap) NtGdiDeleteObjectApp( source->bitmap );
+    if (source->shared) NtUnmapViewOfSection( GetCurrentProcess(), source->shared );
+    NtClose( source->section );
+    free( source );
+}
+
+static struct cross_process_source *open_cross_process_source( HWND embed, HANDLE section )
+{
+    char buffer[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
+    BITMAPINFO *info = (BITMAPINFO *)buffer;
+    struct cross_process_source *source, *other, *next;
+    SIZE_T view_size = CROSS_PROCESS_PIXELS_OFFSET;
+    void *bits;
+
+    LIST_FOR_EACH_ENTRY( source, &cross_process_sources, struct cross_process_source, entry )
+        if (source->section == section) return source->embed == embed ? source : NULL;
+
+    if (!(source = calloc( 1, sizeof(*source) ))) return NULL;
+    source->embed = embed;
+    source->section = section;
+    list_add_head( &cross_process_sources, &source->entry );
+    if (NtMapViewOfSection( section, GetCurrentProcess(), (void **)&source->shared, 0, 0, NULL, &view_size,
+                            ViewShare, 0, PAGE_READWRITE ) || source->shared->magic != CROSS_PROCESS_MAGIC)
+    {
+        WARN( "invalid section %p for hwnd %p\n", section, embed );
+        free_cross_process_source( source );
+        return NULL;
+    }
+    source->pid = source->shared->pid;
+    init_cross_process_info( info, source->shared->width, source->shared->height );
+    if (!(source->bitmap = NtGdiCreateDIBSection( 0, section, CROSS_PROCESS_PIXELS_OFFSET, info, DIB_RGB_COLORS,
+                                                  0, 0, 0, &bits )) ||
+        !(source->hdc = NtGdiCreateCompatibleDC( 0 )))
+    {
+        free_cross_process_source( source );
+        return NULL;
+    }
+    NtGdiSelectBitmap( source->hdc, source->bitmap );
+
+    /* a new section replaces the previous one of the same window and process */
+    LIST_FOR_EACH_ENTRY_SAFE( other, next, &cross_process_sources, struct cross_process_source, entry )
+        if (other != source && ((other->embed == embed && other->pid == source->pid) || !is_window( other->embed )))
+            free_cross_process_source( other );
+
+    TRACE( "hwnd %p section %p from process %04x, %ux%u\n", embed, section, source->pid,
+           source->shared->width, source->shared->height );
+    return source;
+}
+
+/* Copy what another process drew into a child window to the window surface of its toplevel. */
+void composite_cross_process_surface( HWND embed, HANDLE section )
+{
+    struct cross_process_source *source;
+    struct cross_process_shared *shared;
+    RECT dirty;
+    HDC hdc;
+
+    pthread_mutex_lock( &cross_process_sources_lock );
+    if (!(source = open_cross_process_source( embed, section ))) goto done;
+    shared = source->shared;
+
+    InterlockedExchange( &shared->pending, 0 );
+    cross_process_shared_lock( shared );
+    dirty = shared->dirty;
+    reset_bounds( &shared->dirty );
+    cross_process_shared_unlock( shared );
+
+    if (!intersect_rect( &dirty, &dirty, &(RECT){0, 0, shared->width, shared->height} )) goto done;
+    TRACE( "hwnd %p dirty %s\n", embed, wine_dbgstr_rect( &dirty ) );
+
+    if ((hdc = NtUserGetDCEx( embed, 0, DCX_CACHE | DCX_WINDOW | DCX_CLIPSIBLINGS )))
+    {
+        NtGdiBitBlt( hdc, dirty.left, dirty.top, dirty.right - dirty.left, dirty.bottom - dirty.top,
+                     source->hdc, dirty.left, dirty.top, SRCCOPY, 0, 0 );
+        NtUserReleaseDC( embed, hdc );
+    }
+
+done:
+    pthread_mutex_unlock( &cross_process_sources_lock );
+}
+
+/***********************************************************************
  *           update_visible_region
  *
  * Set the visible region and X11 drawable for the DC associated to
@@ -870,7 +1220,7 @@ static void update_visible_region( struct dce *dce )
     DWORD flags = dce->flags;
     DWORD paint_flags = 0;
     size_t size = 256;
-    RECT win_rect, top_rect;
+    RECT win_rect, top_rect, embed_rect;
     UINT raw_dpi;
     DWORD layered_flags;
     WND *win;
@@ -925,7 +1275,14 @@ static void update_visible_region( struct dce *dce )
             if (surface) window_surface_add_ref( surface );
             release_win_ptr( win );
         }
+        else if (win == WND_OTHER_PROCESS && (surface = get_cross_process_surface( dce->hwnd, top_win, &embed_rect )))
+            top_rect = embed_rect;
     }
+
+    if (dce->cross_process) window_surface_release( dce->cross_process );
+    dce->cross_process = NULL;
+    if (surface && surface->funcs == &cross_process_surface_funcs)
+        window_surface_add_ref( (dce->cross_process = surface) );
 
     if (surface)
     {
@@ -959,6 +1316,8 @@ static void release_dce( struct dce *dce )
 
     set_visible_region( dce->hdc, 0, &dummy_surface.rect, &dummy_surface.rect, &dummy_surface, 0, 0 );
     user_driver->pReleaseDC( dce->hwnd, dce->hdc );
+    if (dce->cross_process) window_surface_release( dce->cross_process );
+    dce->cross_process = NULL;
 
     if (dce->clip_rgn) NtGdiDeleteObjectApp( dce->clip_rgn );
     dce->clip_rgn = 0;
@@ -1000,6 +1359,7 @@ BOOL delete_dce( struct dce *dce )
     {
         list_remove( &dce->entry );
         if (dce->clip_rgn) NtGdiDeleteObjectApp( dce->clip_rgn );
+        if (dce->cross_process) window_surface_release( dce->cross_process );
         free( dce );
     }
     user_unlock();
@@ -1044,6 +1404,7 @@ static struct dce *alloc_dce(void)
     dce->clip_rgn  = 0;
     dce->flags     = 0;
     dce->count     = 1;
+    dce->cross_process = NULL;
 
     set_dc_dce( dce->hdc, dce );
     return dce;
@@ -1297,6 +1658,7 @@ void invalidate_dce( WND *win, const RECT *old_rect )
 static INT release_dc( HWND hwnd, HDC hdc, BOOL end_paint )
 {
     struct list drawables = LIST_INIT( drawables );
+    struct window_surface *cross_process = NULL;
     struct dce *dce;
     BOOL ret = FALSE;
 
@@ -1306,6 +1668,8 @@ static INT release_dc( HWND hwnd, HDC hdc, BOOL end_paint )
     dce = get_dc_dce( hdc );
     if (dce && dce->count && dce->hwnd)
     {
+        /* the process drawing into another process's window may never go idle */
+        if ((cross_process = dce->cross_process)) window_surface_add_ref( cross_process );
         if (!(dce->flags & DCX_NORESETATTRS)) set_dce_flags( dce->hdc, DCHF_RESETDC );
         if (end_paint || (dce->flags & DCX_CACHE)) delete_clip_rgn( dce );
         if (dce->flags & DCX_CACHE)
@@ -1318,6 +1682,11 @@ static INT release_dc( HWND hwnd, HDC hdc, BOOL end_paint )
     }
     user_unlock();
 
+    if (cross_process)
+    {
+        window_surface_flush( cross_process );
+        window_surface_release( cross_process );
+    }
     release_opengl_drawables( &drawables );
     return ret;
 }
