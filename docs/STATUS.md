@@ -88,6 +88,13 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   Windows matches that name is unverified. The Office Add-ins store dialog
   is hosted in the IE WebBrowser control (Wine Gecko), not WebView2, and
   stays on its loading spinner.
+- **0.1.21** (`35288d5`, packages and checked SHA256SUMS in `dist/0.1.21/`)
+  has all of the above. Its runner passes `tests/cross-process-child.c`,
+  `tests/webview2-office.py` (Online Pictures renders, takes typing, shows
+  results and inserts; 0.1.19 fails the rendering checks) and the
+  Word/Excel/PowerPoint suite; `packaging/test-packages.sh` passes on
+  archlinux:latest and ubuntu:24.04. Also checked by hand: Excel's Icons
+  picker inserts an SVG icon. Host pacman is still **0.1.13-1**.
 - **0.1.20** (`45f8a3f`, packages in `dist/0.1.20/`) contains the rendering,
   focus workaround, hlink and setup changes but not the popup compositing,
   which came after it. Its runner passes the cross-process test, renders
