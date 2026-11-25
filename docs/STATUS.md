@@ -47,6 +47,8 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   with touchpad and wheel scrolls ending on page breaks: sharp 0.3 s after
   each scroll; the caret still blinks; Word, Excel and PowerPoint suites
   and the WebView2 Online Pictures test pass.
+  Released as 0.1.24: the container-built runner gives the same sharp
+  results and passes the suites; packages install on Arch Linux and Ubuntu.
 
 - **Launch window (25 November):** `tuxoffice run` showed nothing until
   Office's own splash, which after a cold start took 4.5 s in the test
