@@ -37,3 +37,4 @@ winegcc -b x86_64-windows -mconsole -o "$destination/typelib-index.exe" "$HERE/t
 winegcc -b i386-windows -mconsole -o "$destination/typelib-index32.exe" "$HERE/typelib-index.c" -loleaut32 -lole32 -luuid
 winegcc -b x86_64-windows -mconsole -o "$destination/ado-layout.exe" "$HERE/ado-layout.c" -loleaut32 -lole32 -luuid
 winegcc -b i386-windows -mconsole -o "$destination/ado-layout32.exe" "$HERE/ado-layout.c" -loleaut32 -lole32 -luuid
+winegcc -b x86_64-windows -mconsole -o "$destination/cross-process-child.exe" "$HERE/cross-process-child.c" -luser32 -lgdi32
