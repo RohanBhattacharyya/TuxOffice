@@ -990,10 +990,32 @@ struct composition_drawing_surface
     BOOL virtual;
     POINT bitmap_offset;
     struct list tiles;
+    /* Updates begun before the previous one ended, oldest first (see BeginDraw). */
+    struct list pending_updates;
     /* bumped whenever the pixels a brush would draw can change */
     LONG content_version;
     LONG ref;
 };
+
+/* An update the application has not ended yet when it begins another one. */
+struct pending_surface_update
+{
+    struct list entry;
+    ID2D1DeviceContext *context;
+    ID2D1Bitmap1 *bitmap;
+    POINT bitmap_offset;
+    RECT update_rect;
+    BOOL suspended;
+};
+
+static CRITICAL_SECTION surface_update_cs;
+static CRITICAL_SECTION_DEBUG surface_update_cs_debug =
+{
+    0, 0, &surface_update_cs,
+    { &surface_update_cs_debug.ProcessLocksList, &surface_update_cs_debug.ProcessLocksList },
+      0, 0, { (DWORD_PTR)(__FILE__ ": surface_update_cs") }
+};
+static CRITICAL_SECTION surface_update_cs = { &surface_update_cs_debug, -1, 0, 0, 0, 0 };
 
 static const GUID redirect_visual_iid =
     {0x8cc6e340,0x8b75,0x5422,{0xb0,0x6f,0x09,0xff,0xe9,0xf8,0x61,0x7e}};
@@ -12092,6 +12114,15 @@ static ULONG WINAPI composition_drawing_surface_Release( ICompositionDrawingSurf
 
     if (!ref)
     {
+        struct pending_surface_update *update, *next;
+
+        LIST_FOR_EACH_ENTRY_SAFE( update, next, &impl->pending_updates, struct pending_surface_update, entry )
+        {
+            list_remove( &update->entry );
+            ID2D1DeviceContext_Release( update->context );
+            if (update->bitmap) ID2D1Bitmap1_Release( update->bitmap );
+            free( update );
+        }
         drawing_surface_clear_tiles( impl );
         if (impl->bitmap) ID2D1Bitmap1_Release( impl->bitmap );
         if (impl->committed_bitmap) ID2D1Bitmap1_Release( impl->committed_bitmap );
@@ -12324,10 +12355,35 @@ static HRESULT drawing_surface_update_device( struct composition_drawing_surface
     return S_OK;
 }
 
-static HRESULT WINAPI composition_drawing_surface_interop_BeginDraw( ICompositionDrawingSurfaceInterop *iface,
+/* Office begins the next update of a surface on its UI thread before its render
+ * thread ends the previous one: Excel draws its sheet tab
+ * strip's background, then each tab, suspending each, and ends them all with one
+ * EndDraw. Keep the previous update to complete at that EndDraw, and give the new
+ * one its own device context (and, for a virtual surface, its own bitmap). */
+static HRESULT drawing_surface_queue_update( struct composition_drawing_surface *impl )
+{
+    struct pending_surface_update *update;
+
+    if (!(update = calloc( 1, sizeof(*update) ))) return E_OUTOFMEMORY;
+    update->context = impl->context;
+    update->bitmap = impl->bitmap;
+    update->bitmap_offset = impl->bitmap_offset;
+    update->update_rect = impl->update_rect;
+    update->suspended = impl->suspended;
+    impl->context = NULL;
+    if (impl->virtual) impl->bitmap = NULL;
+    else if (update->bitmap) ID2D1Bitmap1_AddRef( update->bitmap );
+    list_add_tail( &impl->pending_updates, &update->entry );
+    impl->drawing = FALSE;
+    impl->suspended = FALSE;
+    TRACE_(uisurface)( "surface %p queued update %s\n", impl, wine_dbgstr_rect( &update->update_rect ) );
+    return S_OK;
+}
+
+static HRESULT drawing_surface_begin_draw( struct composition_drawing_surface *impl,
         const RECT *update_rect, REFIID iid, void **update_object, POINT *update_offset )
 {
-    struct composition_drawing_surface *impl = impl_from_ICompositionDrawingSurfaceInterop( iface );
+    ICompositionDrawingSurfaceInterop *iface = &impl->ICompositionDrawingSurfaceInterop_iface;
     D2D1_BITMAP_PROPERTIES1 desc = {0};
     D2D1_COLOR_F clear = {0.0f, 0.0f, 0.0f, 0.0f};
     D2D1_SIZE_U bitmap_size, size;
@@ -12342,12 +12398,16 @@ static HRESULT WINAPI composition_drawing_surface_interop_BeginDraw( ICompositio
     if (update_offset) update_offset->x = update_offset->y = 0;
     if (!IsEqualGUID( iid, &IID_IDXGISurface ) && !IsEqualGUID( iid, &IID_ID2D1DeviceContext ))
         return E_NOINTERFACE;
-    if (impl->drawing) return D2DERR_WRONG_STATE;
     if (update_rect && (update_rect->left < 0 || update_rect->top < 0 ||
             update_rect->right <= update_rect->left || update_rect->bottom <= update_rect->top ||
             update_rect->right > impl->size.Width || update_rect->bottom > impl->size.Height))
+    {
+        WARN( "rect %s outside surface %p of %ux%u.\n", wine_dbgstr_rect( update_rect ), impl,
+                impl->size.Width, impl->size.Height );
         return E_INVALIDARG;
+    }
     if (impl->virtual && !update_rect) return E_INVALIDARG;
+    if (impl->drawing && FAILED(hr = drawing_surface_queue_update( impl ))) return hr;
     if (FAILED(hr = drawing_surface_update_device( impl ))) return hr;
     if (!impl->context && FAILED(hr = ID2D1Device_CreateDeviceContext( impl->device,
             D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &impl->context ))) return hr;
@@ -12405,6 +12465,19 @@ static HRESULT WINAPI composition_drawing_surface_interop_BeginDraw( ICompositio
             impl->context, impl->bitmap, debugstr_guid(iid), wine_dbgstr_rect(&impl->update_rect),
             wine_dbgstr_point(update_offset));
     return S_OK;
+}
+
+static HRESULT WINAPI composition_drawing_surface_interop_BeginDraw( ICompositionDrawingSurfaceInterop *iface,
+        const RECT *update_rect, REFIID iid, void **update_object, POINT *update_offset )
+{
+    struct composition_drawing_surface *impl = impl_from_ICompositionDrawingSurfaceInterop( iface );
+    HRESULT hr;
+
+    EnterCriticalSection( &surface_update_cs );
+    hr = drawing_surface_begin_draw( impl, update_rect, iid, update_object, update_offset );
+    LeaveCriticalSection( &surface_update_cs );
+    if (FAILED(hr)) WARN( "surface %p rect %s failed, hr %#lx.\n", impl, wine_dbgstr_rect( update_rect ), hr );
+    return hr;
 }
 
 static struct composition_drawing_surface *drawing_surface_from_composition_surface(
@@ -14273,14 +14346,48 @@ static HRESULT drawing_surface_publish_bitmap( struct composition_drawing_surfac
     return S_OK;
 }
 
-static HRESULT WINAPI composition_drawing_surface_interop_EndDraw( ICompositionDrawingSurfaceInterop *iface )
+/* Completes the oldest queued update. */
+static HRESULT drawing_surface_end_queued_update( struct composition_drawing_surface *impl )
 {
-    struct composition_drawing_surface *impl = impl_from_ICompositionDrawingSurfaceInterop( iface );
+    struct pending_surface_update *update = LIST_ENTRY( list_head( &impl->pending_updates ),
+            struct pending_surface_update, entry );
+    ID2D1DeviceContext *context = impl->context;
+    ID2D1Bitmap1 *bitmap = impl->bitmap;
+    POINT offset = impl->bitmap_offset;
+    RECT rect = impl->update_rect;
     HRESULT hr;
 
-    InterlockedIncrement( &impl->content_version );
-    TRACE( "iface %p.\n", iface );
+    list_remove( &update->entry );
+    TRACE_(uisurface)( "surface %p ends queued update %s\n", impl, wine_dbgstr_rect( &update->update_rect ) );
+    if (!update->suspended && FAILED(hr = ID2D1DeviceContext_EndDraw( update->context, NULL, NULL )))
+        WARN( "surface %p queued update failed, hr %#lx.\n", impl, hr );
+    else if (update->bitmap)
+    {
+        impl->context = update->context;
+        impl->bitmap = update->bitmap;
+        impl->bitmap_offset = update->bitmap_offset;
+        impl->update_rect = update->update_rect;
+        if (impl->virtual) hr = drawing_surface_update_tiles( impl );
+        else hr = drawing_surface_publish_bitmap( impl );
+        impl->context = context;
+        impl->bitmap = bitmap;
+        impl->bitmap_offset = offset;
+        impl->update_rect = rect;
+    }
+    ID2D1DeviceContext_Release( update->context );
+    if (update->bitmap) ID2D1Bitmap1_Release( update->bitmap );
+    free( update );
+    return hr;
+}
+
+static HRESULT drawing_surface_end_draw( struct composition_drawing_surface *impl )
+{
+    HRESULT hr;
+
     TRACE_(uisurface)("surface %p context %p drawing %d\n", impl, impl->context, impl->drawing);
+    /* Office ends all the updates of a surface with one EndDraw. */
+    while (!list_empty( &impl->pending_updates ))
+        if (FAILED(hr = drawing_surface_end_queued_update( impl ))) WARN( "hr %#lx\n", hr );
     if (impl->drawing)
     {
         impl->drawing = FALSE;
@@ -14288,8 +14395,20 @@ static HRESULT WINAPI composition_drawing_surface_interop_EndDraw( ICompositionD
         impl->suspended = FALSE;
     }
     if (!impl->bitmap) return S_OK;
-    if (impl->virtual) hr = drawing_surface_update_tiles( impl );
-    else hr = drawing_surface_publish_bitmap( impl );
+    if (impl->virtual) return drawing_surface_update_tiles( impl );
+    return drawing_surface_publish_bitmap( impl );
+}
+
+static HRESULT WINAPI composition_drawing_surface_interop_EndDraw( ICompositionDrawingSurfaceInterop *iface )
+{
+    struct composition_drawing_surface *impl = impl_from_ICompositionDrawingSurfaceInterop( iface );
+    HRESULT hr;
+
+    InterlockedIncrement( &impl->content_version );
+    TRACE( "iface %p.\n", iface );
+    EnterCriticalSection( &surface_update_cs );
+    hr = drawing_surface_end_draw( impl );
+    LeaveCriticalSection( &surface_update_cs );
     if (SUCCEEDED(hr)) compositor_notify_commit_needed( impl_from_ICompositor( impl->compositor ) );
     return hr;
 }
@@ -14502,6 +14621,7 @@ static HRESULT WINAPI composition_graphics_device_CreateDrawingSurface( IComposi
     impl->compositor = impl_from_ICompositionGraphicsDevice( iface )->compositor;
     ICompositor_AddRef( impl->compositor );
     list_init( &impl->tiles );
+    list_init( &impl->pending_updates );
     impl->size = pixels;
     impl->format = format;
     impl->mode = mode;
@@ -14646,6 +14766,7 @@ static HRESULT WINAPI composition_graphics_device2_CreateVirtualDrawingSurface(
     impl->compositor = device->compositor;
     ICompositor_AddRef( impl->compositor );
     list_init( &impl->tiles );
+    list_init( &impl->pending_updates );
     impl->size.Width = pixels.Width;
     impl->size.Height = pixels.Height;
     impl->format = format;
