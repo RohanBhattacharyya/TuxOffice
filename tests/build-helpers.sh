@@ -26,3 +26,5 @@ winegcc -b x86_64-windows -mconsole -o "$destination/native-path.exe" "$HERE/nat
 winegcc -b i386-windows -mconsole -o "$destination/native-path32.exe" "$HERE/native-path.c" -lntdll
 winegcc -b x86_64-windows -mconsole -municode -o "$destination/typelib-load.exe" "$HERE/typelib-load.c" -loleaut32 -lole32
 winegcc -b i386-windows -mconsole -municode -o "$destination/typelib-load32.exe" "$HERE/typelib-load.c" -loleaut32 -lole32
+winegcc -b x86_64-windows -mconsole -o "$destination/typelib-dual.exe" "$HERE/typelib-dual.c" -loleaut32 -lole32 -luuid -luser32
+winegcc -b i386-windows -mconsole -o "$destination/typelib-dual32.exe" "$HERE/typelib-dual.c" -loleaut32 -lole32 -luuid -luser32

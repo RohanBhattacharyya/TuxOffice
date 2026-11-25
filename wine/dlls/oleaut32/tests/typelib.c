@@ -3146,7 +3146,6 @@ static void test_CreateTypeLib(SYSKIND sys) {
     EXPECT_REF(dual, 2);
     hres = ITypeInfo_GetRefTypeInfo(dual, -2, &ti);
     ok(hres == S_OK, "got %08lx\n", hres);
-    todo_wine
     EXPECT_REF(dual, 3);
 
     hres = ITypeInfo_GetTypeAttr(ti, &typeattr);
@@ -3167,12 +3166,9 @@ static void test_CreateTypeLib(SYSKIND sys) {
 
     hres = ITypeInfo_GetRefTypeInfo(dual, -2, &ti_2);
     ok(hres == S_OK, "Failed to get reference typeinfo, hr %#lx.\n", hres);
-todo_wine {
     ok(ti == ti_2, "Unexpected typeinfo instance.\n");
     EXPECT_REF(dual, 4);
-}
     ITypeInfo_AddRef(ti_2);
-    todo_wine
     EXPECT_REF(dual, 5);
     ITypeInfo_Release(ti_2);
 

@@ -1227,7 +1227,6 @@ typedef struct tagITypeInfoImpl
     ITypeComp ITypeComp_iface;
     ICreateTypeInfo2 ICreateTypeInfo2_iface;
     LONG ref;
-    BOOL not_attached_to_typelib;
     BOOL needs_layout;
 
     TLBGuid *guid;
@@ -1258,16 +1257,42 @@ typedef struct tagITypeInfoImpl
 
     struct list *pcustdata_list;
     struct list custdata_list;
+    /* The two views of a dual interface share their editable description. */
+    ITypeInfo2 dual_iface;
+    ITypeComp dual_comp_iface;
 } ITypeInfoImpl;
+
+static const ITypeInfo2Vtbl dual_tinfvt;
+static const ITypeCompVtbl dual_tcompvt;
 
 static inline ITypeInfoImpl *info_impl_from_ITypeComp( ITypeComp *iface )
 {
+    if (iface->lpVtbl == &dual_tcompvt)
+        return CONTAINING_RECORD(iface, ITypeInfoImpl, dual_comp_iface);
     return CONTAINING_RECORD(iface, ITypeInfoImpl, ITypeComp_iface);
 }
 
 static inline ITypeInfoImpl *impl_from_ITypeInfo2( ITypeInfo2 *iface )
 {
+    if (iface->lpVtbl == &dual_tinfvt)
+        return CONTAINING_RECORD(iface, ITypeInfoImpl, dual_iface);
     return CONTAINING_RECORD(iface, ITypeInfoImpl, ITypeInfo2_iface);
+}
+
+static inline TYPEKIND typeinfo_kind(ITypeInfo2 *iface)
+{
+    ITypeInfoImpl *info = impl_from_ITypeInfo2(iface);
+    TYPEKIND kind = info->typeattr.typekind;
+
+    if (iface == &info->dual_iface)
+        kind = kind == TKIND_INTERFACE ? TKIND_DISPATCH : TKIND_INTERFACE;
+    return kind;
+}
+
+static inline ITypeInfo2 *typeinfo_from_typecomp(ITypeComp *iface)
+{
+    ITypeInfoImpl *info = info_impl_from_ITypeComp(iface);
+    return iface == &info->dual_comp_iface ? &info->dual_iface : &info->ITypeInfo2_iface;
 }
 
 static inline ITypeInfoImpl *impl_from_ITypeInfo( ITypeInfo *iface )
@@ -5666,6 +5691,8 @@ static ITypeInfoImpl* ITypeInfoImpl_Constructor(void)
       pTypeInfoImpl->ITypeInfo2_iface.lpVtbl = &tinfvt;
       pTypeInfoImpl->ITypeComp_iface.lpVtbl = &tcompvt;
       pTypeInfoImpl->ICreateTypeInfo2_iface.lpVtbl = &CreateTypeInfo2Vtbl;
+      pTypeInfoImpl->dual_iface.lpVtbl = &dual_tinfvt;
+      pTypeInfoImpl->dual_comp_iface.lpVtbl = &dual_tcompvt;
       pTypeInfoImpl->ref = 0;
       pTypeInfoImpl->hreftype = -1;
       pTypeInfoImpl->typeattr.memidConstructor = MEMBERID_NIL;
@@ -5689,15 +5716,13 @@ static HRESULT WINAPI ITypeInfo_fnQueryInterface(
     TRACE("(%p)->(IID: %s)\n",This,debugstr_guid(riid));
 
     *ppvObject=NULL;
-    if(IsEqualIID(riid, &IID_IUnknown) ||
-            IsEqualIID(riid,&IID_ITypeInfo)||
-            IsEqualIID(riid,&IID_ITypeInfo2))
-        *ppvObject = &This->ITypeInfo2_iface;
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_ITypeInfo) || IsEqualIID(riid, &IID_ITypeInfo2))
+        *ppvObject = iface;
     else if(IsEqualIID(riid, &IID_ICreateTypeInfo) ||
              IsEqualIID(riid, &IID_ICreateTypeInfo2))
         *ppvObject = &This->ICreateTypeInfo2_iface;
     else if(IsEqualIID(riid, &IID_ITypeComp))
-        *ppvObject = &This->ITypeComp_iface;
+        *ppvObject = iface == &This->dual_iface ? &This->dual_comp_iface : &This->ITypeComp_iface;
 
     if(*ppvObject){
         IUnknown_AddRef((IUnknown*)*ppvObject);
@@ -5789,14 +5814,7 @@ static ULONG WINAPI ITypeInfo_fnRelease(ITypeInfo2 *iface)
 
     TRACE("%p, refcount %lu.\n", iface, ref);
 
-    if (!ref)
-    {
-        BOOL not_attached_to_typelib = This->not_attached_to_typelib;
-        ITypeLib2_Release(&This->pTypeLib->ITypeLib2_iface);
-        if (not_attached_to_typelib)
-            free(This);
-        /* otherwise This will be freed when typelib is freed */
-    }
+    if (!ref) ITypeLib2_Release(&This->pTypeLib->ITypeLib2_iface);
 
     return ref;
 }
@@ -5818,6 +5836,7 @@ static HRESULT WINAPI ITypeInfo_fnGetTypeAttr( ITypeInfo2 *iface,
         return E_OUTOFMEMORY;
 
     **ppTypeAttr = This->typeattr;
+    (*ppTypeAttr)->typekind = typeinfo_kind(iface);
     (*ppTypeAttr)->guid = *TLB_get_guid_null(This->guid);
 
     if (This->tdescAlias)
@@ -5847,7 +5866,7 @@ static HRESULT WINAPI ITypeInfo_fnGetTypeComp( ITypeInfo2 *iface,
 
     TRACE("(%p)->(%p)\n", This, ppTComp);
 
-    *ppTComp = &This->ITypeComp_iface;
+    *ppTComp = iface == &This->dual_iface ? &This->dual_comp_iface : &This->ITypeComp_iface;
     ITypeComp_AddRef(*ppTComp);
     return S_OK;
 }
@@ -6061,7 +6080,7 @@ static HRESULT ITypeInfoImpl_GetInternalFuncDesc( ITypeInfo *iface, UINT index, 
 {
     ITypeInfoImpl *This = impl_from_ITypeInfo(iface);
 
-    if (This->typeattr.typekind == TKIND_DISPATCH)
+    if (typeinfo_kind((ITypeInfo2 *)iface) == TKIND_DISPATCH)
         return ITypeInfoImpl_GetInternalDispatchFuncDesc(iface, index, func_desc, NULL, hrefoffset);
 
     if (index >= This->typeattr.cFuncs)
@@ -6135,9 +6154,9 @@ static HRESULT WINAPI ITypeInfo_fnGetFuncDesc( ITypeInfo2 *iface, UINT index,
     hr = TLB_AllocAndInitFuncDesc(
         &internal_funcdesc->funcdesc,
         ppFuncDesc,
-        This->typeattr.typekind == TKIND_DISPATCH);
+        typeinfo_kind(iface) == TKIND_DISPATCH);
 
-    if ((This->typeattr.typekind == TKIND_DISPATCH) && hrefoffset)
+    if ((typeinfo_kind(iface) == TKIND_DISPATCH) && hrefoffset)
         ITypeInfoImpl_FuncDescAddHrefOffset(*ppFuncDesc, hrefoffset);
 
     TRACE("-- %#lx.\n", hr);
@@ -6302,14 +6321,12 @@ static HRESULT typeinfo_getnames( ITypeInfo *iface, MEMBERID memid, BSTR *names,
 static HRESULT WINAPI ITypeInfo_fnGetNames( ITypeInfo2 *iface, MEMBERID memid,
                                             BSTR *names, UINT max_names, UINT *num_names)
 {
-    ITypeInfoImpl *This = impl_from_ITypeInfo2(iface);
-
     TRACE("%p, %#lx, %p, %d, %p\n", iface, memid, names, max_names, num_names);
 
     if (!names) return E_INVALIDARG;
 
     return typeinfo_getnames((ITypeInfo *)iface, memid, names, max_names, num_names,
-                             This->typeattr.typekind == TKIND_DISPATCH);
+                             typeinfo_kind(iface) == TKIND_DISPATCH);
 }
 
 /* ITypeInfo::GetRefTypeOfImplType
@@ -6346,7 +6363,7 @@ static HRESULT WINAPI ITypeInfo_fnGetRefTypeOfImplType(
         hr = TYPE_E_ELEMENTNOTFOUND;
       }
     }
-    else if(index == 0 && This->typeattr.typekind == TKIND_DISPATCH)
+    else if(index == 0 && typeinfo_kind(iface) == TKIND_DISPATCH)
     {
       /* All TKIND_DISPATCHs are made to look like they inherit from IDispatch */
       *pRefType = This->pTypeLib->dispatch_href;
@@ -6357,7 +6374,7 @@ static HRESULT WINAPI ITypeInfo_fnGetRefTypeOfImplType(
             hr = TYPE_E_ELEMENTNOTFOUND;
         else{
             *pRefType = This->impltypes[index].hRef;
-            if (This->typeattr.typekind == TKIND_INTERFACE)
+            if (typeinfo_kind(iface) == TKIND_INTERFACE)
                 *pRefType |= 0x2;
         }
     }
@@ -6388,7 +6405,7 @@ static HRESULT WINAPI ITypeInfo_fnGetImplTypeFlags( ITypeInfo2 *iface,
     if(!pImplTypeFlags)
         return E_INVALIDARG;
 
-    if(This->typeattr.typekind == TKIND_DISPATCH && index == 0){
+    if(typeinfo_kind(iface) == TKIND_DISPATCH && index == 0){
         *pImplTypeFlags = 0;
         return S_OK;
     }
@@ -6399,6 +6416,23 @@ static HRESULT WINAPI ITypeInfo_fnGetImplTypeFlags( ITypeInfo2 *iface,
     *pImplTypeFlags = This->impltypes[index].implflags;
 
     return S_OK;
+}
+
+static HRESULT typeinfo_get_inherited_ids(ITypeInfo2 *iface, LPOLESTR *names, UINT count, MEMBERID *ids)
+{
+    ITypeInfoImpl *info = impl_from_ITypeInfo2(iface);
+    ITypeInfo *parent;
+    HRESULT hr;
+
+    hr = ITypeInfo2_GetRefTypeInfo(iface, info->impltypes[0].hRef, &parent);
+    if (FAILED(hr))
+    {
+        WARN("Could not search inherited interface!\n");
+        return DISP_E_UNKNOWNNAME;
+    }
+    hr = ITypeInfo_GetIDsOfNames(parent, names, count, ids);
+    ITypeInfo_Release(parent);
+    return hr;
 }
 
 /* GetIDsOfNames
@@ -6418,6 +6452,13 @@ static HRESULT WINAPI ITypeInfo_fnGetIDsOfNames( ITypeInfo2 *iface,
     /* init out parameters in case of failure */
     for (i = 0; i < cNames; i++)
         pMemId[i] = MEMBERID_NIL;
+
+    if (This->impltypes && (This->typeattr.wTypeFlags & TYPEFLAG_FREVERSEBIND))
+    {
+        ret = typeinfo_get_inherited_ids(iface, rgszNames, cNames, pMemId);
+        if (ret != DISP_E_UNKNOWNNAME || (cNames && pMemId[0] != MEMBERID_NIL)) return ret;
+        ret = S_OK;
+    }
 
     for (fdc = 0; fdc < This->typeattr.cFuncs; ++fdc) {
         int j;
@@ -6444,17 +6485,9 @@ static HRESULT WINAPI ITypeInfo_fnGetIDsOfNames( ITypeInfo2 *iface,
         return ret;
     }
     /* not found, see if it can be found in an inherited interface */
-    if(This->impltypes) {
-        /* recursive search */
-        ITypeInfo *pTInfo;
-        ret = ITypeInfo2_GetRefTypeInfo(iface, This->impltypes[0].hRef, &pTInfo);
-        if(SUCCEEDED(ret)){
-            ret=ITypeInfo_GetIDsOfNames(pTInfo, rgszNames, cNames, pMemId );
-            ITypeInfo_Release(pTInfo);
-            return ret;
-        }
-        WARN("Could not search inherited interface!\n");
-    } else
+    if (This->impltypes && !(This->typeattr.wTypeFlags & TYPEFLAG_FREVERSEBIND))
+        return typeinfo_get_inherited_ids(iface, rgszNames, cNames, pMemId);
+    else
         WARN("no names found\n");
     return DISP_E_UNKNOWNNAME;
 }
@@ -7905,41 +7938,18 @@ static HRESULT WINAPI ITypeInfo_fnGetRefTypeInfo(
     if(!ppTInfo)
         return E_INVALIDARG;
 
-    if ((INT)hRefType < 0) {
-        ITypeInfoImpl *pTypeInfoImpl;
-
+    if ((INT)hRefType < 0)
+    {
         if (!(This->typeattr.wTypeFlags & TYPEFLAG_FDUAL) ||
-                !(This->typeattr.typekind == TKIND_INTERFACE ||
-                    This->typeattr.typekind == TKIND_DISPATCH))
+                !(typeinfo_kind(iface) == TKIND_INTERFACE || typeinfo_kind(iface) == TKIND_DISPATCH))
             return TYPE_E_ELEMENTNOTFOUND;
 
-        /* when we meet a DUAL typeinfo, we must create the alternate
-        * version of it.
-        */
-        pTypeInfoImpl = ITypeInfoImpl_Constructor();
-
-        *pTypeInfoImpl = *This;
-        pTypeInfoImpl->ref = 0;
-        list_init(&pTypeInfoImpl->custdata_list);
-
-        if (This->typeattr.typekind == TKIND_INTERFACE)
-            pTypeInfoImpl->typeattr.typekind = TKIND_DISPATCH;
-        else
-            pTypeInfoImpl->typeattr.typekind = TKIND_INTERFACE;
-
-        *ppTInfo = (ITypeInfo *)&pTypeInfoImpl->ITypeInfo2_iface;
-        /* the AddRef implicitly adds a reference to the parent typelib, which
-         * stops the copied data from being destroyed until the new typeinfo's
-         * refcount goes to zero, but we need to signal to the new instance to
-         * not free its data structures when it is destroyed */
-        pTypeInfoImpl->not_attached_to_typelib = TRUE;
+        *ppTInfo = (ITypeInfo *)(iface == &This->dual_iface ? &This->ITypeInfo2_iface : &This->dual_iface);
         ITypeInfo_AddRef(*ppTInfo);
-
-        TRACE("got dual interface %p\n", *ppTInfo);
         return S_OK;
     }
 
-    if ((hRefType & DISPATCH_HREF_MASK) && (This->typeattr.typekind == TKIND_DISPATCH))
+    if ((hRefType & DISPATCH_HREF_MASK) && (typeinfo_kind(iface) == TKIND_DISPATCH))
         return ITypeInfoImpl_GetDispatchRefTypeInfo((ITypeInfo *)iface, &hRefType, ppTInfo);
 
     if(!(hRefType & 0x1))
@@ -7954,7 +7964,7 @@ static HRESULT WINAPI ITypeInfo_fnGetRefTypeInfo(
                  * libraries store. Dual interfaces made with ICreateTypeInfo are held as
                  * TKIND_INTERFACE, so give their alternate here: callers such as Access ask
                  * it for the interface view next, with the -1 reference. */
-                if (This->typeattr.typekind == TKIND_COCLASS && target->typeattr.typekind == TKIND_INTERFACE &&
+                if (typeinfo_kind(iface) == TKIND_COCLASS && target->typeattr.typekind == TKIND_INTERFACE &&
                         (target->typeattr.wTypeFlags & TYPEFLAG_FDUAL))
                     return ITypeInfo2_GetRefTypeInfo(&target->ITypeInfo2_iface, (HREFTYPE)-2, ppTInfo);
                 result = S_OK;
@@ -8271,7 +8281,7 @@ static HRESULT WINAPI ITypeInfo2_fnGetTypeKind( ITypeInfo2 * iface,
     TYPEKIND *pTypeKind)
 {
     ITypeInfoImpl *This = impl_from_ITypeInfo2(iface);
-    *pTypeKind = This->typeattr.typekind;
+    *pTypeKind = typeinfo_kind(iface);
     TRACE("(%p) type 0x%0x\n", This,*pTypeKind);
     return S_OK;
 }
@@ -8659,49 +8669,48 @@ static HRESULT WINAPI ITypeInfo2_fnGetAllImplTypeCustData(
     return TLB_copy_all_custdata(&pRDesc->custdata_list, pCustData);
 }
 
-static const ITypeInfo2Vtbl tinfvt =
-{
-
-    ITypeInfo_fnQueryInterface,
-    ITypeInfo_fnAddRef,
-    ITypeInfo_fnRelease,
-
-    ITypeInfo_fnGetTypeAttr,
-    ITypeInfo_fnGetTypeComp,
-    ITypeInfo_fnGetFuncDesc,
-    ITypeInfo_fnGetVarDesc,
-    ITypeInfo_fnGetNames,
-    ITypeInfo_fnGetRefTypeOfImplType,
-    ITypeInfo_fnGetImplTypeFlags,
-    ITypeInfo_fnGetIDsOfNames,
-    ITypeInfo_fnInvoke,
-    ITypeInfo_fnGetDocumentation,
-    ITypeInfo_fnGetDllEntry,
-    ITypeInfo_fnGetRefTypeInfo,
-    ITypeInfo_fnAddressOfMember,
-    ITypeInfo_fnCreateInstance,
-    ITypeInfo_fnGetMops,
-    ITypeInfo_fnGetContainingTypeLib,
-    ITypeInfo_fnReleaseTypeAttr,
-    ITypeInfo_fnReleaseFuncDesc,
-    ITypeInfo_fnReleaseVarDesc,
-
-    ITypeInfo2_fnGetTypeKind,
-    ITypeInfo2_fnGetTypeFlags,
-    ITypeInfo2_fnGetFuncIndexOfMemId,
-    ITypeInfo2_fnGetVarIndexOfMemId,
-    ITypeInfo2_fnGetCustData,
-    ITypeInfo2_fnGetFuncCustData,
-    ITypeInfo2_fnGetParamCustData,
-    ITypeInfo2_fnGetVarCustData,
-    ITypeInfo2_fnGetImplTypeCustData,
-    ITypeInfo2_fnGetDocumentation2,
-    ITypeInfo2_fnGetAllCustData,
-    ITypeInfo2_fnGetAllFuncCustData,
-    ITypeInfo2_fnGetAllParamCustData,
-    ITypeInfo2_fnGetAllVarCustData,
+#define TYPEINFO_VTBL_ENTRIES \
+    ITypeInfo_fnQueryInterface, \
+    ITypeInfo_fnAddRef, \
+    ITypeInfo_fnRelease, \
+    ITypeInfo_fnGetTypeAttr, \
+    ITypeInfo_fnGetTypeComp, \
+    ITypeInfo_fnGetFuncDesc, \
+    ITypeInfo_fnGetVarDesc, \
+    ITypeInfo_fnGetNames, \
+    ITypeInfo_fnGetRefTypeOfImplType, \
+    ITypeInfo_fnGetImplTypeFlags, \
+    ITypeInfo_fnGetIDsOfNames, \
+    ITypeInfo_fnInvoke, \
+    ITypeInfo_fnGetDocumentation, \
+    ITypeInfo_fnGetDllEntry, \
+    ITypeInfo_fnGetRefTypeInfo, \
+    ITypeInfo_fnAddressOfMember, \
+    ITypeInfo_fnCreateInstance, \
+    ITypeInfo_fnGetMops, \
+    ITypeInfo_fnGetContainingTypeLib, \
+    ITypeInfo_fnReleaseTypeAttr, \
+    ITypeInfo_fnReleaseFuncDesc, \
+    ITypeInfo_fnReleaseVarDesc, \
+    ITypeInfo2_fnGetTypeKind, \
+    ITypeInfo2_fnGetTypeFlags, \
+    ITypeInfo2_fnGetFuncIndexOfMemId, \
+    ITypeInfo2_fnGetVarIndexOfMemId, \
+    ITypeInfo2_fnGetCustData, \
+    ITypeInfo2_fnGetFuncCustData, \
+    ITypeInfo2_fnGetParamCustData, \
+    ITypeInfo2_fnGetVarCustData, \
+    ITypeInfo2_fnGetImplTypeCustData, \
+    ITypeInfo2_fnGetDocumentation2, \
+    ITypeInfo2_fnGetAllCustData, \
+    ITypeInfo2_fnGetAllFuncCustData, \
+    ITypeInfo2_fnGetAllParamCustData, \
+    ITypeInfo2_fnGetAllVarCustData, \
     ITypeInfo2_fnGetAllImplTypeCustData,
-};
+
+static const ITypeInfo2Vtbl tinfvt = { TYPEINFO_VTBL_ENTRIES };
+static const ITypeInfo2Vtbl dual_tinfvt = { TYPEINFO_VTBL_ENTRIES };
+#undef TYPEINFO_VTBL_ENTRIES
 
 /******************************************************************************
  * CreateDispTypeInfo [OLEAUT32.31]
@@ -8827,23 +8836,48 @@ HRESULT WINAPI CreateDispTypeInfo(
 
 static HRESULT WINAPI ITypeComp_fnQueryInterface(ITypeComp * iface, REFIID riid, LPVOID * ppv)
 {
-    ITypeInfoImpl *This = info_impl_from_ITypeComp(iface);
-
-    return ITypeInfo2_QueryInterface(&This->ITypeInfo2_iface, riid, ppv);
+    return ITypeInfo2_QueryInterface(typeinfo_from_typecomp(iface), riid, ppv);
 }
 
 static ULONG WINAPI ITypeComp_fnAddRef(ITypeComp * iface)
 {
-    ITypeInfoImpl *This = info_impl_from_ITypeComp(iface);
-
-    return ITypeInfo2_AddRef(&This->ITypeInfo2_iface);
+    return ITypeInfo2_AddRef(typeinfo_from_typecomp(iface));
 }
 
 static ULONG WINAPI ITypeComp_fnRelease(ITypeComp * iface)
 {
-    ITypeInfoImpl *This = info_impl_from_ITypeComp(iface);
+    return ITypeInfo2_Release(typeinfo_from_typecomp(iface));
+}
 
-    return ITypeInfo2_Release(&This->ITypeInfo2_iface);
+static HRESULT typecomp_bind_inherited(ITypeComp *iface, OLECHAR *name, ULONG hash, WORD flags,
+        ITypeInfo **info, DESCKIND *kind, BINDPTR *binding)
+{
+    ITypeInfoImpl *This = info_impl_from_ITypeComp(iface);
+    ITypeInfo2 *view = typeinfo_from_typecomp(iface);
+    ITypeInfo *parent;
+    ITypeComp *comp;
+    HRESULT hr;
+
+    hr = ITypeInfo2_GetRefTypeInfo(view, This->impltypes[0].hRef, &parent);
+    if (SUCCEEDED(hr))
+    {
+        hr = ITypeInfo_GetTypeComp(parent, &comp);
+        ITypeInfo_Release(parent);
+    }
+    if (FAILED(hr))
+    {
+        WARN("Could not search inherited interface!\n");
+        return S_OK;
+    }
+    hr = ITypeComp_Bind(comp, name, hash, flags, info, kind, binding);
+    ITypeComp_Release(comp);
+    if (SUCCEEDED(hr) && *kind == DESCKIND_FUNCDESC && typeinfo_kind(view) == TKIND_DISPATCH)
+    {
+        FUNCDESC *tmp = binding->lpfuncdesc;
+        hr = TLB_AllocAndInitFuncDesc(tmp, &binding->lpfuncdesc, TRUE);
+        SysFreeString((BSTR)tmp);
+    }
+    return hr;
 }
 
 static HRESULT WINAPI ITypeComp_fnBind(
@@ -8867,6 +8901,13 @@ static HRESULT WINAPI ITypeComp_fnBind(
     pBindPtr->lpfuncdesc = NULL;
     *ppTInfo = NULL;
 
+    if (This->impltypes && (This->typeattr.wTypeFlags & TYPEFLAG_FREVERSEBIND))
+    {
+        hr = typecomp_bind_inherited(iface, szName, lHash, wFlags, ppTInfo, pDescKind, pBindPtr);
+        if (FAILED(hr) || *pDescKind != DESCKIND_NONE) return hr;
+        hr = DISP_E_MEMBERNOTFOUND;
+    }
+
     for(fdc = 0; fdc < This->typeattr.cFuncs; ++fdc){
         pFDesc = &This->funcdescs[fdc];
         if (!lstrcmpiW(TLB_get_bstr(pFDesc->Name), szName)) {
@@ -8883,11 +8924,11 @@ static HRESULT WINAPI ITypeComp_fnBind(
         HRESULT hr = TLB_AllocAndInitFuncDesc(
             &pFDesc->funcdesc,
             &pBindPtr->lpfuncdesc,
-            This->typeattr.typekind == TKIND_DISPATCH);
+            typeinfo_kind(typeinfo_from_typecomp(iface)) == TKIND_DISPATCH);
         if (FAILED(hr))
             return hr;
         *pDescKind = DESCKIND_FUNCDESC;
-        *ppTInfo = (ITypeInfo *)&This->ITypeInfo2_iface;
+        *ppTInfo = (ITypeInfo *)typeinfo_from_typecomp(iface);
         ITypeInfo_AddRef(*ppTInfo);
         return S_OK;
     } else {
@@ -8897,38 +8938,14 @@ static HRESULT WINAPI ITypeComp_fnBind(
             if (FAILED(hr))
                 return hr;
             *pDescKind = DESCKIND_VARDESC;
-            *ppTInfo = (ITypeInfo *)&This->ITypeInfo2_iface;
+            *ppTInfo = (ITypeInfo *)typeinfo_from_typecomp(iface);
             ITypeInfo_AddRef(*ppTInfo);
             return S_OK;
         }
     }
 
-    if (hr == DISP_E_MEMBERNOTFOUND && This->impltypes) {
-        /* recursive search */
-        ITypeInfo *pTInfo;
-        ITypeComp *pTComp;
-        HRESULT hr;
-        hr=ITypeInfo2_GetRefTypeInfo(&This->ITypeInfo2_iface, This->impltypes[0].hRef, &pTInfo);
-        if (SUCCEEDED(hr))
-        {
-            hr = ITypeInfo_GetTypeComp(pTInfo,&pTComp);
-            ITypeInfo_Release(pTInfo);
-        }
-        if (SUCCEEDED(hr))
-        {
-            hr = ITypeComp_Bind(pTComp, szName, lHash, wFlags, ppTInfo, pDescKind, pBindPtr);
-            ITypeComp_Release(pTComp);
-            if (SUCCEEDED(hr) && *pDescKind == DESCKIND_FUNCDESC &&
-                    This->typeattr.typekind == TKIND_DISPATCH)
-            {
-                FUNCDESC *tmp = pBindPtr->lpfuncdesc;
-                hr = TLB_AllocAndInitFuncDesc(tmp, &pBindPtr->lpfuncdesc, TRUE);
-                SysFreeString((BSTR)tmp);
-            }
-            return hr;
-        }
-        WARN("Could not search inherited interface!\n");
-    }
+    if (hr == DISP_E_MEMBERNOTFOUND && This->impltypes && !(This->typeattr.wTypeFlags & TYPEFLAG_FREVERSEBIND))
+        return typecomp_bind_inherited(iface, szName, lHash, wFlags, ppTInfo, pDescKind, pBindPtr);
     if (hr == DISP_E_MEMBERNOTFOUND)
         hr = S_OK;
     TRACE("did not find member with name %s, flags 0x%x\n", debugstr_w(szName), wFlags);
@@ -8957,6 +8974,17 @@ static HRESULT WINAPI ITypeComp_fnBindType(
 }
 
 static const ITypeCompVtbl tcompvt =
+{
+
+    ITypeComp_fnQueryInterface,
+    ITypeComp_fnAddRef,
+    ITypeComp_fnRelease,
+
+    ITypeComp_fnBind,
+    ITypeComp_fnBindType
+};
+
+static const ITypeCompVtbl dual_tcompvt =
 {
 
     ITypeComp_fnQueryInterface,

@@ -44,17 +44,49 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   15 remaining todos (one x64 resource-layout skip). This is a measured library
   parsing improvement; Windows and whole-Office performance parity remain
   unverified. This change is not yet packaged.
-- **Labels wizard diagnosis narrowed:** its `mlbl_frmMain` class loads and
-  compiles successfully. VBA's `TipCreateInstanceEx` then returns
-  `DISP_E_MEMBERNOTFOUND` (`0x80020003`). Its `_HrFromErr` wrapper ORs in
-  `0x800a0000`, producing `0x800a0003`; Access displays the unrelated VBA error
-  text "Return without GoSub" and wraps it as event error 2473. The failing
-  class-creation method is `CVbeProjItem::CreateItemInstance`. Interpreter
-  Return/GoSub error breakpoints do not trigger. A newly created form's real
-  `OnOpen` event passes, as do basic VBA error-handler cases. The wizard remains
-  unresolved; the missing dispatch member during class creation is the next
-  investigation target. The tested Wine `ITypeInfo::Invoke` failure path did
-  not produce this result in the captured wizard run.
+- **Shared metadata for dual interfaces:** alternate `ITypeInfo` views previously
+  received shallow copies of an editable description. Access obtains both views
+  before adding its form-control getters; the original view then has no getters,
+  causing `DISP_E_MEMBERNOTFOUND` during Labels form-class creation. Both views
+  now share one editable description and reference count, with separate interface
+  and type-compiler views preserving the appropriate dispatch signatures. The
+  new `tests/typelib-dual.c` regression follows Access's creation order, checks
+  metadata and binding, and invokes a property after releasing all original
+  interfaces and the library. Both architectures pass 180 checks; the preceding
+  runner fails 19 assertions per architecture. This includes marshalling both
+  views into another COM apartment: their separate COM identities must preserve
+  the different type kinds while their metadata and lifetime are shared. The full
+  type-library suite runs 7,690 x64 and 7,707 x86 checks without failing assertions; eight formerly failing
+  view-identity/reference-count assertions now pass on each architecture. The
+  28 pre-existing successes inside unrelated todo blocks remain. This fix is not
+  packaged or installed on the host.
+- **Reverse name binding:** Access marks generated type information with
+  `TYPEFLAG_FREVERSEBIND`, requesting base members to take precedence over child
+  members. Wine ignored the flag, so fixing the shared metadata exposed field
+  names such as `Name` ahead of built-in form and datasheet properties. Both
+  `ITypeInfo::GetIDsOfNames` and `ITypeComp::Bind` now honor that order while
+  retaining normal precedence when the flag is absent. The regression toggles
+  the flag through both views, checks colliding and child-only members, and
+  verifies missing names. Access's object-model suite returns to 42/44 checks,
+  with only its existing XML export and compaction failures and no faults or
+  timeout. The three-round Access UI suite passes 64 checks, Publisher's inline
+  image workflow passes 12 checks with six native pickers and PDF pixel checks,
+  and Excel VBA's early-bound Word test passes all five checks. Microsoft describes the flag's precedence in its
+  [TYPEFLAGS documentation](https://learn.microsoft.com/en-us/dotnet/api/system.runtime.interopservices.comtypes.typeflags).
+- **Labels now reaches its actual wizard:** native `TipCreateInstanceEx` returns
+  success, and the Label Wizard form renders. Its next failure is "Invalid use of
+  Null" when converting a label-list column to an integer. The size list contains
+  one empty row, has column headings disabled, and exposes no recordset, despite
+  439 matching Avery sizes. Explicitly requerying it reveals "Function is not
+  available in expressions" for its nested `IIf`/`InStr`/`Mid` SQL expression.
+  That exact query returns all 439 records through a separate DAO connection and
+  populates a newly created Access list box. The manufacturer's simpler query
+  also populates the wizard. The built-in wizard's expression-function lookup is
+  the next investigation target; Labels is not working end to end. The earlier
+  "Return without GoSub" message was VBA's HRESULT wrapper mapping `0x80020003`
+  to `0x800a0003`, not an interpreter GoSub failure. Earlier source-line
+  breakpoint tracing missed Wine's Invoke entry; machine-entry breakpoints
+  established the actual missing metadata.
 - **0.1.16 release built and verified:** packages and checked SHA256SUMS are in
   `dist/0.1.16/`. The portable runner was rebuilt from committed source in Ubuntu
   24.04. Clean Arch system installation, 32/64-bit execution, removal and per-user
