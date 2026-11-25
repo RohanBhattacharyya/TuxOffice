@@ -22,6 +22,7 @@ winegcc -b i386-windows -mconsole -municode -o "$destination/file-dialog-probe32
 winegcc -b x86_64-windows -mconsole -o "$destination/native-dialog-focus.exe" "$HERE/native-dialog-focus.c" -lole32 -luuid -luser32
 winegcc -b i386-windows -mconsole -o "$destination/native-dialog-focus32.exe" "$HERE/native-dialog-focus.c" -lole32 -luuid -luser32
 winegcc -b x86_64-windows -mconsole -o "$destination/ado-lifetime.exe" "$HERE/ado-lifetime.c" -lole32 -loleaut32 -luuid
+winegcc -b i386-windows -mconsole -o "$destination/ado-lifetime32.exe" "$HERE/ado-lifetime.c" -lole32 -loleaut32 -luuid
 winegcc -b x86_64-windows -mconsole -o "$destination/native-path.exe" "$HERE/native-path.c" -lntdll
 winegcc -b i386-windows -mconsole -o "$destination/native-path32.exe" "$HERE/native-path.c" -lntdll
 winegcc -b x86_64-windows -mconsole -municode -o "$destination/typelib-load.exe" "$HERE/typelib-load.c" -loleaut32 -lole32

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* An in-process OLE DB fixture checks ADO provider/session lifetime without a
- * database driver. Covers Close, releasing an open connection, and failed Open.
+ * database driver. Covers Close, releasing an open connection, failed Open,
+ * and releasing the last connection owner through a recordset.
  * CoRegisterClassObject overrides MSDASQL only inside this process; no registry
  * or system provider is changed.
  * Build: winegcc -b x86_64-windows -mconsole -o ado-lifetime.exe ado-lifetime.c
@@ -146,10 +147,12 @@ static IClassFactoryVtbl factory_vtbl = {factory_qi, factory_addref, factory_rel
 static IClassFactory factory = {&factory_vtbl};
 int main(void)
 {
-    static const char *names[] = {"explicit Close", "release open connection", "failed Open"};
+    static const char *names[] = {"explicit Close", "release open connection", "failed Open",
+                                 "release recordset connection"};
     DWORD cookie;
     HRESULT hr, close_hr;
     _Connection *connection;
+    _Recordset *recordset;
     BSTR str;
     int n, failures = 0;
     ULONG remaining;
@@ -163,7 +166,7 @@ int main(void)
         printf("FAIL register fixture %#lx\n", hr);
         return 2;
     }
-    for (n = 0; n < 3; n++)
+    for (n = 0; n < sizeof(names) / sizeof(names[0]); n++)
     {
         refs = session_refs = initialized = uninitialized = 0;
         init_result = n == 2 ? E_FAIL : S_OK;
@@ -182,7 +185,26 @@ int main(void)
         close_hr = S_OK;
         if (n == 0 && SUCCEEDED(hr))
             close_hr = _Connection_Close(connection);
-        remaining = _Connection_Release(connection);
+        if (n == 3 && SUCCEEDED(hr))
+        {
+            hr = CoCreateInstance(&CLSID_Recordset, NULL, CLSCTX_INPROC_SERVER, &IID__Recordset,
+                                  (void **)&recordset);
+            if (SUCCEEDED(hr))
+            {
+                hr = _Recordset_putref_ActiveConnection(recordset, (IDispatch *)connection);
+                /* Only the recordset now owns this open connection. Destroying
+                 * it must release the provider and session, too. */
+                remaining = _Connection_Release(connection);
+                passed = passed && hr == S_OK && remaining == 1;
+                remaining = _Recordset_Release(recordset);
+            }
+            else
+            {
+                passed = FALSE;
+                remaining = _Connection_Release(connection);
+            }
+        }
+        else remaining = _Connection_Release(connection);
         passed = passed && close_hr == S_OK && !remaining && !refs && !session_refs && initialized == 1 &&
                  uninitialized == 1;
         printf("%s %s: open=%#lx close=%#lx provider_refs=%ld session_refs=%ld init=%ld uninit=%ld\n",
