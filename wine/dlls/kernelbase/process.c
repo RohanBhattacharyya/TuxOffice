@@ -612,6 +612,11 @@ static const WCHAR *hack_append_command_line( const WCHAR *cmd )
     {
 #if defined(__aarch64__) || defined(__arm64ec__)
         {L"msedgewebview2.exe", L" --no-sandbox"},
+#else
+        /* WebView2 presents GPU frames through DirectComposition, which cannot
+         * show them in the host's window. Software frames are drawn with GDI,
+         * which win32u shares with the host process. */
+        {L"msedgewebview2.exe", L" --disable-gpu --disable-direct-composition"},
 #endif
         {L"Elisa The Innkeeper - Prequel\\nw.exe", L" --disable_direct_composition=1"},
         {L"UniverseGenerator.exe", L" --disable_direct_composition=1"},
