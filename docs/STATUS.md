@@ -28,6 +28,30 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **0.1.19 built and installation-tested:** final binary source is `78d6ae5`.
+  All four formats and verified SHA256SUMS are in `dist/0.1.19/`. Clean Arch
+  system installation, 32/64-bit execution, removal and per-user installation
+  pass. An existing isolated 0.1.18 prefix upgrades through the launcher without
+  a manual `wineboot`, then passes the 120-type metadata and lifetime regressions
+  on both architectures. The release runner passes the 8,114 metadata, 118 index,
+  180 dual-view, 140 interface and 82 stream checks per architecture, plus all four
+  provider/session lifetime cases. Native Access Labels passes one complete
+  round, native Publisher picture-file insertion passes six assertions with two
+  KDE file dialogs and PDF pixel verification, and Excel-to-Word VBA passes five
+  checks. The metadata candidate additionally passes three rounds/64 assertions
+  of the broader Access Create/edit/reopen UI test. Publisher's Pictures source
+  gallery, Access XML export/compaction, broader Outlook coverage and Windows
+  performance parity remain unfinished. Host pacman remains **0.1.13-1**.
+- **ADO recordset connection leak fixed:** destroying a recordset previously
+  discarded its retained `ActiveConnection` pointer without releasing it, leaving
+  the provider and session alive. Final release now releases that connection
+  after closing the rowset. The lifetime regression reproduces the leak on both
+  architectures before the fix and passes afterwards; the existing ADO suite
+  still passes 1,012 checks per architecture (39 TODOs and one ODBC skip).
+  The fix is `78d6ae5` and is included in 0.1.19. It does not resolve Access's
+  separate compaction failure: the object-model suite remains 42/44, and a
+  minimal reproduction fails after merely reading `CurrentProject.Connection`,
+  even though the wrapper is destroyed before the database closes.
 - **Access Labels completes with the ADO type-index fixes:** native VBA's
   `GEN_PROJECT::TypeInfoFromCompressedTypeId` requests ADO 6.1 types at public
   indexes including 68, 70, 71, 72, 83 and 92. The previous 68-type library
