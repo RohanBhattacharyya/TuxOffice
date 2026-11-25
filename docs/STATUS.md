@@ -28,6 +28,25 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Publisher took the focus back whenever it lost it (reported on 0.1.21):**
+  with a picture or shape selected, switching to any other application made
+  Publisher show "You can only type into a text box, table, and certain
+  shapes" and activate that message, again on every switch. The Wayland
+  text-input leave handler always posted an empty IME composition update,
+  which win32u delivers as a `VK_PROCESSKEY` key press to the focused window.
+  It now clears a composition only when one is in progress. Not specific
+  to WebView2; reproduced after inserting a Bing picture, 0 message boxes
+  with the fix.
+- **No cursor over web views (reported on 0.1.21):** the server sends the
+  cursor change for a window under the pointer to the toplevel that
+  receives the pointer events (Office's), with the browser's cursor handle,
+  which Office's process cannot read, so the cursor was hidden. A process
+  that sets the cursor over its own window inside another process's
+  toplevel, or over a non-activating popup, now has winewayland pass the
+  matching cursor shape (wp_cursor_shape) to the owner's process, and the
+  owner ignores cursor handles it cannot read. Traced: I-beam over page
+  text, arrow elsewhere, Office's own cursor over its own area.
+
 - **WebView2 renders under native Wayland (25 November):** Office's web
   dialogs were blank because WebView2's browser draws into a child window
   of Office's dialog from another process, and winewayland has no way to
