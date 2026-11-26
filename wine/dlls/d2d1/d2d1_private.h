@@ -116,6 +116,9 @@ struct d2d_brush_cb
             float _11, _21, _31, pad;
             float _12, _22, _32;
             BOOL ignore_alpha;
+            /* Texture coordinates are clamped to this, the texel centres of a
+             * DrawBitmap source rectangle. */
+            float clamp_min_x, clamp_min_y, clamp_max_x, clamp_max_y;
         } bitmap;
     } u;
 };
@@ -377,6 +380,9 @@ struct d2d_brush
             D2D1_EXTEND_MODE extend_mode_x;
             D2D1_EXTEND_MODE extend_mode_y;
             D2D1_INTERPOLATION_MODE interpolation_mode;
+            /* A source rectangle in pixels sampling stays within (DrawBitmap). */
+            BOOL has_source;
+            D2D1_RECT_F source;
         } bitmap;
         struct
         {

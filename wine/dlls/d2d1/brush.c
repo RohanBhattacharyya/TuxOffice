@@ -17,6 +17,7 @@
  */
 
 #include "d2d1_private.h"
+#include <float.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(d2d);
 
@@ -1492,6 +1493,22 @@ BOOL d2d_brush_fill_cb(const struct d2d_brush *brush, struct d2d_brush_cb *cb, D
             }
 
             cb->u.bitmap.ignore_alpha = bitmap->format.alphaMode == D2D1_ALPHA_MODE_IGNORE;
+
+            cb->u.bitmap.clamp_min_x = cb->u.bitmap.clamp_min_y = -FLT_MAX;
+            cb->u.bitmap.clamp_max_x = cb->u.bitmap.clamp_max_y = FLT_MAX;
+            if (brush->type == D2D_BRUSH_TYPE_BITMAP && brush->u.bitmap.has_source)
+            {
+                const D2D1_RECT_F *r = &brush->u.bitmap.source;
+                float w = bitmap->pixel_size.width, h = bitmap->pixel_size.height;
+
+                /* Linear filtering must not reach past the source rectangle:
+                 * Office draws nine-slice images as one bitmap with a source
+                 * rectangle per slice, stretching a one pixel wide middle. */
+                cb->u.bitmap.clamp_min_x = min(r->left + 0.5f, (r->left + r->right) / 2.0f) / w;
+                cb->u.bitmap.clamp_max_x = max(r->right - 0.5f, (r->left + r->right) / 2.0f) / w;
+                cb->u.bitmap.clamp_min_y = min(r->top + 0.5f, (r->top + r->bottom) / 2.0f) / h;
+                cb->u.bitmap.clamp_max_y = max(r->bottom - 0.5f, (r->top + r->bottom) / 2.0f) / h;
+            }
 
             if (image_bitmap)
                 ID2D1Bitmap_Release(image_bitmap);

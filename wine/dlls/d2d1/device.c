@@ -2041,6 +2041,17 @@ static void d2d_device_context_draw_bitmap(struct d2d_device_context *context, I
         return;
     }
 
+    if (src_rect)
+    {
+        float dpi_x, dpi_y;
+
+        /* s is in DIPs of the bitmap. */
+        ID2D1Bitmap_GetDpi(bitmap, &dpi_x, &dpi_y);
+        brush->u.bitmap.has_source = TRUE;
+        d2d_rect_set(&brush->u.bitmap.source, s.left * dpi_x / 96.0f, s.top * dpi_y / 96.0f,
+                s.right * dpi_x / 96.0f, s.bottom * dpi_y / 96.0f);
+    }
+
     d2d_device_context_FillRectangle(&context->ID2D1DeviceContext6_iface, &d, &brush->ID2D1Brush_iface);
     ID2D1Brush_Release(&brush->ID2D1Brush_iface);
 }
@@ -6937,6 +6948,7 @@ static const char shape_ps_code[] =
     "    texcoord.y = dot(position.xy, transform[1].xy) + transform[1].z;\n"
     "    if ((arithmetic || color_matrix_mode) && (any(texcoord < 0.0) || any(texcoord >= 1.0)))\n"
     "        return float4(0.0, 0.0, 0.0, 0.0);\n"
+    "    texcoord = clamp(texcoord, brush.data[2].xy, brush.data[2].zw);\n"
     "    colour = t.Sample(s, texcoord);\n"
     "    if (ignore_alpha)\n"
     "        colour.a = 1.0;\n"
