@@ -6115,25 +6115,27 @@ static HRESULT STDMETHODCALLTYPE d2d_rounded_rectangle_geometry_Simplify(ID2D1Ro
 
     d2d_ellipse_to_segments(&ellipse, &start_point, segments);
 
-    d2d_point_set(&p, r->rect.left + r->radiusX, r->rect.bottom + r->radiusY);
+    /* The segments go round the unit circle from (-1, 0) through (0, -1): with y
+     * pointing down, the top left quarter first. Centre each quarter in its corner. */
+    d2d_point_set(&p, r->rect.left + r->radiusX, r->rect.top + r->radiusY);
     d2d_point_translate(&start_point, p.x, p.y);
     d2d_bezier_segment_translate(&segments[0], p.x, p.y);
-    d2d_point_set(&p, r->rect.right - r->radiusX, r->rect.bottom + r->radiusY);
+    d2d_point_set(&p, r->rect.right - r->radiusX, r->rect.top + r->radiusY);
     d2d_bezier_segment_translate(&segments[1], p.x, p.y);
-    d2d_point_set(&p, r->rect.right - r->radiusX, r->rect.top - r->radiusY);
+    d2d_point_set(&p, r->rect.right - r->radiusX, r->rect.bottom - r->radiusY);
     d2d_bezier_segment_translate(&segments[2], p.x, p.y);
-    d2d_point_set(&p, r->rect.left + r->radiusX, r->rect.top - r->radiusY);
+    d2d_point_set(&p, r->rect.left + r->radiusX, r->rect.bottom - r->radiusY);
     d2d_bezier_segment_translate(&segments[3], p.x, p.y);
 
     ret = d2d_figure_begin(&figure, start_point, D2D1_FIGURE_BEGIN_FILLED);
     ret = ret && d2d_figure_add_beziers(&figure, &segments[0], 1);
-    d2d_point_set(&p, r->rect.right - r->radiusX, r->rect.bottom);
+    d2d_point_set(&p, r->rect.right - r->radiusX, r->rect.top);
     ret = ret && d2d_figure_add_lines(&figure, &p, 1);
     ret = ret && d2d_figure_add_beziers(&figure, &segments[1], 1);
-    d2d_point_set(&p, r->rect.right, r->rect.top - r->radiusY);
+    d2d_point_set(&p, r->rect.right, r->rect.bottom - r->radiusY);
     ret = ret && d2d_figure_add_lines(&figure, &p, 1);
     ret = ret && d2d_figure_add_beziers(&figure, &segments[2], 1);
-    d2d_point_set(&p, r->rect.left + r->radiusX, r->rect.top);
+    d2d_point_set(&p, r->rect.left + r->radiusX, r->rect.bottom);
     ret = ret && d2d_figure_add_lines(&figure, &p, 1);
     ret = ret && d2d_figure_add_beziers(&figure, &segments[3], 1);
     if (!ret)
@@ -6883,6 +6885,117 @@ static const struct ID2D1GeometryGroupVtbl d2d_geometry_group_vtbl =
     d2d_geometry_group_GetSourceGeometries,
 };
 
+/* Passes the figures of the group's geometries on to one path, keeping the
+ * group's fill mode. */
+struct group_sink
+{
+    ID2D1SimplifiedGeometrySink ID2D1SimplifiedGeometrySink_iface;
+    ID2D1SimplifiedGeometrySink *path;
+};
+
+static inline struct group_sink *group_sink_from_iface(ID2D1SimplifiedGeometrySink *iface)
+{
+    return CONTAINING_RECORD(iface, struct group_sink, ID2D1SimplifiedGeometrySink_iface);
+}
+
+static HRESULT STDMETHODCALLTYPE group_sink_QueryInterface(ID2D1SimplifiedGeometrySink *iface, REFIID iid, void **out)
+{
+    if (IsEqualGUID(iid, &IID_ID2D1SimplifiedGeometrySink) || IsEqualGUID(iid, &IID_IUnknown))
+    {
+        *out = iface;
+        return S_OK;
+    }
+    *out = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG STDMETHODCALLTYPE group_sink_AddRef(ID2D1SimplifiedGeometrySink *iface) { return 2; }
+static ULONG STDMETHODCALLTYPE group_sink_Release(ID2D1SimplifiedGeometrySink *iface) { return 1; }
+static void STDMETHODCALLTYPE group_sink_SetFillMode(ID2D1SimplifiedGeometrySink *iface, D2D1_FILL_MODE mode) {}
+
+static void STDMETHODCALLTYPE group_sink_SetSegmentFlags(ID2D1SimplifiedGeometrySink *iface,
+        D2D1_PATH_SEGMENT flags)
+{
+    ID2D1SimplifiedGeometrySink_SetSegmentFlags(group_sink_from_iface(iface)->path, flags);
+}
+
+static void STDMETHODCALLTYPE group_sink_BeginFigure(ID2D1SimplifiedGeometrySink *iface,
+        D2D1_POINT_2F start, D2D1_FIGURE_BEGIN begin)
+{
+    ID2D1SimplifiedGeometrySink_BeginFigure(group_sink_from_iface(iface)->path, start, begin);
+}
+
+static void STDMETHODCALLTYPE group_sink_AddLines(ID2D1SimplifiedGeometrySink *iface,
+        const D2D1_POINT_2F *points, UINT32 count)
+{
+    ID2D1SimplifiedGeometrySink_AddLines(group_sink_from_iface(iface)->path, points, count);
+}
+
+static void STDMETHODCALLTYPE group_sink_AddBeziers(ID2D1SimplifiedGeometrySink *iface,
+        const D2D1_BEZIER_SEGMENT *beziers, UINT32 count)
+{
+    ID2D1SimplifiedGeometrySink_AddBeziers(group_sink_from_iface(iface)->path, beziers, count);
+}
+
+static void STDMETHODCALLTYPE group_sink_EndFigure(ID2D1SimplifiedGeometrySink *iface, D2D1_FIGURE_END end)
+{
+    ID2D1SimplifiedGeometrySink_EndFigure(group_sink_from_iface(iface)->path, end);
+}
+
+static HRESULT STDMETHODCALLTYPE group_sink_Close(ID2D1SimplifiedGeometrySink *iface) { return S_OK; }
+
+static const struct ID2D1SimplifiedGeometrySinkVtbl group_sink_vtbl =
+{
+    group_sink_QueryInterface,
+    group_sink_AddRef,
+    group_sink_Release,
+    group_sink_SetFillMode,
+    group_sink_SetSegmentFlags,
+    group_sink_BeginFigure,
+    group_sink_AddLines,
+    group_sink_AddBeziers,
+    group_sink_EndFigure,
+    group_sink_Close,
+};
+
+/* A group had no fill or outline of its own, so filling or drawing it drew
+ * nothing. PowerPoint frames the selected slide's thumbnail with a group of two
+ * rounded rectangles filled in alternate mode. Build both from the figures of
+ * all the source geometries in one path with the group's fill mode, flattened:
+ * the fill's curve triangles of nested figures overlap and show at the corners. */
+static HRESULT d2d_geometry_group_build(struct d2d_geometry *geometry, D2D1_FILL_MODE fill_mode,
+        ID2D1Geometry **geometries, unsigned int geometry_count)
+{
+    struct group_sink sink = {{&group_sink_vtbl}};
+    ID2D1PathGeometry *path;
+    ID2D1GeometrySink *path_sink;
+    struct d2d_geometry *impl;
+    unsigned int i;
+    HRESULT hr;
+
+    if (FAILED(hr = ID2D1Factory_CreatePathGeometry(geometry->factory, &path))) return hr;
+    if (SUCCEEDED(hr = ID2D1PathGeometry_Open(path, &path_sink)))
+    {
+        ID2D1GeometrySink_SetFillMode(path_sink, fill_mode);
+        sink.path = (ID2D1SimplifiedGeometrySink *)path_sink;
+        for (i = 0; i < geometry_count && SUCCEEDED(hr); ++i)
+            hr = ID2D1Geometry_Simplify(geometries[i], D2D1_GEOMETRY_SIMPLIFICATION_OPTION_LINES,
+                    NULL, D2D1_DEFAULT_FLATTENING_TOLERANCE, &sink.ID2D1SimplifiedGeometrySink_iface);
+        if (SUCCEEDED(hr)) hr = ID2D1GeometrySink_Close(path_sink);
+        ID2D1GeometrySink_Release(path_sink);
+    }
+    if (SUCCEEDED(hr))
+    {
+        impl = unsafe_impl_from_ID2D1Geometry((ID2D1Geometry *)path);
+        geometry->fill = impl->fill;
+        geometry->outline = impl->outline;
+        memset(&impl->fill, 0, sizeof(impl->fill));
+        memset(&impl->outline, 0, sizeof(impl->outline));
+    }
+    ID2D1PathGeometry_Release(path);
+    return hr;
+}
+
 HRESULT d2d_geometry_group_init(struct d2d_geometry *geometry, ID2D1Factory *factory,
         D2D1_FILL_MODE fill_mode, ID2D1Geometry **geometries, unsigned int geometry_count)
 {
@@ -6903,6 +7016,8 @@ HRESULT d2d_geometry_group_init(struct d2d_geometry *geometry, ID2D1Factory *fac
     geometry->u.group.geometry_count = geometry_count;
     geometry->u.group.fill_mode = fill_mode;
 
+    if (FAILED(d2d_geometry_group_build(geometry, fill_mode, geometries, geometry_count)))
+        WARN("Failed to build the fill of geometry group %p.\n", geometry);
     return S_OK;
 }
 
