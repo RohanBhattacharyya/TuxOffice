@@ -71,6 +71,15 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   ProtectionPolicyManager activation 109 times, desktop.ini lookups for
   each folder of the QuickStyles path). A client-side registry cache would
   be the general fix; not started.
+- Word's right-click mini toolbar stays fully transparent (only its shadow
+  shows) until the pointer moves, then appears 270 ms later. Traced: NetUI
+  starts the toolbar's appear animation (opacity 0 until 96% of 277 ms,
+  then 1) only on a mouse move with a new position; a synthetic move at the
+  same position, as Windows sends when windows are shown, was tried in
+  wineserver and ignored by Office, so it was not kept. Whether Windows shows
+  it without any movement is unverified; real mice nearly always move a
+  little. PowerPoint's Design tab themes, Excel's Conditional Formatting menu
+  (hover, submenus, ScreenTips) and the context menu itself render correctly.
 - Sweep notes (0.1.29-0.1.30): Word, Excel, PowerPoint, Publisher, Access,
   OneNote ribbons all render. Backstage template thumbnails fill within
   2 s (not blank; the earlier capture was too early). Word, Excel and
