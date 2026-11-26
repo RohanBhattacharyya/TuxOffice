@@ -1521,10 +1521,12 @@ static BOOL flat_caption_buttons( DWORD ex_style )
     return enabled;
 }
 
-/* Hit testing, caption layout and drawing must agree on these widths. */
+/* Hit testing, caption layout and drawing must agree on these widths. They
+ * scale like the caption height; get_thread_dpi() is 0 in a per-monitor aware
+ * thread, which made the buttons zero-sized. */
 static int caption_button_width( DWORD ex_style, UINT hit )
 {
-    if (flat_caption_buttons( ex_style )) return muldiv( 46, get_thread_dpi(), 96 );
+    if (flat_caption_buttons( ex_style )) return muldiv( 46, get_system_dpi(), 96 );
     return hit == HTCLOSE ? get_system_metrics( SM_CYCAPTION ) : get_system_metrics( SM_CXSIZE );
 }
 
@@ -1601,7 +1603,7 @@ static BOOL is_nc_active( HWND hwnd )
 
 static void draw_flat_caption_button( HWND hwnd, HDC hdc, UINT hit, BOOL down, BOOL grayed )
 {
-    UINT dpi = get_thread_dpi();
+    UINT dpi = get_system_dpi();
     BOOL active = is_nc_active( hwnd ), gradient = FALSE;
     BOOL hot = !grayed && hot_caption_hwnd == hwnd && hot_caption_button == hit;
     int size = muldiv( 10, dpi, 96 ), offset = muldiv( 2, dpi, 96 ), x, y;
