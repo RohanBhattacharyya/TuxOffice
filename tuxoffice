@@ -216,6 +216,15 @@ cmd_setup() {
     set_segoe_substitutes Selawik
   fi
 
+  # Windows' Segoe UI Variable, Segoe Fluent Icons and Segoe MDL2 Assets
+  # (Office's UI glyphs) come with their own licence terms: ask now.
+  if [[ -t 0 ]]; then
+    (fonts_segoe) || warn "Segoe icon fonts not installed; install them later with: tuxoffice fonts segoe"
+  else
+    msg "to install Windows' Segoe UI Variable and icon fonts, run: tuxoffice fonts segoe"
+  fi
+  msg "Office's own fonts (Segoe UI, Calibri, Aptos…) install on the first launch after signing in"
+
   msg "configuring DLL overrides and graphics"
   local o
   for o in gdiplus=native msxml6=native,builtin riched20=native,builtin \
@@ -664,17 +673,25 @@ register_fonts() { # files in the Windows Fonts folder
   wine regedit /S "$(wine winepath -w "$reg" 2>/dev/null)" >/dev/null 2>&1
 }
 
-set_segoe_substitutes() { # target family prefix, or "" to remove the substitutes
-  local seg target
+set_segoe_substitutes() { # target family prefix, or "" once the real Segoe UI is installed
+  # Faces of Segoe UI that are installed are used as they are; the rest are
+  # substituted. Microsoft's cloud fonts have only Segoe UI and Segoe UI
+  # Black, and Office ships Segoe UI Semilight, so with "" the missing faces
+  # still map to Selawik's, which has the same metrics. DirectWrite keeps the
+  # "Segoe UI" replacement and takes the faces the family lacks from it.
+  local seg target prefix=${1:-Selawik}
   for seg in 'Segoe UI' 'Segoe UI Semibold' 'Segoe UI Light' 'Segoe UI Semilight' 'Segoe UI Bold'; do
-    if [[ -z $1 ]]; then
+    target="$prefix${seg#Segoe UI}"
+    if font_registered "$seg" || { [[ $seg == 'Segoe UI Semilight' ]] && has_font_file SEGOEUISL.TTF; }; then
       wine reg delete "$SUBST_KEY" /v "$seg" /f >/dev/null 2>&1 || true
-      wine reg delete 'HKCU\Software\Wine\Fonts\Replacements' /v "$seg" /f >/dev/null 2>&1 || true
+      if [[ $seg == 'Segoe UI' && -z $1 ]] && has_font_file selawk.ttf; then
+        wreg 'HKCU\Software\Wine\Fonts\Replacements' /v "$seg" /t REG_SZ /d Selawik
+      else
+        wine reg delete 'HKCU\Software\Wine\Fonts\Replacements' /v "$seg" /f >/dev/null 2>&1 || true
+      fi
       continue
     fi
-    target="$1${seg#Segoe UI}"
-    # Office ships the real Segoe UI Semilight; keep it.
-    [[ $seg == 'Segoe UI Semilight' ]] && has_font_file SEGOEUISL.TTF && continue
+    [[ -z $1 ]] && ! has_font_file selawk.ttf && continue
     wreg "$SUBST_KEY" /v "$seg" /t REG_SZ /d "$target"
     wreg 'HKCU\Software\Wine\Fonts\Replacements' /v "$seg" /t REG_SZ /d "$target"
   done
@@ -698,14 +715,21 @@ fonts_office() {
 
 cloud_font_cache() { echo "$TUX_PREFIX/drive_c/users/$USER/AppData/Local/Microsoft/FontCache/4/CloudFonts"; }
 
+# Signed in to Office: a licence, a signed-in identity, or fonts Office has
+# already fetched. Plain file checks, so launching stays quick.
+office_signed_in() {
+  [[ -n "$(ls -A "$TUX_PREFIX/drive_c/users/$USER/AppData/Local/Microsoft/Office/Licenses" 2>/dev/null)" ]] ||
+    grep -aq '^\[Software\\\\Microsoft\\\\Office\\\\16.0\\\\Common\\\\Identity\\\\Profiles\\\\' "$TUX_PREFIX/user.reg" 2>/dev/null ||
+    [[ -n "$(ls -A "$(cloud_font_cache)" 2>/dev/null)" ]]
+}
+
 fonts_cloud() {
   # Office fetches fonts from Microsoft's cloud font service when a document
   # uses them, but loads them only into its own process. Prime the cache with
   # a document that uses the UI and default document fonts, then register the
   # cached files prefix-wide so the UI and GDI/DirectWrite lookups find them.
   [[ -f "$OFFICE_ROOT/WINWORD.EXE" ]] || die "Word is not installed"
-  [[ -n "$(ls -A "$TUX_PREFIX/drive_c/users/$USER/AppData/Local/Microsoft/Office/Licenses" 2>/dev/null)" ]] ||
-    die "sign in to Office first (cloud fonts need an activated Office)"
+  office_signed_in || die "sign in to Office first (cloud fonts need an activated Office)"
   pgrep -f 'WINWORD.EXE' >/dev/null && die "close Word first"
   local work="$TUX_PREFIX/drive_c/tuxoffice"
   mkdir -p "$work"
@@ -728,6 +752,25 @@ fonts_cloud() {
   font_registered 'Segoe UI' && set_segoe_substitutes ""
   msg "registered ${#added[@]} Office cloud fonts"
   configure_office_ui
+}
+
+# Office's own fonts (Segoe UI, Calibri, Cambria, Consolas, Aptos and the
+# rest) come from Microsoft's cloud font service once Office is activated,
+# as they would be part of Windows. Install them on the first launch that can
+# (activated, Word not running). The service sends some faces only on a later
+# request, so try again, at most hourly, until Segoe UI Semibold is there too.
+ensure_cloud_fonts() {
+  { has_font_file 'office-cloud-Segoe-UI.ttf' && has_font_file 'office-cloud-Segoe-UI-Semibold.ttf'; } ||
+    has_font_file segoeui.ttf || {
+    office_signed_in || return 0
+    local stamp="$TUX_HOME/cloud-fonts-attempt"
+    [[ -n "$(find "$stamp" -mmin -60 2>/dev/null)" ]] && return 0
+    pgrep -f 'Office16.WINWORD.EXE' >/dev/null && return 0
+    touch "$stamp"
+    splash status "Installing Office fonts (one time, up to 2 minutes)…"
+    (SPLASH_DIR=""; fonts_cloud) || warn "Office fonts are not installed yet; they will be retried (or run: tuxoffice fonts cloud)"
+  }
+  return 0
 }
 
 # Microsoft's Tahoma, as winetricks fetches it. Office and Windows dialogs use
@@ -902,6 +945,7 @@ cmd_run() {
   update_prefix
   refresh_root_certs
   sync_app_theme
+  ensure_cloud_fonts
 
   # Translate Linux paths and file:// URIs to Windows paths.
   local args=() f
