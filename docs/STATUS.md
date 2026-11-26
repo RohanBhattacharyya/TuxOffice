@@ -41,6 +41,16 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   (darker red), with rounded corners.
 - Checked and not a bug: Insert > Table is a split button in this Office
   build; the icon inserts a default table and the arrow opens the grid.
+- **Status bar text clipped in Publisher ("Page: 1 of") and Outlook ("last
+  updated on 11/24/202"):** DirectWrite's "Segoe UI" family held only the
+  Semilight face Office ships, so NetUI measured labels narrower than GDI
+  (Selawik substitute) drew them. dwrite now fills a family's missing faces
+  from its Wine\Fonts\Replacements entry. Not yet in a release.
+- Sweep notes (0.1.29): Word, Excel, PowerPoint, Publisher, Access, OneNote
+  ribbons all render; Word's style-set gallery fills only after a few
+  seconds; Access datasheet draws faint grid lines right of the last column
+  (unverified against Windows). Perf note: Word idle with a blinking caret
+  is ~125 ms/s CPU (UI thread 65, DXVK 45).
 - **Excel's cell cursor jumped instead of gliding, and animations felt
   choppy in every app (reported on 0.1.28):** Excel decides at startup
   whether to animate from SPI_GETANIMATION's iMinAnimate ("Animate windows
