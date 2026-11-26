@@ -41,6 +41,24 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   (darker red), with rounded corners.
 - Checked and not a bug: Insert > Table is a split button in this Office
   build; the icon inserts a default table and the arrow opens the grid.
+- **Excel's cell cursor jumped instead of gliding, and animations felt
+  choppy in every app (reported on 0.1.28):** Excel decides at startup
+  whether to animate from SPI_GETANIMATION's iMinAnimate ("Animate windows
+  when minimizing and maximizing", on by default on Windows). Wine always
+  reported 0, so Excel told AirSpace to disable its process animations and
+  every cell move, in-cell and grid animation was instant. MinAnimate is now
+  a real setting with the Windows default of 1 (`e1a2c9f`). Found by
+  following AirSpace (Mso40UI) from the zero animation durations back to
+  its process animation-disable count and to Excel's call that set it.
+  Separately, composition animations in all apps ran at an uneven 40
+  frames a second: frames were drawn only in Office's commits, which come
+  some 11 ms after CommitNeeded and no sooner than a frame apart. The
+  animation clock now draws frames itself at the display rate when the
+  application has nothing uncommitted, as DWM does, and a visual that only
+  moved redraws where it was and where it goes instead of the whole
+  window (`60461fb`). Word's End-key caret glide: 7 frames 17-18 ms apart
+  instead of 4-5 full redraws 20-25 ms apart; Excel's cursor glides over
+  about 100 ms.
 - **The Shapes gallery's More button had a shaded left half (reported on
   0.1.27):** a light sheen in dark mode, grey in light mode. Office draws the
   button as a nine-slice image: one 7x11 bitmap, DrawBitmap with a source
