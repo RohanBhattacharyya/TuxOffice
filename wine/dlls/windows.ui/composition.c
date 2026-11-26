@@ -939,6 +939,11 @@ struct compositor
     FLOAT global_playback_rate;
     /* the queue of the creating thread, which receives composition callbacks */
     IDispatcherQueue *dispatcher_queue;
+    /* changed since the application last committed */
+    LONG uncommitted;
+    /* the thread that commits, and whether it is in a commit */
+    DWORD commit_thread;
+    BOOL committing;
     LONG ref;
 };
 
@@ -2015,6 +2020,13 @@ struct sprite_visual
     struct desktop_window_target *snap_target;
     UINT snap_frame;
     UINT64 geometry_hash, appearance_hash;
+    /* the geometry without the offset, the offset, and the parent's linear
+     * transform when last drawn: a visual that only moved redraws where it was
+     * and where it goes */
+    UINT64 geometry_rest_hash;
+    struct Vector3 snap_offset;
+    FLOAT parent_linear[4];
+    BOOL moved;
     UINT drawn_generation;
     D2D1_RECT_F drawn_bounds;  /* of the visual and its children, in target pixels */
     LONG ref;
@@ -5885,40 +5897,112 @@ static BOOL running_animations_tick(void)
 
 static void CALLBACK animation_timer_proc( HWND hwnd, UINT msg, UINT_PTR id, DWORD time );
 
+/* When the last animation frame began, in animation_now() units. */
+static LONGLONG animation_frame_start;
+
+/* The display's frame period in animation_now() units. */
+static LONGLONG animation_frame_period(void)
+{
+    static LONGLONG period;
+    DEVMODEW mode = {.dmSize = sizeof(mode)};
+
+    if (!period)
+    {
+        DWORD hz = 60;
+        if (EnumDisplaySettingsW( NULL, ENUM_CURRENT_SETTINGS, &mode ) && mode.dmDisplayFrequency > 1)
+            hz = min( max( mode.dmDisplayFrequency, 30 ), 240 );
+        period = 10000000 / hz;
+    }
+    return period;
+}
+
+/* Called with running_animations_cs held. The next tick comes one display frame
+ * after the last frame began, not a fixed time after the work it caused. */
+static void animation_timer_set(void)
+{
+    LONGLONG now = animation_now(), next = animation_frame_start + animation_frame_period();
+    UINT delay = 15;
+
+    if (animation_frame_start && now - animation_frame_start < 10000000)
+        delay = next > now ? min( 15, (next - now + 9999) / 10000 ) : 1;
+    animation_timer = SetTimer( NULL, 0, delay, animation_timer_proc );
+}
+
 /* Called on the thread that commits, which pumps messages. */
 static void animation_timer_arm(void)
 {
     EnterCriticalSection( &running_animations_cs );
-    if (!animation_timer) animation_timer = SetTimer( NULL, 0, 15, animation_timer_proc );
+    if (!animation_timer) animation_timer_set();
     LeaveCriticalSection( &running_animations_cs );
+}
+
+/* A commit ticked running animations: time the next frame from it. */
+static void animation_timer_rearm( LONGLONG started )
+{
+    EnterCriticalSection( &running_animations_cs );
+    animation_frame_start = started;
+    if (animation_timer) KillTimer( NULL, animation_timer );
+    animation_timer_set();
+    LeaveCriticalSection( &running_animations_cs );
+}
+
+static HRESULT compositor_render( struct compositor *compositor, BOOL *rendered );
+
+/* Running animations need a frame. As the desktop window manager does on Windows,
+ * draw it here when the application has changed nothing since it last committed:
+ * Office answers CommitNeeded only some 11 ms later and no sooner than about a
+ * frame after its previous commit, so frames that waited for its commits came
+ * every 20-27 ms, an uneven 40 a second, for the caret, cursors and every other
+ * animation. With changes pending, ask for a commit instead. */
+static void animation_frame( struct compositor *compositor )
+{
+    BOOL rendered;
+
+    /* Only the application's commit thread draws, and never within a commit. */
+    if (ReadNoFence( &compositor->uncommitted ) || !compositor->controller ||
+            compositor->commit_thread != GetCurrentThreadId() || compositor->committing)
+    {
+        compositor_notify_commit_needed( compositor );
+        return;
+    }
+    TRACE_(uiperf)( "animation frame drawn without a commit.\n" );
+    compositor_render( compositor, &rendered );
 }
 
 static void CALLBACK animation_timer_proc( HWND hwnd, UINT msg, UINT_PTR id, DWORD time )
 {
     struct running_animation *animation;
-    ICompositor *compositors[16];
-    UINT count = 0, i;
-    BOOL batches;
+    ICompositor *animating[16], *polled[16];
+    UINT count = 0, polls, i, j;
+    BOOL batches, running;
 
     KillTimer( NULL, id );
     EnterCriticalSection( &running_animations_cs );
     if (animation_timer == id) animation_timer = 0;
+    animation_frame_start = animation_now();
     LIST_FOR_EACH_ENTRY( animation, &running_animations, struct running_animation, entry )
     {
-        for (i = 0; i < count; ++i) if (compositors[i] == animation->compositor) break;
-        if (i < count || count == ARRAY_SIZE(compositors)) continue;
-        ICompositor_AddRef( (compositors[count++] = animation->compositor) );
+        for (i = 0; i < count; ++i) if (animating[i] == animation->compositor) break;
+        if (i < count || count == ARRAY_SIZE(animating)) continue;
+        ICompositor_AddRef( (animating[count++] = animation->compositor) );
     }
     LeaveCriticalSection( &running_animations_cs );
 
-    count = swapchain_surfaces_poll( compositors, count, ARRAY_SIZE(compositors) );
+    polls = swapchain_surfaces_poll( polled, 0, ARRAY_SIZE(polled) );
     batches = scoped_batches_fire_due( animation_now() );
+    running = count && running_animations_tick();
     for (i = 0; i < count; ++i)
     {
-        compositor_notify_commit_needed( impl_from_ICompositor( compositors[i] ) );
-        ICompositor_Release( compositors[i] );
+        animation_frame( impl_from_ICompositor( animating[i] ) );
+        ICompositor_Release( animating[i] );
     }
-    if (batches || swapchain_surfaces_active()) animation_timer_arm();
+    for (i = 0; i < polls; ++i)
+    {
+        for (j = 0; j < count; ++j) if (animating[j] == polled[i]) break;
+        if (j == count) compositor_notify_commit_needed( impl_from_ICompositor( polled[i] ) );
+        ICompositor_Release( polled[i] );
+    }
+    if (running || batches || swapchain_surfaces_active()) animation_timer_arm();
 }
 
 /* Run a key frame animation on a property. Returns FALSE when it should instead go
@@ -13097,6 +13181,28 @@ static UINT64 snapshot_hash( const struct target_snapshot *snap, SIZE_T start, U
     return hash;
 }
 
+static UINT64 snapshot_hash_range( const struct target_snapshot *snap, SIZE_T start, SIZE_T end, UINT64 hash )
+{
+    SIZE_T i;
+
+    if (snap->dynamic) return hash;
+    for (i = start; i < end && i < snap->size; ++i) hash = (hash ^ snap->data[i]) * 0x100000001b3ull;
+    return hash;
+}
+
+static void snapshot_damage( struct target_snapshot *snap, const D2D1_RECT_F *rect )
+{
+    if (!snap->has_damage) snap->damage = *rect;
+    else
+    {
+        snap->damage.left = min( snap->damage.left, rect->left );
+        snap->damage.top = min( snap->damage.top, rect->top );
+        snap->damage.right = max( snap->damage.right, rect->right );
+        snap->damage.bottom = max( snap->damage.bottom, rect->bottom );
+    }
+    snap->has_damage = TRUE;
+}
+
 static void snapshot_add( struct target_snapshot *snap, const void *data, SIZE_T size )
 {
     BYTE *grown;
@@ -13347,6 +13453,7 @@ static HRESULT draw_composition_visual_mode( ID2D1DeviceContext *context, IVisua
     ICompositionShadow *shadow;
     D2D1_MATRIX_3X2_F parent, local, transform;
     struct draw_frame *frame;
+    BOOL moved = FALSE;
     D2D1_RECT_F drawn = {0}, earlier = {0};
     FLOAT center_x, center_y;
     FLOAT width, height;
@@ -13413,6 +13520,12 @@ static HRESULT draw_composition_visual_mode( ID2D1DeviceContext *context, IVisua
             impl->anchor_point.Y * height;
     opacity *= impl->opacity;
     ID2D1DeviceContext_GetTransform( context, &parent );
+    impl->parent_linear[0] = parent._11;
+    impl->parent_linear[1] = parent._12;
+    impl->parent_linear[2] = parent._21;
+    impl->parent_linear[3] = parent._22;
+    moved = frame && frame->partial && impl->moved;
+    impl->moved = FALSE;
     center_x = impl->center_point.X * (1.0f - impl->scale.X);
     center_y = impl->center_point.Y * (1.0f - impl->scale.Y);
     local = (D2D1_MATRIX_3X2_F){impl->scale.X * impl->transform_matrix.M11,
@@ -13431,7 +13544,7 @@ static HRESULT draw_composition_visual_mode( ID2D1DeviceContext *context, IVisua
             local._31 * parent._12 + local._32 * parent._22 + parent._32};
     ID2D1DeviceContext_SetTransform( context, &transform );
     bounds = (D2D1_RECT_F){0.0f, 0.0f, width, height};
-    if (frame && !frame->partial) drawn = transform_rect_bounds( &transform, &bounds );
+    if ((frame && !frame->partial) || moved) drawn = transform_rect_bounds( &transform, &bounds );
     if (TRACE_ON(uirender))
     {
         const char *kind = "none";
@@ -13500,10 +13613,13 @@ static HRESULT draw_composition_visual_mode( ID2D1DeviceContext *context, IVisua
     {
         hr = draw_composition_visual_mode( context, children->items[i], 0.0f, 0.0f, width, height,
                 opacity, depth + 1, mode );
-        if (frame && !frame->partial && children->items[i])
+        if (frame && (!frame->partial || moved) && children->items[i])
             union_rect_f( &drawn, &sprite_visual_from_IVisual( children->items[i] )->drawn_bounds );
+        /* A child that moved in a partial frame grows its ancestors' bounds. */
+        else if (frame && children->items[i] && impl->drawn_generation == frame->target->drawn_generation)
+            union_rect_f( &impl->drawn_bounds, &sprite_visual_from_IVisual( children->items[i] )->drawn_bounds );
     }
-    if (frame && !frame->partial)
+    if ((frame && !frame->partial) || moved)
     {
         if (clip)
         {
@@ -13783,13 +13899,51 @@ static void snapshot_shadow( struct target_snapshot *snap, ICompositionShadow *s
     IDropShadow_Release( drop );
 }
 
+/* Counts a subtree's visuals, up to a limit, and marks them moved. */
+static BOOL subtree_mark_moved( struct sprite_visual *impl, UINT *count, BOOL mark )
+{
+    struct visual_collection *children = impl_from_IVisualCollection( impl->children );
+    UINT i;
+
+    if (++*count > 16 || impl->is_redirect) return FALSE;
+    if (mark) impl->moved = TRUE;
+    for (i = 0; i < children->count; ++i)
+        if (children->items[i] && !subtree_mark_moved( sprite_visual_from_IVisual( children->items[i] ), count, mark ))
+            return FALSE;
+    return TRUE;
+}
+
+/* Whether only the visual's offset changed, for a small subtree drawn in the last
+ * full frame: then it is redrawn where it was and where it goes, which keeps
+ * moving carets, cursors and selections from redrawing the whole window. */
+static BOOL snapshot_moved( struct target_snapshot *snap, struct sprite_visual *impl, UINT64 geometry_rest )
+{
+    const D2D1_RECT_F *old = &impl->drawn_bounds;
+    UINT count = 0;
+    FLOAT dx = impl->offset.X - impl->snap_offset.X, dy = impl->offset.Y - impl->snap_offset.Y;
+    D2D1_RECT_F moved;
+    FLOAT tx, ty;
+
+    if (geometry_rest != impl->geometry_rest_hash || !subtree_mark_moved( impl, &count, FALSE )) return FALSE;
+    if (impl->drawn_generation != snap->target->drawn_generation) return FALSE;
+    if (!(old->right > old->left && old->bottom > old->top) || old->right - old->left > FLT_MAX / 8) return FALSE;
+    tx = dx * impl->parent_linear[0] + dy * impl->parent_linear[2];
+    ty = dx * impl->parent_linear[1] + dy * impl->parent_linear[3];
+    moved = (D2D1_RECT_F){old->left + tx, old->top + ty, old->right + tx, old->bottom + ty};
+    snapshot_damage( snap, old );
+    snapshot_damage( snap, &moved );
+    count = 0;
+    subtree_mark_moved( impl, &count, TRUE );
+    return TRUE;
+}
+
 static void snapshot_visual( struct target_snapshot *snap, IVisual *visual, UINT depth )
 {
     struct visual_collection *children;
     struct sprite_visual *impl;
     ICompositionShadow *shadow = NULL;
-    SIZE_T geometry_start, appearance_start;
-    UINT64 geometry, appearance;
+    SIZE_T geometry_start, appearance_start, offset_start = 0, offset_end = 0;
+    UINT64 geometry, appearance, geometry_rest;
     UINT i;
 
     SNAPSHOT_FIELD( snap, visual );
@@ -13820,7 +13974,9 @@ static void snapshot_visual( struct target_snapshot *snap, IVisual *visual, UINT
     SNAPSHOT_FIELD( snap, impl->anchor_point );
     SNAPSHOT_FIELD( snap, impl->relative_size_adjustment );
     SNAPSHOT_FIELD( snap, impl->center_point );
+    offset_start = snap->size;
     SNAPSHOT_FIELD( snap, impl->offset );
+    offset_end = snap->size;
     SNAPSHOT_FIELD( snap, impl->relative_offset_adjustment );
     SNAPSHOT_FIELD( snap, impl->orientation );
     SNAPSHOT_FIELD( snap, impl->rotation_axis );
@@ -13861,6 +14017,8 @@ static void snapshot_visual( struct target_snapshot *snap, IVisual *visual, UINT
     SNAPSHOT_FIELD( snap, children->count );
     for (i = 0; i < children->count; ++i) SNAPSHOT_FIELD( snap, children->items[i] );
     geometry = snapshot_hash( snap, geometry_start, 0xcbf29ce484222325ull );
+    geometry_rest = snapshot_hash_range( snap, offset_end, snap->size,
+            snapshot_hash_range( snap, geometry_start, offset_start, 0xcbf29ce484222325ull ) );
     appearance_start = snap->size;
     SNAPSHOT_FIELD( snap, impl->composite_mode );
     SNAPSHOT_FIELD( snap, impl->opacity );
@@ -13870,7 +14028,8 @@ static void snapshot_visual( struct target_snapshot *snap, IVisual *visual, UINT
     if (impl->snap_target == snap->target && impl->snap_frame == snap->frame) ;
     else if (impl->snap_target != snap->target || impl->snap_frame + 1 != snap->frame)
         snapshot_full( snap, "new visual" );
-    else if (geometry != impl->geometry_hash) snapshot_full( snap, "geometry" );
+    else if (geometry != impl->geometry_hash && !snapshot_moved( snap, impl, geometry_rest ))
+        snapshot_full( snap, "geometry" );
     else if (appearance != impl->appearance_hash)
     {
         if (impl->drawn_generation != snap->target->drawn_generation) snapshot_full( snap, "not drawn" );
@@ -13889,6 +14048,8 @@ static void snapshot_visual( struct target_snapshot *snap, IVisual *visual, UINT
         }
     }
     impl->geometry_hash = geometry;
+    impl->geometry_rest_hash = geometry_rest;
+    impl->snap_offset = impl->offset;
     impl->appearance_hash = appearance;
     impl->snap_target = snap->target;
     impl->snap_frame = snap->frame;
@@ -15512,19 +15673,15 @@ static HRESULT WINAPI compositor_controller_get_Compositor( ICompositorControlle
     return S_OK;
 }
 
-static HRESULT WINAPI compositor_controller_Commit( ICompositorController *iface )
+/* Draw every target of the compositor. */
+static HRESULT compositor_render( struct compositor *compositor, BOOL *rendered )
 {
-    struct compositor_controller *controller = impl_from_ICompositorController( iface );
-    struct compositor *compositor = impl_from_ICompositor(
-            controller->compositor );
     struct desktop_window_target *target, *next;
-    BOOL rendered = FALSE;
-    HRESULT hr;
     ULONGLONG started = perf_us();
     unsigned int count = 0;
+    HRESULT hr;
 
-    TRACE( "iface %p.\n", iface );
-    if (running_animations_tick()) animation_timer_arm();
+    *rendered = FALSE;
     LIST_FOR_EACH_ENTRY_SAFE( target, next, &compositor->targets, struct desktop_window_target, entry )
     {
         BOOL window_gone = !IsWindow( target->hwnd );
@@ -15542,10 +15699,30 @@ static HRESULT WINAPI compositor_controller_Commit( ICompositorController *iface
         }
         ++count;
         hr = desktop_window_target_render( target );
-        if (hr == S_OK) rendered = TRUE;
+        if (hr == S_OK) *rendered = TRUE;
         else if (hr != S_FALSE) return hr;
     }
     TRACE_(uiperf)( "commit tick %I64u targets %u elapsed %I64u.\n", started, count, perf_us() - started );
+    return S_OK;
+}
+
+static HRESULT WINAPI compositor_controller_Commit( ICompositorController *iface )
+{
+    struct compositor_controller *controller = impl_from_ICompositorController( iface );
+    struct compositor *compositor = impl_from_ICompositor(
+            controller->compositor );
+    LONGLONG started = animation_now();
+    BOOL rendered;
+    HRESULT hr;
+
+    TRACE( "iface %p.\n", iface );
+    InterlockedExchange( &compositor->uncommitted, 0 );
+    compositor->commit_thread = GetCurrentThreadId();
+    if (running_animations_tick()) animation_timer_rearm( started );
+    compositor->committing = TRUE;
+    hr = compositor_render( compositor, &rendered );
+    compositor->committing = FALSE;
+    if (FAILED(hr)) return hr;
     if (rendered) return S_OK;
     if (compositor->dcomp_device) return IDCompositionDevice_Commit( compositor->dcomp_device );
     return S_OK;
@@ -15922,6 +16099,7 @@ static void compositor_notify_commit_needed( struct compositor *compositor )
     unsigned int count = 0, i = 0;
     HRESULT hr;
 
+    InterlockedExchange( &compositor->uncommitted, 1 );
     EnterCriticalSection( &controller_cs );
     if (!(controller = compositor->controller))
     {
