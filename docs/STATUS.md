@@ -41,6 +41,15 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   (darker red), with rounded corners.
 - Checked and not a bug: Insert > Table is a split button in this Office
   build; the icon inserts a default table and the arrow opens the grid.
+- **The Shapes gallery's More button had a shaded left half (reported on
+  0.1.27):** a light sheen in dark mode, grey in light mode. Office draws the
+  button as a nine-slice image: one 7x11 bitmap, DrawBitmap with a source
+  rectangle per slice, the middle a one pixel column stretched 24 times.
+  Wine's DrawBitmap clamped sampling to the whole bitmap, so linear filtering
+  blended the border column into half of the stretched middle. Sampling now
+  stays inside the source rectangle (`71bbafa`, tests/d2d-source-rect.c).
+  Office issues about 47,000 such draws per start, so other nine-slice
+  outlines may look crisper too; the ribbon was otherwise pixel-identical.
 - **Office dialogs (NUIDialog) showed a white strip instead of their caption:**
   Office paints the dialog caption, buttons and accent border itself, but the
   dialog's client area is a DXVK swapchain, and on every present winewayland
