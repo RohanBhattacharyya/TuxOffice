@@ -4621,6 +4621,60 @@ static BOOL fontcollection_add_replacement(struct dwrite_fontcollection *collect
     return TRUE;
 }
 
+/* The family exists but may lack faces its replacement has: Office links only
+   Segoe UI Semilight into the Fonts folder, so DirectWrite's "Segoe UI" had no
+   regular face and gave Semilight, narrower than the Selawik that GDI substitutes.
+   Office sized labels with one and drew them with the other and clipped them.
+   Add the replacement's real faces for weights, stretches and styles the family
+   lacks, in place of faces simulated for them. */
+static BOOL fontcollection_merge_replacement(struct dwrite_fontcollection *collection, UINT32 target_index,
+    const WCHAR *replacement_name)
+{
+    UINT32 i = collection_find_family(collection, replacement_name), j, k, added = 0;
+    struct dwrite_fontfamily_data *target, *replacement;
+
+    if (i == ~0u || i == target_index)
+        return FALSE;
+
+    target = collection->family_data[target_index];
+    replacement = collection->family_data[i];
+    for (j = 0; j < replacement->count; ++j)
+    {
+        struct dwrite_font_data *font = replacement->fonts[j];
+        BOOL present = FALSE;
+
+        if (font->simulations) continue;
+        for (k = 0; k < target->count; ++k)
+        {
+            struct dwrite_font_data *existing = target->fonts[k];
+            if (!existing->simulations && existing->weight == font->weight &&
+                    existing->stretch == font->stretch && existing->style == font->style)
+                present = TRUE;
+        }
+        if (present) continue;
+        for (k = 0; k < target->count;)
+        {
+            struct dwrite_font_data *existing = target->fonts[k];
+            if (existing->simulations && existing->weight == font->weight &&
+                    existing->stretch == font->stretch && existing->style == font->style)
+            {
+                release_font_data(existing);
+                memmove(&target->fonts[k], &target->fonts[k + 1], (target->count - k - 1) * sizeof(*target->fonts));
+                target->count--;
+            }
+            else ++k;
+        }
+        if (SUCCEEDED(fontfamily_add_font(target, font)))
+        {
+            addref_font_data(font);
+            ++added;
+        }
+    }
+    if (added) TRACE("added %u faces of %s to %s\n", added, debugstr_w(replacement_name),
+            debugstr_w(collection->family_data[target_index]->fonts[0]->facename));
+    return added != 0;
+}
+
 /* Add family mappings from HKCU\Software\Wine\Fonts\Replacements. This only affects
    system font collections. */
 static void fontcollection_add_replacements(struct dwrite_fontcollection *collection)
@@ -4645,7 +4699,9 @@ static void fontcollection_add_replacements(struct dwrite_fontcollection *collec
     datalen = max_datalen;
     namelen = max_namelen;
     while (RegEnumValueW(hkey, i++, name, &namelen, NULL, &type, data, &datalen) == ERROR_SUCCESS) {
-        if (collection_find_family(collection, name) == ~0u) {
+        UINT32 index = collection_find_family(collection, name);
+
+        if (index == ~0u) {
             if (type == REG_MULTI_SZ) {
                 WCHAR *replacement = data;
                 while (*replacement) {
@@ -4657,8 +4713,10 @@ static void fontcollection_add_replacements(struct dwrite_fontcollection *collec
             else if (type == REG_SZ)
                 fontcollection_add_replacement(collection, name, data);
         }
-        else
-	    TRACE("%s is available, won't be replaced.\n", debugstr_w(name));
+        else if (type == REG_SZ)
+            fontcollection_merge_replacement(collection, index, data);
+        else if (type == REG_MULTI_SZ)
+            fontcollection_merge_replacement(collection, index, data);
 
         datalen = max_datalen;
         namelen = max_namelen;
