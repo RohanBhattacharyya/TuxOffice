@@ -19,6 +19,9 @@
 
 #include "effect_graph.h"
 #include "d2d1effects.h"
+#include "wine/debug.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(ui);
 
 const GUID composition_effect_interop_iid =
         {0x2fc57384, 0xa068, 0x44d7, {0xa3, 0x31, 0x30, 0x98, 0x2f, 0xcf, 0x71, 0x77}};
@@ -304,6 +307,10 @@ static HRESULT composition_effect_node_create_image( const struct composition_ef
         if (FAILED(hr)) return hr;
         if (status != CompositionGetValueStatus_Succeeded) return E_INVALIDARG;
     }
+    TRACE( "node %p name %s coefficients %f %f %f %f properties %u\n", node, debugstr_w( WindowsGetStringRawBuffer( node->name, NULL ) ),
+            coefficients.x, coefficients.y, coefficients.z, coefficients.w, node->property_count );
+    for (i = 0; i < node->property_count; ++i)
+        TRACE( "  property %s mapping %d\n", debugstr_w( WindowsGetStringRawBuffer( node->properties[i].name, NULL ) ), node->properties[i].mapping );
     if (FAILED(hr = ID2D1DeviceContext_CreateEffect( context, &CLSID_D2D1ArithmeticComposite, &effect ))) return hr;
     if (FAILED(hr = ID2D1Effect_SetValue( effect, D2D1_ARITHMETICCOMPOSITE_PROP_COEFFICIENTS,
             D2D1_PROPERTY_TYPE_VECTOR4, (const BYTE *)&coefficients, sizeof(coefficients) ))) goto done;

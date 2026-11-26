@@ -7832,6 +7832,7 @@ static HRESULT WINAPI effect_object_StartAnimation( ICompositionObject *iface, H
         FIXME( "unsupported animation for %s, hr %#lx.\n", debugstr_hstring( name ), hr );
         return E_NOTIMPL;
     }
+    TRACE( "effect %p %s final value %f\n", impl, debugstr_hstring( name ), value );
     EnterCriticalSection( &impl->lock );
     effect_remove_expression( impl, name );
     LeaveCriticalSection( &impl->lock );
