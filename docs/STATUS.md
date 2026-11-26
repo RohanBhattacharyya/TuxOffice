@@ -41,13 +41,19 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   (darker red), with rounded corners.
 - Checked and not a bug: Insert > Table is a split button in this Office
   build; the icon inserts a default table and the arrow opens the grid.
-- Still open: Office dialogs (NUIDialog) show a white strip instead of their
-  caption. Office returns from WM_NCPAINT without painting (Wine reports DWM
-  composition enabled, so Office leaves the frame to DWM) and asks
-  DwmGetWindowAttribute for caption button bounds (attribute 5, not
-  implemented). A plain Win32 window that ignores WM_NCPAINT keeps Wine's
-  caption, also after a resize, and drawing the default frame after Office's
-  WM_NCPAINT ran but did not show, so the strip is not explained yet.
+- **Office dialogs (NUIDialog) showed a white strip instead of their caption:**
+  Office paints the dialog caption, buttons and accent border itself, but the
+  dialog's client area is a DXVK swapchain, and on every present winewayland
+  decided the window had no contents and committed a transparent dummy buffer
+  over it, so the slide behind showed through the frame. The check compared
+  the window size with the content size, which is recorded in device pixels
+  and is one pixel smaller when the window size has no exact scale (592 px at
+  1.25 shows 591) (`81fb675`). The caption now shows with ? and x, and x
+  closes the dialog. The same check affects every window with a GPU client
+  area and an inexact size.
+- Wine's own Windows 11 style caption buttons were zero-sized in per-monitor
+  DPI aware programs (the close glyph drew as a dot, and the buttons could
+  not be hit); they now scale with the system DPI (`d3c0682`).
 - Not pursued: a scripted click on a Shapes gallery item right after the
   pointer jumps onto it from the ribbon and rests 0.5-1.5 s is ignored on the
   first use; moving across a neighbouring item first works.
