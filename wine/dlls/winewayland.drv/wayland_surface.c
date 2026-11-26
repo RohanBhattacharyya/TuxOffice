@@ -2428,8 +2428,12 @@ void wayland_surface_ensure_contents(struct wayland_surface *surface)
     int width, height;
     BOOL needs_contents;
 
-    width = surface->window.rect.right - surface->window.rect.left;
-    height = surface->window.rect.bottom - surface->window.rect.top;
+    /* Compare in the device pixels wayland_surface_attach_shm() records: for a
+     * window size with no exact scale they are fewer than the window pixels,
+     * and comparing window pixels replaced real contents with a transparent
+     * buffer on every client surface present. */
+    width = wayland_surface_device_size(surface, surface->window.rect.right - surface->window.rect.left);
+    height = wayland_surface_device_size(surface, surface->window.rect.bottom - surface->window.rect.top);
     needs_contents = surface->window.visible &&
                      (surface->content_width != width ||
                       surface->content_height != height);
