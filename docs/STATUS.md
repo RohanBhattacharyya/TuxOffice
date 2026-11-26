@@ -28,6 +28,30 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **No frame around the selected slide thumbnail (reported on 0.1.25):**
+  PowerPoint draws the selection and hover frames as a group of two rounded
+  rectangles filled in alternate mode (a 5 px ring). d2d1's geometry groups
+  had no fill or outline at all, so nothing was drawn; they now build one
+  from their sources (flattened, in the group's fill mode). Rounded
+  rectangle Simplify also centred its corner arcs as if y pointed up, so each
+  corner bulged outside the rectangle; the stroker uses Simplify, so rounded
+  rectangle outlines everywhere had those corners (PowerPoint's combo boxes
+  now show proper rounded outlines too) (`0735122`). Thumbnails: selected
+  (dark orange-red), hover (light orange), selected without the pointer
+  (darker red), with rounded corners.
+- Checked and not a bug: Insert > Table is a split button in this Office
+  build; the icon inserts a default table and the arrow opens the grid.
+- Still open: Office dialogs (NUIDialog) show a white strip instead of their
+  caption. Office returns from WM_NCPAINT without painting (Wine reports DWM
+  composition enabled, so Office leaves the frame to DWM) and asks
+  DwmGetWindowAttribute for caption button bounds (attribute 5, not
+  implemented). A plain Win32 window that ignores WM_NCPAINT keeps Wine's
+  caption, also after a resize, and drawing the default frame after Office's
+  WM_NCPAINT ran but did not show, so the strip is not explained yet.
+- Not pursued: a scripted click on a Shapes gallery item right after the
+  pointer jumps onto it from the ribbon and rests 0.5-1.5 s is ignored on the
+  first use; moving across a neighbouring item first works.
+
 - **PowerPoint text boxes showed nothing while typing (reported on 0.1.24,
   present since at least 0.1.5):** from the click into a placeholder, every
   composition frame of the slide view failed, so the slide never updated
