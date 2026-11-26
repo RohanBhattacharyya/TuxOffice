@@ -5843,6 +5843,8 @@ static UINT_ENTRY( KEYBOARDDELAY, 1, KEYBOARD_KEY, "KeyboardDelay" );
 static UINT_ENTRY( KEYBOARDSPEED, 31, KEYBOARD_KEY, "KeyboardSpeed" );
 static UINT_ENTRY( MENUSHOWDELAY, 400, DESKTOP_KEY, "MenuShowDelay" );
 static UINT_ENTRY( MINARRANGE, ARW_HIDE, METRICS_KEY, "MinArrange" );
+/* "Animate windows when minimizing and maximizing", on by default on Windows. */
+static UINT_ENTRY( MINANIMATE, 1, METRICS_KEY, "MinAnimate" );
 static UINT_ENTRY( MINHORZGAP, 0, METRICS_KEY, "MinHorzGap" );
 static UINT_ENTRY( MINVERTGAP, 0, METRICS_KEY, "MinVertGap" );
 static UINT_ENTRY( MINWIDTH, 154, METRICS_KEY, "MinWidth" );
@@ -6797,21 +6799,27 @@ BOOL WINAPI NtUserSystemParametersInfo( UINT action, UINT val, void *ptr, UINT w
         ret = set_entry( &entry_SCREENREADER, val, ptr, winini );
         break;
 
+    /* Applications read this as whether animations are wanted: Excel turns off
+     * its own animations, such as the cell cursor gliding to the next cell,
+     * when it is 0. */
     case SPI_GETANIMATION:
     {
         ANIMATIONINFO *anim_info = ptr;
+        UINT animate;
 
-	/* Tell it "disabled" */
-	if (anim_info && anim_info->cbSize == sizeof(ANIMATIONINFO))
-        {
-            /* Minimize and restore animation is disabled (nonzero == enabled) */
-	    anim_info->iMinAnimate = 0;
-            ret = TRUE;
-        }
-	break;
+        if (anim_info && anim_info->cbSize == sizeof(ANIMATIONINFO) &&
+            (ret = get_entry( &entry_MINANIMATE, 0, &animate )))
+            anim_info->iMinAnimate = animate != 0;
+        break;
     }
+    case SPI_SETANIMATION:
+    {
+        ANIMATIONINFO *anim_info = ptr;
 
-    WINE_SPI_WARN(SPI_SETANIMATION);
+        if (anim_info && anim_info->cbSize == sizeof(ANIMATIONINFO))
+            ret = set_entry( &entry_MINANIMATE, anim_info->iMinAnimate != 0, NULL, winini );
+        break;
+    }
 
     case SPI_GETFONTSMOOTHING:
         ret = get_entry( &entry_FONTSMOOTHING, val, ptr );
