@@ -54,6 +54,9 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 - Wine's own Windows 11 style caption buttons were zero-sized in per-monitor
   DPI aware programs (the close glyph drew as a dot, and the buttons could
   not be hit); they now scale with the system DPI (`d3c0682`).
+- Open (seen while verifying 0.1.27, also in 0.1.26): the header of Word's
+  Comments pane draws as vertical stripes where its title and buttons should
+  be.
 - Not pursued: a scripted click on a Shapes gallery item right after the
   pointer jumps onto it from the ribbon and rests 0.5-1.5 s is ignored on the
   first use; moving across a neighbouring item first works.
