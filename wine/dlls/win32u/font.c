@@ -94,6 +94,9 @@ struct gdi_font_face
     struct gdi_font_family    *family;
     struct gdi_font_enum_data *cached_enum_data;
     struct wine_rb_entry       full_name_entry;
+    int           file_info;             /* 1 if file_time/file_size are known, -1 if the file is missing */
+    FILETIME      file_time;
+    ULONGLONG     file_size;
 };
 
 static const struct font_backend_funcs *font_funcs;
@@ -486,7 +489,9 @@ static void get_fonts_data_dir_path( const WCHAR *file, WCHAR *path )
 
 static void get_fonts_win_dir_path( const WCHAR *file, WCHAR *path )
 {
-    asciiz_to_unicode( path, "\\??\\C:\\windows\\fonts\\" );
+    /* Spelled as wine.inf creates it, so that opening a font needs no
+     * case-insensitive directory search. */
+    asciiz_to_unicode( path, "\\??\\C:\\windows\\Fonts\\" );
     if (file) lstrcatW( path, file );
 }
 
@@ -2399,7 +2404,32 @@ static void free_font_handle( DWORD handle )
     }
 }
 
-static struct gdi_font *alloc_gdi_font( const WCHAR *file, void *data_ptr, SIZE_T data_size )
+static BOOL query_font_file( const WCHAR *file, FILETIME *time, ULONGLONG *size )
+{
+    FILE_NETWORK_OPEN_INFORMATION info;
+    UNICODE_STRING nt_name;
+    OBJECT_ATTRIBUTES attr;
+
+    nt_name.Buffer = (WCHAR *)file;
+    nt_name.Length = nt_name.MaximumLength = lstrlenW( file ) * sizeof(WCHAR);
+
+    attr.Length = sizeof(attr);
+    attr.RootDirectory = 0;
+    attr.Attributes = OBJ_CASE_INSENSITIVE;
+    attr.ObjectName = &nt_name;
+    attr.SecurityDescriptor = NULL;
+    attr.SecurityQualityOfService = NULL;
+
+    if (NtQueryFullAttributesFile( &attr, &info )) return FALSE;
+    time->dwLowDateTime  = info.LastWriteTime.LowPart;
+    time->dwHighDateTime = info.LastWriteTime.HighPart;
+    *size = info.EndOfFile.QuadPart;
+    return TRUE;
+}
+
+/* file_time is NULL when the file could not be found; the font then has no file. */
+static struct gdi_font *alloc_gdi_font( const WCHAR *file, const FILETIME *file_time, ULONGLONG file_size,
+                                        void *data_ptr, SIZE_T data_size )
 {
     UINT len = file ? lstrlenW(file) : 0;
     struct gdi_font *font = calloc( 1, offsetof( struct gdi_font, file[len + 1] ));
@@ -2412,25 +2442,10 @@ static struct gdi_font *alloc_gdi_font( const WCHAR *file, void *data_ptr, SIZE_
 
     if (file)
     {
-        FILE_NETWORK_OPEN_INFORMATION info;
-        UNICODE_STRING nt_name;
-        OBJECT_ATTRIBUTES attr;
-
-        nt_name.Buffer = (WCHAR *)file;
-        nt_name.Length = nt_name.MaximumLength = len * sizeof(WCHAR);
-
-        attr.Length = sizeof(attr);
-        attr.RootDirectory = 0;
-        attr.Attributes = OBJ_CASE_INSENSITIVE;
-        attr.ObjectName = &nt_name;
-        attr.SecurityDescriptor = NULL;
-        attr.SecurityQualityOfService = NULL;
-
-        if (!NtQueryFullAttributesFile( &attr, &info ))
+        if (file_time)
         {
-            font->writetime.dwLowDateTime  = info.LastWriteTime.LowPart;
-            font->writetime.dwHighDateTime = info.LastWriteTime.HighPart;
-            font->data_size = info.EndOfFile.QuadPart;
+            font->writetime = *file_time;
+            font->data_size = file_size;
             memcpy( font->file, file, len * sizeof(WCHAR) );
         }
     }
@@ -2477,7 +2492,16 @@ static struct gdi_font *create_gdi_font( const struct gdi_font_face *face, const
 {
     struct gdi_font *font;
 
-    if (!(font = alloc_gdi_font( face->file, face->data_ptr, face->data_size ))) return NULL;
+    if (face->file && !face->file_info)
+    {
+        /* Asked once per face: fonts are created for each size, and for each
+         * font the faces it links to, and the query is a path lookup and a
+         * stat of the file every time. Called with font_lock held. */
+        struct gdi_font_face *mutable = (struct gdi_font_face *)face;
+        mutable->file_info = query_font_file( face->file, &mutable->file_time, &mutable->file_size ) ? 1 : -1;
+    }
+    if (!(font = alloc_gdi_font( face->file, face->file_info > 0 ? &face->file_time : NULL, face->file_size,
+                                 face->data_ptr, face->data_size ))) return NULL;
     font->fs = face->fs;
     font->lf = *lf;
     font->fake_italic = (lf->lfItalic && !(face->ntmFlags & NTM_ITALIC));
@@ -2827,7 +2851,10 @@ static void create_child_font_list( struct gdi_font *font )
 static struct list gdi_font_list = LIST_INIT( gdi_font_list );
 static struct list unused_gdi_font_list = LIST_INIT( unused_gdi_font_list );
 static unsigned int unused_font_count;
-#define UNUSED_CACHE_SIZE 10
+/* Fonts released but kept loaded. Each one holds its FreeType face and glyph
+ * cache; an app that draws in many sizes, such as Word filling its style
+ * galleries, otherwise reloads faces and their linked fonts constantly. */
+#define UNUSED_CACHE_SIZE 64
 
 static BOOL fontcmp( const struct gdi_font *font, DWORD hash, const LOGFONTW *lf,
                      const FMAT2 *matrix, BOOL can_use_bitmap )
@@ -6347,7 +6374,13 @@ ULONG WINAPI NtGdiMakeFontDir( DWORD embed, BYTE *buffer, UINT size, const WCHAR
     if (wcslen( path ) != len / sizeof(WCHAR) - 1) return 0;
 
     pthread_mutex_lock( &font_lock );
-    if (!(font = alloc_gdi_font( path, NULL, 0 ))) goto done;
+    {
+        FILETIME time;
+        ULONGLONG file_size;
+        BOOL found = query_font_file( path, &time, &file_size );
+
+        if (!(font = alloc_gdi_font( path, found ? &time : NULL, file_size, NULL, 0 ))) goto done;
+    }
     font->lf.lfHeight = 100;
     if (!font_funcs->load_font( font )) goto done;
     if (!font_funcs->set_outline_text_metrics( font )) goto done;

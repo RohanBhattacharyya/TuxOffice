@@ -223,6 +223,7 @@ struct font_mapping
     ino_t       ino;
     void       *data;
     size_t      size;
+    WCHAR      *file;   /* NT path it was first opened by */
 };
 
 static struct list mappings_list = LIST_INIT( mappings_list );
@@ -1638,7 +1639,26 @@ static int calc_ppem_for_height(FT_Face ft_face, int height)
     return ppem;
 }
 
-static struct font_mapping *map_font_file( const char *name )
+/* A face whose file is already mapped skips the NT to Unix path lookup and
+ * the open: drawing text in many sizes loads the same faces (and the faces
+ * they link to) over and over, and the lookup of "\\??\\C:\\windows\\fonts"
+ * reads whole directories when the case differs from the disk. */
+static struct font_mapping *find_font_mapping( const WCHAR *file )
+{
+    struct font_mapping *mapping;
+
+    LIST_FOR_EACH_ENTRY( mapping, &mappings_list, struct font_mapping, entry )
+    {
+        if (mapping->file && !wcsicmp( mapping->file, file ))
+        {
+            mapping->refcount++;
+            return mapping;
+        }
+    }
+    return NULL;
+}
+
+static struct font_mapping *map_font_file( const char *name, const WCHAR *file )
 {
     struct font_mapping *mapping;
     struct stat st;
@@ -1671,6 +1691,7 @@ static struct font_mapping *map_font_file( const char *name )
     mapping->dev = st.st_dev;
     mapping->ino = st.st_ino;
     mapping->size = st.st_size;
+    if ((mapping->file = malloc( (wcslen( file ) + 1) * sizeof(WCHAR) ))) wcscpy( mapping->file, file );
     list_add_tail( &mappings_list, &mapping->entry );
     return mapping;
 
@@ -1685,6 +1706,7 @@ static void unmap_font_file( struct font_mapping *mapping )
     {
         list_remove( &mapping->entry );
         munmap( mapping->data, mapping->size );
+        free( mapping->file );
         free( mapping );
     }
 }
@@ -2085,9 +2107,10 @@ static BOOL freetype_load_font( struct gdi_font *font )
     if (font->file[0])
     {
         char *filename;
-        if (!ntdll_get_unix_file_name( font->file, &filename, FILE_OPEN ))
+        if (!(data->mapping = find_font_mapping( font->file )) &&
+            !ntdll_get_unix_file_name( font->file, &filename, FILE_OPEN ))
         {
-            data->mapping = map_font_file( filename );
+            data->mapping = map_font_file( filename, font->file );
             free( filename );
         }
         if (!data->mapping)
