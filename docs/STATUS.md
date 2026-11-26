@@ -45,12 +45,42 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   updated on 11/24/202"):** DirectWrite's "Segoe UI" family held only the
   Semilight face Office ships, so NetUI measured labels narrower than GDI
   (Selawik substitute) drew them. dwrite now fills a family's missing faces
-  from its Wine\Fonts\Replacements entry. Not yet in a release.
-- Sweep notes (0.1.29): Word, Excel, PowerPoint, Publisher, Access, OneNote
-  ribbons all render; Word's style-set gallery fills only after a few
-  seconds; Access datasheet draws faint grid lines right of the last column
-  (unverified against Windows). Perf note: Word idle with a blinking caret
-  is ~125 ms/s CPU (UI thread 65, DXVK 45).
+  from its Wine\Fonts\Replacements entry (`9abef03`, 0.1.30).
+- **Segoe UI, Calibri, Aptos and Office's other fonts were not installed
+  unless `tuxoffice fonts cloud` was run by hand (reported on 0.1.29):**
+  the first launch after signing in now has Office fetch them from
+  Microsoft's cloud font service and registers them prefix-wide (59-61
+  fonts, about 30 s, shown in the launch window), retrying hourly until
+  Segoe UI Semibold, which the service sends on a later request, is there.
+  The service has no Segoe UI Bold or italics; only those faces still map
+  to Selawik's. Setup offers Windows' Segoe UI Variable and icon fonts when
+  run in a terminal (their licence must be accepted) (`01776e7`). Publisher's
+  status bar and ribbon checked with the real Segoe UI.
+- **Word's Design-tab style gallery took seconds to fill the first time:**
+  every GDI font instance, and each CJK fallback face linked to it, queried
+  its file's attributes and reopened the file through a case-insensitive
+  path lookup; only 10 released fonts were kept. Faces now remember their
+  file's time and size, mappings are found by path first, 64 released fonts
+  are kept, and the fonts directory is spelt as on disk (`fdef1d6`). Main
+  thread file system calls on the fill fell by about 3/4, CPU 3.6-3.9 s to
+  3.4-3.5 s, the gallery reacts about 120 ms sooner; GDI text is
+  pixel-identical. The rest of the fill is spread out: FreeType hinting
+  (~19% of the main thread), Office's code (~20%), and some 72,000
+  wineserver round trips in 6 s, 45,000 of them registry calls (Office's
+  policy keys, a CoCreateInstance of MLang 182 times, a failing WinRT
+  ProtectionPolicyManager activation 109 times, desktop.ini lookups for
+  each folder of the QuickStyles path). A client-side registry cache would
+  be the general fix; not started.
+- Sweep notes (0.1.29-0.1.30): Word, Excel, PowerPoint, Publisher, Access,
+  OneNote ribbons all render. Backstage template thumbnails fill within
+  2 s (not blank; the earlier capture was too early). Word, Excel and
+  PowerPoint Font, Find/Replace, Paragraph, Format Cells and Insert Function
+  dialogs render correctly at 1.25 scale. Access datasheets draw very faint
+  lines (3-11 levels off white) right of the last column; unverified
+  against Windows. Object-model suites unchanged: Access 42/44 (the known
+  XML export and compact), ADO 7/7, Publisher 143/143, formats 50/50, media
+  13/13, VBA 5/5, OneNote 9/10 (FindPages needs Windows Search). Perf note:
+  Word idle with a blinking caret is ~125 ms/s CPU (UI thread 65, DXVK 45).
 - **Excel's cell cursor jumped instead of gliding, and animations felt
   choppy in every app (reported on 0.1.28):** Excel decides at startup
   whether to animate from SPI_GETANIMATION's iMinAnimate ("Animate windows
