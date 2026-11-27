@@ -8116,6 +8116,34 @@ NTSTATUS WINAPI NtQueryVolumeInformationFile( HANDLE handle, IO_STATUS_BLOCK *io
         }
         break;
 
+    case FileFsSectorSizeInformation:
+        if (length < sizeof(FILE_FS_SECTOR_SIZE_INFORMATION))
+            status = STATUS_BUFFER_TOO_SMALL;
+        else
+        {
+            FILE_FS_SECTOR_SIZE_INFORMATION *info = buffer;
+            FILE_FS_FULL_SIZE_INFORMATION full_info;
+
+            /* Office's cloud document cache asks for this through
+             * GetFileInformationByHandleEx(FileStorageInfo) and gives up on the
+             * file without it. Report the logical sector size Wine reports
+             * elsewhere and 4K physical sectors, as on current disks. */
+            if ((status = get_full_size_info( fd, &full_info )) == STATUS_SUCCESS)
+            {
+                ULONG physical = max( full_info.BytesPerSector, 4096 );
+
+                info->LogicalBytesPerSector = full_info.BytesPerSector;
+                info->PhysicalBytesPerSectorForAtomicity = physical;
+                info->PhysicalBytesPerSectorForPerformance = physical;
+                info->FileSystemEffectivePhysicalBytesPerSectorForAtomicity = physical;
+                info->Flags = SSINFO_FLAGS_ALIGNED_DEVICE | SSINFO_FLAGS_PARTITION_ALIGNED_ON_DEVICE;
+                info->ByteOffsetForSectorAlignment = 0;
+                info->ByteOffsetForPartitionAlignment = 0;
+                io->Information = sizeof(*info);
+            }
+        }
+        break;
+
     case FileFsObjectIdInformation:
         FIXME( "%p: object id info not supported\n", handle );
         status = STATUS_NOT_IMPLEMENTED;

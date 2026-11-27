@@ -669,6 +669,24 @@ typedef struct _FILE_FS_FULL_SIZE_INFORMATION_EX {
     ULONG     BytesPerSector;
 } FILE_FS_FULL_SIZE_INFORMATION_EX, *PFILE_FS_FULL_SIZE_INFORMATION_EX;
 
+/* FileFsSectorSizeInformation = 11 */
+typedef struct _FILE_FS_SECTOR_SIZE_INFORMATION {
+    ULONG LogicalBytesPerSector;
+    ULONG PhysicalBytesPerSectorForAtomicity;
+    ULONG PhysicalBytesPerSectorForPerformance;
+    ULONG FileSystemEffectivePhysicalBytesPerSectorForAtomicity;
+    ULONG Flags;
+    ULONG ByteOffsetForSectorAlignment;
+    ULONG ByteOffsetForPartitionAlignment;
+} FILE_FS_SECTOR_SIZE_INFORMATION, *PFILE_FS_SECTOR_SIZE_INFORMATION;
+
+#define SSINFO_FLAGS_ALIGNED_DEVICE              0x00000001
+#define SSINFO_FLAGS_PARTITION_ALIGNED_ON_DEVICE 0x00000002
+#define SSINFO_FLAGS_NO_SEEK_PENALTY             0x00000004
+#define SSINFO_FLAGS_TRIM_ENABLED                0x00000008
+#define SSINFO_FLAGS_BYTE_ADDRESSABLE            0x00000010
+#define SSINFO_OFFSET_UNKNOWN                    0xffffffff
+
 typedef struct _FILE_PIPE_WAIT_FOR_BUFFER {
     LARGE_INTEGER   Timeout;
     ULONG           NameLength;
