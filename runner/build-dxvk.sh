@@ -34,7 +34,7 @@ git -C "$WORK/source" submodule update --init --recursive --depth 1
 # applies over its old version nor reverses cleanly.
 git -C "$WORK/source" checkout -- .
 for patch in "$HERE/patches/dxvk-context-state-lock.patch" "$HERE/patches/dxvk-resource-import-lock.patch" \
-    "$HERE/patches/dxvk-composition-present.patch"; do
+    "$HERE/patches/dxvk-composition-present.patch" "$HERE/patches/dxvk-context-state-copy.patch"; do
   git -C "$WORK/source" apply "$patch"
 done
 python3 - "$WORK" "$WORK/toolchain/$TOOLCHAIN/bin" <<'PY'
@@ -66,4 +66,5 @@ printf '%s\n' "DXVK 3.1.1 $REVISION, synchronized state swaps and resource impor
   > "$DESTINATION/state-lock-v1"
 printf '%s\n' 'Resource imports hold the shared allocation pool mutex' > "$DESTINATION/resource-pool-lock-v1"
 printf '%s\n' 'Composition swap chains count presents without a window' > "$DESTINATION/composition-present-v1"
+printf '%s\n' 'Context state swaps copy only bound slots' > "$DESTINATION/context-state-copy-v1"
 echo ":: patched DXVK installed to $DESTINATION"
