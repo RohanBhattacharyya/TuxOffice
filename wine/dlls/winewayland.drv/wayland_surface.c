@@ -947,9 +947,10 @@ static void wayland_surface_reconfigure_size(struct wayland_surface *surface,
         wp_viewport_set_destination(surface->wp_viewport, -1, -1);
 }
 
-/* The surface coordinate of a window edge (in window pixels), as the compositor
- * shows it: at the device pixel nearest to the surface coordinate times the scale. */
-static int surface_edge_from_window(struct wayland_surface *surface, int window, BOOL far)
+/* The surface coordinate of the near edge of a subsurface (in window pixels),
+ * as the compositor shows it: at the device pixel nearest to the surface
+ * coordinate times the scale. */
+static int surface_edge_from_window(struct wayland_surface *surface, int window)
 {
     double scale = surface->window.scale;
     int base = floor(window / scale), candidate;
@@ -957,13 +958,25 @@ static int surface_edge_from_window(struct wayland_surface *surface, int window,
     for (candidate = base - 1; candidate <= base + 2; candidate++)
         if ((int)round(candidate * scale) == window) return candidate;
     /* Not reachable: cover the window pixel rather than leave it out. */
-    if (far)
-    {
-        for (candidate = base; ; candidate++)
-            if ((int)round(candidate * scale) > window) return candidate;
-    }
     for (candidate = base + 1; ; candidate--)
         if ((int)round(candidate * scale) < window) return candidate;
+}
+
+/* The surface size that takes a subsurface placed at surface coordinate pos
+ * to the window edge far. The compositor rounds the position and the size of
+ * a subsurface to device pixels each on their own (KWin does), so the far
+ * edge is not where pos + size would land: Office's ribbon, 222 pixels tall
+ * at 125%, showed a pixel short and its last row white, as did a column at
+ * the end of Publisher's scroll bar. Where no size reaches the edge exactly
+ * (one in five at 125%), cover the pixel rather than leave it out. */
+static int surface_extent_from_window(struct wayland_surface *surface, int pos, int far)
+{
+    double scale = surface->window.scale;
+    int start = round(pos * scale), size = max(1, (int)floor((far - start) / scale) - 1);
+
+    while (size > 1 && start + (int)round((size - 1) * scale) >= far) size--;
+    while (start + (int)round(size * scale) < far) size++;
+    return size;
 }
 
 /**********************************************************************
@@ -1037,17 +1050,18 @@ static BOOL wayland_surface_reconfigure_client(struct wayland_surface *surface,
         visible_right = client_x + client_width;
         visible_bottom = client_y + client_height;
     }
-    /* Subsurfaces are placed in whole surface pixels, and the compositor shows
-     * each edge at the nearest device pixel. Under a fractional scale, rounding
-     * the position and the size each on their own showed most GPU children a
-     * pixel or two larger than their image, resampling all of it (blurry text),
-     * or a pixel short of their window (a white line along Word's task panes).
-     * Pick for each edge the surface pixel that lands on its device pixel, and
-     * where none does (one in five at 125%), the next one outwards. */
-    x = surface_edge_from_window(surface, visible_left, FALSE);
-    y = surface_edge_from_window(surface, visible_top, FALSE);
-    width = surface_edge_from_window(surface, visible_right, TRUE) - x;
-    height = surface_edge_from_window(surface, visible_bottom, TRUE) - y;
+    /* Subsurfaces are placed and sized in whole surface pixels, which the
+     * compositor rounds to device pixels each on their own. Under a fractional
+     * scale, sizes taken from the window size showed most GPU children a pixel
+     * or two larger than their image, resampling all of it (blurry text), or a
+     * pixel short of their window (a white line along Word's task panes and
+     * below Office's ribbon). Pick the position that lands on the device pixel
+     * of the near edge and the size that reaches the far one, and where none
+     * does (one in five at 125%), the next one outwards. */
+    x = surface_edge_from_window(surface, visible_left);
+    y = surface_edge_from_window(surface, visible_top);
+    width = surface_extent_from_window(surface, x, visible_right);
+    height = surface_extent_from_window(surface, y, visible_bottom);
 
     TRACE("hwnd=%p subsurface=%d,%d+%dx%d\n", surface->hwnd, x, y, width, height);
     TRACE_(uistack)("GPU hwnd %p in %p at %d,%d size %dx%d (window %s)%s\n", client->client.hwnd,
@@ -1806,9 +1820,11 @@ static void wayland_overlay_set_rect(struct wayland_overlay *overlay, struct way
         overlay->needs_contents = TRUE;
     }
 
-    wayland_surface_coords_from_window(surface, rect->left, rect->top, &x, &y);
-    wayland_surface_coords_from_window(surface, rect->right - rect->left, rect->bottom - rect->top,
-                                       &width, &height);
+    /* placed like the client surfaces it covers */
+    x = surface_edge_from_window(surface, rect->left);
+    y = surface_edge_from_window(surface, rect->top);
+    width = surface_extent_from_window(surface, x, rect->right);
+    height = surface_extent_from_window(surface, y, rect->bottom);
 
     TRACE("hwnd=%p rect=%s subsurface=%d,%d+%dx%d\n", overlay->hwnd, wine_dbgstr_rect(rect),
           x, y, width, height);
@@ -2284,7 +2300,6 @@ void wayland_restack_client_surfaces(HWND toplevel)
             SetRect(&overlaid, 0, 0, 0, 0);
             continue;
         }
-
         /* only GDI windows painted over a client surface need an overlay */
         if (!rects[i].opaque || data->wayland_surface) continue;
         for (j = 0; j < covered_count; j++)
