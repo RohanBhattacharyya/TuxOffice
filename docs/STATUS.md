@@ -28,6 +28,12 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Released as 0.1.32** (`67ec2cd`, packages and checked SHA256SUMS in
+  `dist/0.1.32/`): everything below down to the 0.1.31 release. The
+  container-built runner passes the Office suite (Word 11, Excel 17,
+  PowerPoint 8 checks), `region-span.py`, `gpu-child-edges.py` and
+  `border-strip.py`; at 240 Hz Word's wheel-to-draw median is 3 ms (85
+  draws for 90 steps) and key-to-draw 2 ms (p90 4).
 - **Office animations capped at 95 frames a second on high refresh
   displays.** The live panel runs at 240 Hz. windows.ui ticks composition
   animations (Word's and Excel's smooth scrolling, caret fades,
