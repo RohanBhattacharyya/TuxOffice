@@ -28,6 +28,23 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Word closed itself opening a document from OneDrive** (personal
+  OneDrive; the downloaded copy opened fine). After the download Word read
+  the document through Office's cloud cache (Csi) and found its stream
+  gone: IStream::Stat on a Csi stream with no inner stream, Office's
+  fail-fast tag 0x1d7815cf, exit code 494409167, no crash dialog. Found with
+  gdb on the reproduced open (the user signed the isolated session in with a
+  device code): a hardware watchpoint showed the stream being torn down by
+  Csi's ILockBytes::Flush, called from Wine's ole32. Word probes every
+  document with StgOpenStorageOnILockBytes; for a .docx that fails, and
+  destroying the half-built storage flushed the caller's lock bytes. A
+  storage that failed to open no longer flushes (`abbbfa0`); OneDrive
+  documents open with AutoSave on. `tests/stg-probe-flush.c` fails on 0.1.33
+  and passes; ole32 storage32 conformance tests 19036/0 failures before and
+  after. On the way: GetFileInformationByHandleEx(FileStorageInfo) is now
+  implemented (`b5c4f2f`, `tests/file-storage-info.c`); it was not the cause.
+  Office remembers a document that crashed it and asks before opening it
+  again ("caused a serious error"); answer Yes.
 - **Released as 0.1.33** (`01e8b8e`, packages and checked SHA256SUMS in
   `dist/0.1.33/`): the thumbnail scrolling and cloud font fixes below. The
   container-built runner passes the Office suite (Word 11, Excel 17,
