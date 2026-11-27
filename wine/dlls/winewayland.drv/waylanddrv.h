@@ -264,6 +264,8 @@ struct wayland_client_surface
     UINT previous_width, previous_height;
     BOOL presenting; /* a present is updating the surface */
     BOOL cropped; /* showing only the part inside its window */
+    BOOL positioned; /* the subsurface was placed at x, y */
+    int x, y;
 };
 
 struct wayland_shm_buffer

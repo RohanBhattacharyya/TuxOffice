@@ -971,7 +971,8 @@ static int surface_edge_from_window(struct wayland_surface *surface, int window,
  *
  * Reconfigures the subsurface covering the client area.
  */
-static void wayland_surface_reconfigure_client(struct wayland_surface *surface,
+/* Returns whether the subsurface moved. */
+static BOOL wayland_surface_reconfigure_client(struct wayland_surface *surface,
                                                struct wayland_client_surface *client,
                                                const RECT *client_rect)
 {
@@ -983,7 +984,7 @@ static void wayland_surface_reconfigure_client(struct wayland_surface *surface,
     int visible_left, visible_top, visible_right, visible_bottom;
     int src_x = 0, src_y = 0, src_width = 0, src_height = 0;
     UINT buffer_width = client->present_width, buffer_height = client->present_height;
-    BOOL crop;
+    BOOL crop, moved = FALSE;
 
     /* The offset of the client area origin relatively to the window origin. */
     client_x = client_rect->left + window->client_rect.left - window->rect.left;
@@ -1056,14 +1057,20 @@ static void wayland_surface_reconfigure_client(struct wayland_surface *surface,
     /* Only position here: placing the subsurface right above its parent and
      * committing would show its siblings in the wrong order for a frame until
      * wayland_restack_client_surfaces() restores the window stacking. */
-    if (client->wl_subsurface)
+    if (client->wl_subsurface && (!client->positioned || client->x != x || client->y != y))
+    {
         wl_subsurface_set_position(client->wl_subsurface, x, y);
+        client->positioned = TRUE;
+        client->x = x;
+        client->y = y;
+        moved = TRUE;
+    }
 
     /* Size and crop are surface state that only a present commits. Once
      * presents report their image size, leave them to presents, except when
      * the window now extends past its parent: the current image would show
      * outside the window until the next present, so crop it now. */
-    if (!client->presenting && client->present_width && !crop) return;
+    if (!client->presenting && client->present_width && !crop) return moved;
 
     if (crop)
     {
@@ -1074,7 +1081,7 @@ static void wayland_surface_reconfigure_client(struct wayland_surface *surface,
         {
             src_width = min(src_width, (int)min(client->previous_width, buffer_width) - src_x);
             src_height = min(src_height, (int)min(client->previous_height, buffer_height) - src_y);
-            if (src_width <= 0 || src_height <= 0) return;
+            if (src_width <= 0 || src_height <= 0) return moved;
         }
         wp_viewport_set_source(client->wp_viewport, wl_fixed_from_int(src_x), wl_fixed_from_int(src_y),
                                wl_fixed_from_int(src_width), wl_fixed_from_int(src_height));
@@ -1092,6 +1099,7 @@ static void wayland_surface_reconfigure_client(struct wayland_surface *surface,
         wp_viewport_set_destination(client->wp_viewport, 1, 1);
     /* the subsurface is desynchronized, this applies the crop right away */
     if (!client->presenting && client->present_width) wl_surface_commit(client->wl_surface);
+    return moved;
 }
 
 /**********************************************************************
@@ -2343,6 +2351,7 @@ static void wayland_client_surface_attach_rect(struct wayland_client_surface *cl
     struct wayland_win_data *toplevel_data;
     struct wayland_surface *surface;
     HWND hwnd = client->client.hwnd;
+    BOOL attached = FALSE;
     RECT client_rect;
 
     if (!toplevel)
@@ -2355,6 +2364,7 @@ static void wayland_client_surface_attach_rect(struct wayland_client_surface *cl
         }
 
         client->toplevel = 0;
+        client->positioned = FALSE;
         return;
     }
 
@@ -2382,6 +2392,8 @@ static void wayland_client_surface_attach_rect(struct wayland_client_surface *cl
         wl_subsurface_set_desync(client->wl_subsurface);
 
         client->toplevel = toplevel;
+        client->positioned = FALSE;
+        attached = TRUE;
     }
 
     if (rect) client_rect = *rect;
@@ -2391,7 +2403,10 @@ static void wayland_client_surface_attach_rect(struct wayland_client_surface *cl
         NtUserMapWindowPoints(hwnd, toplevel, (POINT *)&client_rect, 2, NtUserGetWinMonitorDpi(hwnd, MDT_RAW_DPI));
     }
 
-    wayland_surface_reconfigure_client(surface, client, &client_rect);
+    /* Every present comes here. Only a new or moved subsurface changes the
+     * parent: restacking and committing it on each one rebuilt the window list
+     * and copied the overlays at every frame of a blinking caret. */
+    if (!wayland_surface_reconfigure_client(surface, client, &client_rect) && !attached) return;
     /* a new client surface starts on top; restack once the lock is released */
     toplevel_data->restack_pending = TRUE;
     /* Commit to apply subsurface positioning. */
