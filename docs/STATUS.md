@@ -28,6 +28,42 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **White lines across Office windows at 125%** (reported in Publisher's
+  dark theme, in all apps): a white row under the ribbon, a white column at
+  the end of the horizontal scroll bar. KWin rounds a subsurface's position
+  and its size to device pixels each on their own (not its edges), so a GPU
+  child whose far edge depended on position + size landing there showed a
+  pixel short and the window's unpainted (white) surface beneath. The size
+  is now chosen from the device pixel the position lands on, for client
+  surfaces and the overlays above them (`fa7c775`). Where no size reaches
+  the edge (one in five at 125%) the child covers one device pixel more.
+  `tests/gpu-child-edges.py` (25 D3D children, every position and size
+  modulo 5, four window positions) fails on 0.1.31 (children 90x91 for
+  90x92) and passes now. Word, Excel and PowerPoint dark-theme captures show
+  no stray lines; the thin lines left are Office's own outlines (formula
+  bar box, ribbon group separators, notes divider).
+- **The ribbon's shadow drawn over dialogs and callouts**: Office draws the
+  shadow below its ribbon with an 8-pixel layered child window, which has a
+  subsurface of its own. Restacking skipped such children, so it stayed on
+  top, where Wayland creates subsurfaces, above the window's popups (also
+  subsurfaces of the toplevel): Publisher's "Publisher is retiring" callout
+  had a dark band across it. These children now take their place in the
+  painting order (`b3e2f19`). The Office suite and `border-strip.py` pass.
+- Checked, not bugs: the callout's 1-pixel white rim is Office's own
+  content (it stays white with the target cleared to magenta). The grey
+  (#7A7A7A) 1-pixel frame around Office's main windows is drawn by Office
+  in its non-client area; it is no system colour of the prefix, which
+  reports Windows 10 (build 19045), where Office draws its own frame. On
+  Windows 11 DWM draws a darker border with rounded corners instead.
+- Open: the callout's beak (an 11-pixel triangle in its window region) is
+  not shown: GPU children of a toplevel with a region are cropped to the
+  region's largest rectangle. Showing it needs alpha in the composition
+  swap chain or another way to shape a subsurface.
+- Harness: a D3D11 back buffer that was only cleared is presented black or
+  stale under DXVK (the clear is deferred; a readback runs it), so
+  `tests/child-surface.c`'s loop frames never reach the screen and it
+  checks only the first frame. Office draws before presenting and is not
+  affected.
 - **Released as 0.1.31** (`45cb9ea`, packages and checked SHA256SUMS in
   `dist/0.1.31/`): everything below down to the 0.1.30 release. The
   container-built runner passes the Office suite (Word 11, Excel 17,
