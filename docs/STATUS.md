@@ -28,6 +28,45 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Scrolling PowerPoint's slide thumbnails lagged** (240 Hz, 60-slide
+  deck, 90 wheel steps over the pane; 0.1.32 -> now, three runs each):
+  102-165 -> 283-345 pane draws, input-to-draw median 6.5-11 -> 3-4 ms
+  (p90 20-32 -> 7-9), compositor draw per frame 7.4-8.4 -> 0.7-0.9 ms,
+  longest wheel message in PowerPoint 43-70 -> 7-10 ms. Two causes:
+  - Each thumbnail is an effect brush, which windows.ui rendered again
+    every frame (sources and graph into two new float targets, ~0.8 ms
+    each) and did not model in the target snapshot, so every frame showing
+    one was a full redraw. Effects are now snapshotted (graph, property
+    values, source brushes) and their output kept, as BGRA, while that
+    snapshot, the D2D device and the DPI match (`4e989f3`).
+  - PowerPoint redraws the frame around each visible thumbnail as the pane
+    scrolls (~300 226x135 surfaces per 90 steps), creating ~18 compatible
+    render targets each. Every Wine d2d1 device context created its own
+    seven input layouts and vertex shaders and pixel shader; DXVK parses
+    and MD5-hashes the bytecode of each, which was 60% of the UI thread
+    (RIP sampling). They are now created once per D2D device and shared
+    (`245638d`); the UI thread went from 64% to 22% of a core.
+  The thumbnails and slide are pixel-identical to 0.1.32; editing a slide
+  still updates its thumbnail. windows.ui composition tests (246, the same
+  two known failures) and the Office suite pass. d2d1's conformance tests
+  show the same 4 failures (`d2d1.c:6749-6750`) on 0.1.32 and now; both
+  runs stall later in the run (0.1.32 in `test_dc_target`), so not all of
+  it ran. Remaining 60-100 ms gaps in the isolated session come with
+  100 ms `Present` blocks during which no input arrives either: its KWin
+  composites in software. `tests/input-latency.py` takes a view position
+  (`4ae707f`).
+- **"Installing Office fonts" came back after updates** (any launch more
+  than an hour after the last attempt). Office downloads only cloud fonts
+  it cannot find, and the Selawik stand-ins for Segoe UI's faces are Wine
+  font replacements, which enumerate as those faces: Word never fetched
+  Segoe UI, Semibold, Light or Bold, so the step never completed. The live
+  prefix had Segoe UI Black, Symbol and Emoji only. Reproduced in the
+  isolated prefix with the live prefix's font state (58 fonts, no Segoe UI
+  faces); with the stand-ins dropped while Word primes the cache, 64 fonts
+  including Segoe UI, Semibold, Light, Bold, Italic and Bold Italic, all
+  registered, the substitutes removed. Retries now back off from an hour
+  to a week, and the splash no longer says one time (`95e43d8`).
+
 - **Released as 0.1.32** (`67ec2cd`, packages and checked SHA256SUMS in
   `dist/0.1.32/`): everything below down to the 0.1.31 release. The
   container-built runner passes the Office suite (Word 11, Excel 17,
