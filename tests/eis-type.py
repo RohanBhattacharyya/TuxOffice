@@ -4,7 +4,7 @@
 
 Usage: eis-type.py ITEM... | eis-input
 Each ITEM is literal text, or a key in braces: {enter} {escape} {tab}
-{ctrl+a} {backspace}. Used to drive native (non-Wine) dialogs, such as the
+{ctrl+a} {ctrl+alt+m} {shift+f10} {f5} {backspace}. Used to drive native (non-Wine) dialogs, such as the
 desktop file chooser, inside the isolated session.
 """
 import re
@@ -17,8 +17,11 @@ KEYS = {**{c: 30 + i for i, c in enumerate("asdfghjkl")}, **{c: 16 + i for i, c 
 SHIFTED = {"_": "-", "+": "=", "{": "[", "}": "]", ":": ";", '"': "'", "~": "`", "|": "\\",
            "<": ",", ">": ".", "?": "/", "!": "1", "@": "2", "#": "3", "$": "4", "%": "5",
            "^": "6", "&": "7", "*": "8", "(": "9", ")": "0"}
-NAMED = {"enter": 28, "escape": 1, "tab": 15, "backspace": 14}
-SHIFT, CTRL = 42, 29
+NAMED = {"enter": 28, "escape": 1, "tab": 15, "backspace": 14, "delete": 111, "home": 102, "end": 107,
+         "up": 103, "down": 108, "left": 105, "right": 106, "pageup": 104, "pagedown": 109,
+         **{f"f{i}": 58 + i for i in range(1, 11)}, "f11": 87, "f12": 88}
+SHIFT, CTRL, ALT = 42, 29, 56
+MODIFIERS = {"ctrl": CTRL, "shift": SHIFT, "alt": ALT}
 
 
 def press(code, modifiers=()):
@@ -34,11 +37,8 @@ def press(code, modifiers=()):
 for item in sys.argv[1:]:
     for token in re.findall(r"\{[^}]+\}|[^{]+", item):
         if token.startswith("{"):
-            name = token[1:-1]
-            if name.startswith("ctrl+"):
-                press(KEYS[name[5:]], (CTRL,))
-            else:
-                press(NAMED[name])
+            *mods, name = token[1:-1].split("+")
+            press(NAMED[name] if name in NAMED else KEYS[name], tuple(MODIFIERS[m] for m in mods))
             continue
         for c in token:
             if c in KEYS:
