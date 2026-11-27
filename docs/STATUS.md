@@ -28,6 +28,11 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Released as 0.1.31** (`45cb9ea`, packages and checked SHA256SUMS in
+  `dist/0.1.31/`): everything below down to the 0.1.30 release. The
+  container-built runner passes the Office suite (Word 11, Excel 17,
+  PowerPoint 8 checks) and `tests/border-strip.py`, idles Excel at 5 ms/s,
+  ships the patched DXVK; the Arch and Ubuntu 24.04 package installs pass.
 - **Idle Excel used 11% of a core** (about 110 ms of CPU a second, all on
   the composition thread): Office's text carets fade in and out forever
   (1.06 s key-frame animations), also while nothing is edited and the caret
