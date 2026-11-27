@@ -2223,7 +2223,7 @@ void wayland_restack_client_surfaces(HWND toplevel)
     HWND *list, *popups = NULL, *stack = NULL, *order;
     struct wayland_client_surface *client;
     struct wayland_win_data *toplevel_data, *data;
-    struct wayland_surface *surface, *popup;
+    struct wayland_surface *surface, *popup, *child;
     struct wayland_overlay *overlay, *next;
     struct wayland_foreign_popup *foreign;
     struct restack_rects *rects = NULL;
@@ -2300,6 +2300,20 @@ void wayland_restack_client_surfaces(HWND toplevel)
             SetRect(&overlaid, 0, 0, 0, 0);
             continue;
         }
+        /* A child with a surface of its own, such as the layered strip
+         * Office draws the shadow below its ribbon with, takes its place in
+         * the painting order as well. Left where it was created, on top, it
+         * covered the dialogs and callouts of its window. */
+        if ((child = data->wayland_surface) && child != surface &&
+            child->role == WAYLAND_SURFACE_ROLE_SUBSURFACE && child->wl_subsurface &&
+            child->toplevel_hwnd == toplevel)
+        {
+            wl_subsurface_place_above(child->wl_subsurface, below);
+            below = child->wl_surface;
+            SetRect(&overlaid, 0, 0, 0, 0);
+            continue;
+        }
+
         /* only GDI windows painted over a client surface need an overlay */
         if (!rects[i].opaque || data->wayland_surface) continue;
         for (j = 0; j < covered_count; j++)
