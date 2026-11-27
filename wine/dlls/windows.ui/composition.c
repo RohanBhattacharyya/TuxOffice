@@ -445,6 +445,9 @@ struct desktop_window_target
     SIZE_T drawn_size;
     UINT snap_frame;
     UINT drawn_generation;  /* of the last full redraw, which recorded visual bounds */
+    /* the compositor's render pass drawing it, and the last pass that walked its
+     * visuals or found it shows nothing */
+    UINT render_pass, shown_pass;
     LONG ref;
 };
 
@@ -944,6 +947,14 @@ struct compositor
     /* the thread that commits, and whether it is in a commit */
     DWORD commit_thread;
     BOOL committing;
+    /* counts compositor_render() calls; complete when every target was walked */
+    UINT render_pass;
+    BOOL render_pass_complete;
+    /* The targets showing animated values that changed since they were drawn, in
+     * running_animations_cs; all of them if not known. */
+    struct desktop_window_target *animated_targets[8];
+    UINT animated_target_count;
+    BOOL animated_all;
     LONG ref;
 };
 
@@ -2019,6 +2030,7 @@ struct sprite_visual
      * thread of the target the visual was last seen in uses these. */
     struct desktop_window_target *snap_target;
     UINT snap_frame;
+    UINT visited_pass;  /* the compositor's last render pass that reached it */
     UINT64 geometry_hash, appearance_hash;
     /* the geometry without the offset, the offset, and the parent's linear
      * transform when last drawn: a visual that only moved redraws where it was
@@ -5729,6 +5741,17 @@ static CRITICAL_SECTION_DEBUG running_animations_cs_debug =
 };
 static CRITICAL_SECTION running_animations_cs = { &running_animations_cs_debug, -1, 0, 0, 0, 0 };
 static UINT_PTR animation_timer;
+/* When the armed timer fires, and when a running animation's value next changes,
+ * in animation_now() units. */
+static LONGLONG animation_timer_due, animation_next_change = LLONG_MAX;
+/* Scoped batches whose animations still run, in running_animations_cs. */
+static struct list pending_batches = LIST_INIT( pending_batches );
+/* Whether the timer polls swap chains for presents; set on the timer's thread. */
+static BOOL animation_polls_swapchains;
+/* Compositors whose animated values changed in the last tick, not drawn yet. */
+static ICompositor *animation_changed[16];
+static UINT animation_changed_count;
+static BOOL animation_changed_overflow;
 
 static const ICompositionAnimationVtbl scalar_composition_animation_vtbl;
 static void scoped_batches_extend( LONGLONG end );
@@ -5800,10 +5823,57 @@ static void running_animation_value( const struct running_animation *animation, 
         value[c] = from[c] + (next->value[c] - from[c]) * eased;
 }
 
-static void running_animation_write( struct running_animation *animation, const FLOAT *value )
+/* Returns whether the property's value changed. */
+static BOOL running_animation_write( struct running_animation *animation, const FLOAT *value )
 {
-    if (animation->flag) *animation->flag = value[0] != 0.0f;
-    else memcpy( animation->field, value, animation->components * sizeof(*value) );
+    if (animation->flag)
+    {
+        boolean flag = value[0] != 0.0f;
+
+        if (*animation->flag == flag) return FALSE;
+        *animation->flag = flag;
+        return TRUE;
+    }
+    if (!memcmp( animation->field, value, animation->components * sizeof(*value) )) return FALSE;
+    memcpy( animation->field, value, animation->components * sizeof(*value) );
+    return TRUE;
+}
+
+/* When the animation's value next changes, at the earliest: Office's text caret
+ * fades in and out and holds its opacity in between, and while every running
+ * animation holds, no frame needs to be drawn. Called with running_animations_cs held. */
+static LONGLONG running_animation_next_change( const struct running_animation *animation, LONGLONG now )
+{
+    LONGLONG elapsed = now - animation->start - animation->delay, iteration_start;
+    const FLOAT *from = animation->start_value;
+    FLOAT progress, from_key = 0.0f;
+    UINT i;
+
+    if (elapsed < 0) return animation->start + animation->delay;
+    if (animation->iterations > 0 && elapsed >= animation->duration * animation->iterations) return now;
+    iteration_start = now - elapsed % animation->duration;
+    progress = (FLOAT)(elapsed % animation->duration) / animation->duration;
+    for (i = 0; i < animation->key_count && animation->keys[i].key <= progress; ++i)
+    {
+        from_key = animation->keys[i].key;
+        from = animation->keys[i].value;
+    }
+    for (; i < animation->key_count; ++i)
+    {
+        const struct timed_key *key = &animation->keys[i];
+
+        if (memcmp( key->value, from, animation->components * sizeof(*from) ))
+        {
+            /* A step changes at its key, an eased segment from its start. */
+            if (animation->flag || key->key <= from_key)
+                return iteration_start + (LONGLONG)((double)key->key * animation->duration);
+            return iteration_start + (LONGLONG)((double)from_key * animation->duration);
+        }
+        from_key = key->key;
+        from = key->value;
+    }
+    /* The next iteration starts over from the value the animation started with. */
+    return iteration_start + animation->duration;
 }
 
 static void running_animation_free( struct running_animation *animation )
@@ -5862,24 +5932,104 @@ static void running_animations_static_value( const void *field, SIZE_T size, voi
     LeaveCriticalSection( &running_animations_cs );
 }
 
+/* Whether the animated property can show: a visual the compositor's last complete
+ * render pass did not reach is under a hidden visual or in no target, as Office's
+ * text carets are while nothing is edited, and their fading draws nothing. */
+static BOOL running_animation_shown( const struct running_animation *animation )
+{
+    IVisual *visual = (IVisual *)animation->owner;
+    struct compositor *compositor = impl_from_ICompositor( animation->compositor );
+
+    if (visual->lpVtbl != &visual_vtbl || !compositor->render_pass_complete) return TRUE;
+    return sprite_visual_from_IVisual( visual )->visited_pass == compositor->render_pass;
+}
+
+/* Called with running_animations_cs held. */
+static void animation_changed_add( const struct running_animation *animation )
+{
+    struct compositor *impl = impl_from_ICompositor( animation->compositor );
+    IVisual *visual = (IVisual *)animation->owner;
+    struct desktop_window_target *target = NULL;
+    UINT i;
+
+    /* The target the visual was last drawn in, which only it needs redrawing. */
+    if (visual->lpVtbl == &visual_vtbl && impl->render_pass_complete)
+        target = sprite_visual_from_IVisual( visual )->snap_target;
+    if (!target) impl->animated_all = TRUE;
+    else if (!impl->animated_all)
+    {
+        for (i = 0; i < impl->animated_target_count; ++i) if (impl->animated_targets[i] == target) break;
+        if (i == impl->animated_target_count)
+        {
+            if (i < ARRAY_SIZE(impl->animated_targets)) impl->animated_targets[impl->animated_target_count++] = target;
+            else impl->animated_all = TRUE;
+        }
+    }
+
+    for (i = 0; i < animation_changed_count; ++i) if (animation_changed[i] == animation->compositor) return;
+    if (animation_changed_count < ARRAY_SIZE(animation_changed))
+        ICompositor_AddRef( (animation_changed[animation_changed_count++] = animation->compositor) );
+    else animation_changed_overflow = TRUE; /* too many to track: draw them all */
+}
+
+/* Whether the compositor's animated values changed since it was last drawn, and in
+ * which targets (count ~0u for all of them); forgets them. */
+static BOOL animation_changed_take( ICompositor *compositor, struct desktop_window_target **targets, UINT *count )
+{
+    struct compositor *impl = impl_from_ICompositor( compositor );
+    BOOL changed = FALSE;
+    UINT i;
+
+    EnterCriticalSection( &running_animations_cs );
+    if (count)
+    {
+        *count = impl->animated_all || animation_changed_overflow ? ~0u : impl->animated_target_count;
+        if (*count != ~0u) memcpy( targets, impl->animated_targets, *count * sizeof(*targets) );
+    }
+    impl->animated_target_count = 0;
+    impl->animated_all = FALSE;
+    if (animation_changed_overflow)
+    {
+        LeaveCriticalSection( &running_animations_cs );
+        return TRUE;
+    }
+    for (i = 0; i < animation_changed_count; ++i)
+    {
+        if (animation_changed[i] != compositor) continue;
+        animation_changed[i] = animation_changed[--animation_changed_count];
+        changed = TRUE;
+        break;
+    }
+    LeaveCriticalSection( &running_animations_cs );
+    if (changed) ICompositor_Release( compositor );
+    return changed;
+}
+
 /* Write every running animation's current value; drop the finished ones. Returns
  * whether any are still running. */
 static BOOL running_animations_tick(void)
 {
     struct running_animation *animation, *next;
-    LONGLONG now = animation_now(), elapsed;
+    LONGLONG now = animation_now(), elapsed, change;
     FLOAT value[3], progress;
     BOOL running;
 
     EnterCriticalSection( &running_animations_cs );
+    animation_next_change = LLONG_MAX;
+    animation_changed_overflow = FALSE;
     LIST_FOR_EACH_ENTRY_SAFE( animation, next, &running_animations, struct running_animation, entry )
     {
         elapsed = now - animation->start - animation->delay;
-        if (elapsed < 0) continue;
+        if (elapsed < 0)
+        {
+            animation_next_change = min( animation_next_change, animation->start + animation->delay );
+            continue;
+        }
         if (animation->iterations > 0 && elapsed >= animation->duration * animation->iterations)
         {
             running_animation_value( animation, 1.0f, value );
-            running_animation_write( animation, value );
+            if (running_animation_write( animation, value ) && running_animation_shown( animation ))
+                animation_changed_add( animation );
             TRACE_(uitree)("animation on %p field %p ended at %f\n", animation->owner,
                     animation->flag ? (void *)animation->flag : (void *)animation->field, value[0]);
             running_animation_free( animation );
@@ -5887,7 +6037,10 @@ static BOOL running_animations_tick(void)
         }
         progress = (FLOAT)(elapsed % animation->duration) / animation->duration;
         running_animation_value( animation, progress, value );
-        running_animation_write( animation, value );
+        if (running_animation_write( animation, value ) && running_animation_shown( animation ))
+            animation_changed_add( animation );
+        change = running_animation_next_change( animation, now );
+        animation_next_change = min( animation_next_change, change );
     }
     running = !list_empty( &running_animations );
     LeaveCriticalSection( &running_animations_cs );
@@ -5925,13 +6078,26 @@ static void animation_timer_set(void)
 
     if (animation_frame_start && now - animation_frame_start < 10000000)
         delay = next > now ? min( 15, (next - now + 9999) / 10000 ) : 1;
+    /* While every running animation holds its value, as a caret between its fades
+     * does, wake when one changes. Scoped batches and swap chains need every frame. */
+    if (animation_next_change != LLONG_MAX && animation_next_change - now > animation_frame_period() &&
+            list_empty( &pending_batches ) && !animation_polls_swapchains)
+        delay = min( 1000, (animation_next_change - now + 9999) / 10000 );
     animation_timer = SetTimer( NULL, 0, delay, animation_timer_proc );
+    animation_timer_due = now + (LONGLONG)delay * 10000;
 }
 
-/* Called on the thread that commits, which pumps messages. */
+/* Called on the thread that commits, which pumps messages. A timer sleeping
+ * until an animation changes is brought forward to the next frame. */
 static void animation_timer_arm(void)
 {
     EnterCriticalSection( &running_animations_cs );
+    if (animation_timer && animation_timer_due - animation_now() > animation_frame_period())
+    {
+        KillTimer( NULL, animation_timer );
+        animation_timer = 0;
+        animation_next_change = 0;
+    }
     if (!animation_timer) animation_timer_set();
     LeaveCriticalSection( &running_animations_cs );
 }
@@ -5946,7 +6112,8 @@ static void animation_timer_rearm( LONGLONG started )
     LeaveCriticalSection( &running_animations_cs );
 }
 
-static HRESULT compositor_render( struct compositor *compositor, BOOL *rendered );
+static HRESULT compositor_render_targets( struct compositor *compositor, BOOL *rendered,
+        struct desktop_window_target **only, UINT only_count );
 
 /* Running animations need a frame. As the desktop window manager does on Windows,
  * draw it here when the application has changed nothing since it last committed:
@@ -5954,7 +6121,7 @@ static HRESULT compositor_render( struct compositor *compositor, BOOL *rendered 
  * frame after its previous commit, so frames that waited for its commits came
  * every 20-27 ms, an uneven 40 a second, for the caret, cursors and every other
  * animation. With changes pending, ask for a commit instead. */
-static void animation_frame( struct compositor *compositor )
+static void animation_frame( struct compositor *compositor, struct desktop_window_target **targets, UINT count )
 {
     BOOL rendered;
 
@@ -5965,8 +6132,8 @@ static void animation_frame( struct compositor *compositor )
         compositor_notify_commit_needed( compositor );
         return;
     }
-    TRACE_(uiperf)( "animation frame drawn without a commit.\n" );
-    compositor_render( compositor, &rendered );
+    TRACE_(uiperf)( "animation frame drawn without a commit, %d targets.\n", count == ~0u ? -1 : (int)count );
+    compositor_render_targets( compositor, &rendered, count == ~0u ? NULL : targets, count );
 }
 
 static void CALLBACK animation_timer_proc( HWND hwnd, UINT msg, UINT_PTR id, DWORD time )
@@ -5989,11 +6156,22 @@ static void CALLBACK animation_timer_proc( HWND hwnd, UINT msg, UINT_PTR id, DWO
     LeaveCriticalSection( &running_animations_cs );
 
     polls = swapchain_surfaces_poll( polled, 0, ARRAY_SIZE(polled) );
+    animation_polls_swapchains = swapchain_surfaces_active();
     batches = scoped_batches_fire_due( animation_now() );
     running = count && running_animations_tick();
     for (i = 0; i < count; ++i)
     {
-        animation_frame( impl_from_ICompositor( animating[i] ) );
+        struct compositor *compositor = impl_from_ICompositor( animating[i] );
+
+        /* Nothing animated changed and nothing waits for a commit: the frame
+         * would be the last one again. */
+        struct desktop_window_target *targets[ARRAY_SIZE(compositor->animated_targets)];
+        UINT target_count;
+
+        if (animation_changed_take( animating[i], targets, &target_count ))
+            animation_frame( compositor, targets, target_count );
+        else if (ReadNoFence( &compositor->uncommitted ))
+            animation_frame( compositor, NULL, ~0u );
         ICompositor_Release( animating[i] );
     }
     for (i = 0; i < polls; ++i)
@@ -6002,7 +6180,7 @@ static void CALLBACK animation_timer_proc( HWND hwnd, UINT msg, UINT_PTR id, DWO
         if (j == count) compositor_notify_commit_needed( impl_from_ICompositor( polled[i] ) );
         ICompositor_Release( polled[i] );
     }
-    if (running || batches || swapchain_surfaces_active()) animation_timer_arm();
+    if (running || batches || animation_polls_swapchains) animation_timer_arm();
 }
 
 /* Run a key frame animation on a property. Returns FALSE when it should instead go
@@ -8235,7 +8413,6 @@ struct composition_scoped_batch
 };
 
 static struct list active_batches = LIST_INIT( active_batches );
-static struct list pending_batches = LIST_INIT( pending_batches );
 
 static void scoped_batch_list( struct composition_scoped_batch *impl, struct list *list )
 {
@@ -13160,6 +13337,8 @@ struct target_snapshot
      * contents), only where they were drawn needs drawing again: the damage. */
     struct desktop_window_target *target;
     UINT frame;
+    UINT pass;
+    UINT transparent;  /* how many visuals being walked have opacity 0 */
     BOOL full;
     const char *full_reason;
     BOOL has_damage;
@@ -13954,6 +14133,8 @@ static void snapshot_visual( struct target_snapshot *snap, IVisual *visual, UINT
         return;
     }
     impl = sprite_visual_from_IVisual( visual );
+    /* Under a transparent visual it shows nothing, whatever it animates. */
+    if (!snap->transparent) impl->visited_pass = snap->pass;
     /* Take the values expressions give now, as drawing does: a frame whose
      * expressions give what they gave before is unchanged. */
     visual_evaluate_expressions( impl );
@@ -14061,8 +14242,10 @@ static void snapshot_visual( struct target_snapshot *snap, IVisual *visual, UINT
         if (source) IVisual_Release( source );
     }
     /* Walk children the way drawing does, on the rendering thread. */
+    if (impl->opacity == 0.0f) ++snap->transparent;
     for (i = 0; i < children->count && !snap->dynamic; ++i)
         snapshot_visual( snap, children->items[i], depth + 1 );
+    if (impl->opacity == 0.0f) --snap->transparent;
 }
 
 #undef SNAPSHOT_FIELD
@@ -14151,6 +14334,8 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
     struct target_snapshot snap = {0};
     BOOL redraw = FALSE;
 
+    /* Nothing of the target shows. */
+    target->shown_pass = target->render_pass;
     if (!IsWindow( target->hwnd ) || !IsWindow( target->render_hwnd ) ||
             GetParent( target->render_hwnd ) != target->hwnd) return S_FALSE;
     if (!IsWindowVisible( target->hwnd )) return S_FALSE;
@@ -14160,6 +14345,7 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
             ShowWindowAsync( target->render_hwnd, SW_HIDE );
         return S_FALSE;
     }
+    target->shown_pass = target->render_pass - 1;
     source = find_visual_drawing_surface( target->root, 0 );
     located = perf_us();
     TRACE( "render target hwnd %p layer %p topmost %d\n", target->hwnd, target->render_hwnd, target->topmost );
@@ -14272,10 +14458,13 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
     setup = perf_us();
     snap.target = target;
     snap.frame = ++target->snap_frame;
+    snap.pass = target->render_pass;
     snapshot_add( &snap, &target->root, sizeof(target->root) );
     snapshot_add( &snap, &width, sizeof(width) );
     snapshot_add( &snap, &height, sizeof(height) );
     snapshot_visual( &snap, target->root, 0 );
+    /* A walk cut short may have missed visuals that show. */
+    if (!snap.dynamic) target->shown_pass = target->render_pass;
     if (!redraw && !snap.dynamic && target->drawn_state && snap.size == target->drawn_size &&
             !memcmp( snap.data, target->drawn_state, snap.size ))
     {
@@ -15673,15 +15862,26 @@ static HRESULT WINAPI compositor_controller_get_Compositor( ICompositorControlle
     return S_OK;
 }
 
-/* Draw every target of the compositor. */
-static HRESULT compositor_render( struct compositor *compositor, BOOL *rendered )
+/* Draw the given targets of the compositor, or all of them. Only drawing them all
+ * starts a render pass: visuals in the others keep showing where they were. */
+static HRESULT compositor_render_targets( struct compositor *compositor, BOOL *rendered,
+        struct desktop_window_target **only, UINT only_count )
 {
     struct desktop_window_target *target, *next;
     ULONGLONG started = perf_us();
-    unsigned int count = 0;
+    unsigned int count = 0, pass, i;
+    BOOL complete;
     HRESULT hr;
 
     *rendered = FALSE;
+    if (!only)
+    {
+        animation_changed_take( &compositor->ICompositor_iface, NULL, NULL );
+        compositor->render_pass_complete = FALSE;
+        pass = ++compositor->render_pass;
+    }
+    else pass = compositor->render_pass;
+    complete = TRUE;
     LIST_FOR_EACH_ENTRY_SAFE( target, next, &compositor->targets, struct desktop_window_target, entry )
     {
         BOOL window_gone = !IsWindow( target->hwnd );
@@ -15697,13 +15897,28 @@ static HRESULT compositor_render( struct compositor *compositor, BOOL *rendered 
             desktop_window_target_release( target );
             continue;
         }
+        if (only)
+        {
+            for (i = 0; i < only_count; ++i) if (only[i] == target) break;
+            if (i == only_count) continue;
+        }
         ++count;
+        target->render_pass = pass;
         hr = desktop_window_target_render( target );
+        if (target->shown_pass != pass) complete = FALSE;
         if (hr == S_OK) *rendered = TRUE;
         else if (hr != S_FALSE) return hr;
     }
+    if (!only) compositor->render_pass_complete = complete;
+    else if (!complete) compositor->render_pass_complete = FALSE;
     TRACE_(uiperf)( "commit tick %I64u targets %u elapsed %I64u.\n", started, count, perf_us() - started );
     return S_OK;
+}
+
+/* Draw every target of the compositor. */
+static HRESULT compositor_render( struct compositor *compositor, BOOL *rendered )
+{
+    return compositor_render_targets( compositor, rendered, NULL, 0 );
 }
 
 static HRESULT WINAPI compositor_controller_Commit( ICompositorController *iface )
