@@ -413,6 +413,9 @@ struct StorageImpl
 
   ULONG locks_supported;
 
+  /* Set when construction failed: the caller's ILockBytes was only read. */
+  BOOL failed;
+
   ILockBytes* lockBytes;
 
   ULONG locked_bytes[8];

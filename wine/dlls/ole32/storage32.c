@@ -5154,7 +5154,12 @@ static void StorageImpl_Destroy(StorageBaseImpl* iface)
   int i;
   TRACE("(%p)\n", This);
 
-  StorageImpl_Flush(iface);
+  /* A storage that could not be opened has nothing to write back. Word probes
+   * every document it opens with StgOpenStorageOnILockBytes; flushing the
+   * lock bytes of a .docx from OneDrive made Office's cloud cache close the
+   * stream Word then read the document from, and Word terminated. */
+  if (!This->failed)
+    StorageImpl_Flush(iface);
 
   StorageImpl_Invalidate(iface);
 
@@ -5305,6 +5310,7 @@ static HRESULT StorageImpl_Construct(
 
   if (FAILED(hr))
   {
+    This->failed = TRUE;
     IStorage_Release(&This->base.IStorage_iface);
     *result = NULL;
   }
