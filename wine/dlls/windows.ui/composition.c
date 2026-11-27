@@ -12811,6 +12811,8 @@ static void surface_brush_transform( const struct surface_brush *brush, const D2
     matrix_multiply( result, &total, outer );
 }
 
+static BOOL draw_frame_misses( ID2D1DeviceContext *context, const D2D1_RECT_F *rect );
+
 static void draw_surface_brush_content( ID2D1DeviceContext *context, struct surface_brush *brush,
         const D2D1_RECT_F *bounds, FLOAT opacity )
 {
@@ -12908,6 +12910,9 @@ static void draw_surface_brush_content( ID2D1DeviceContext *context, struct surf
             tile_rect.top = dest_rect.top + tile->origin.y * scale_y;
             tile_rect.right = tile_rect.left + bitmap_size.width * scale_x;
             tile_rect.bottom = tile_rect.top + bitmap_size.height * scale_y;
+            /* Office's caret and selection surfaces are 262144 pixels square:
+             * draw only the tiles that reach what the frame draws. */
+            if (draw_frame_misses( context, &tile_rect )) continue;
             if (!(bytes = GetRegionData( tile->valid, 0, NULL )) || !(data = malloc( bytes ))) continue;
             if (!GetRegionData( tile->valid, bytes, data )) { free( data ); continue; }
             rects = (RECT *)data->Buffer;
@@ -12916,6 +12921,7 @@ static void draw_surface_brush_content( ID2D1DeviceContext *context, struct surf
                 clip = (D2D1_RECT_F){tile_rect.left + rects[i].left * scale_x,
                         tile_rect.top + rects[i].top * scale_y, tile_rect.left + rects[i].right * scale_x,
                         tile_rect.top + rects[i].bottom * scale_y};
+                if (draw_frame_misses( context, &clip )) continue;
                 ID2D1DeviceContext_PushAxisAlignedClip( context, &clip, D2D1_ANTIALIAS_MODE_ALIASED );
                 ID2D1DeviceContext_DrawBitmap( context, (ID2D1Bitmap *)tile->bitmap, &tile_rect,
                         opacity, interpolation, &source_rect, NULL );
@@ -13541,11 +13547,20 @@ static HRESULT create_geometric_clip_mask( ICompositionClip *clip, ID2D1DeviceCo
  * transformed rectangle), leaves nothing of the render target visible. */
 /* The state of the frame being drawn on this thread, for recording where each
  * visual draws (a full redraw) or drawing only the damage (a partial one). */
+static ULONGLONG perf_us(void)
+{
+    LARGE_INTEGER counter, frequency;
+    QueryPerformanceCounter( &counter );
+    QueryPerformanceFrequency( &frequency );
+    return counter.QuadPart * 1000000 / frequency.QuadPart;
+}
+
 struct draw_frame
 {
     struct desktop_window_target *target;
     BOOL partial;
     D2D1_RECT_F damage;
+    UINT visuals;  /* drawn, not culled */
 };
 
 static DWORD draw_frame_tls = TLS_OUT_OF_INDEXES;
@@ -13587,6 +13602,23 @@ static void union_rect_f( D2D1_RECT_F *dst, const D2D1_RECT_F *src )
 static BOOL rects_intersect_f( const D2D1_RECT_F *a, const D2D1_RECT_F *b )
 {
     return a->left < b->right && b->left < a->right && a->top < b->bottom && b->top < a->bottom;
+}
+
+/* Whether drawing the rectangle, in the context's coordinates, cannot change the
+ * frame: it is outside the target, or outside the damage of a partial frame.
+ * Only known when drawing straight into the target. */
+static BOOL draw_frame_misses( ID2D1DeviceContext *context, const D2D1_RECT_F *rect )
+{
+    struct draw_frame *frame = get_draw_frame();
+    D2D1_MATRIX_3X2_F transform;
+    D2D1_RECT_F area, device;
+
+    if (!frame || context != frame->target->render_context) return FALSE;
+    ID2D1DeviceContext_GetTransform( context, &transform );
+    device = transform_rect_bounds( &transform, rect );
+    if (frame->partial) area = frame->damage;
+    else area = (D2D1_RECT_F){0.0f, 0.0f, frame->target->width, frame->target->height};
+    return !rects_intersect_f( &device, &area );
 }
 
 static BOOL clip_outside_target( ID2D1DeviceContext *context, const D2D1_MATRIX_3X2_F *m,
@@ -13688,6 +13720,7 @@ static HRESULT draw_composition_visual_mode( ID2D1DeviceContext *context, IVisua
     if (frame && frame->partial && impl->drawn_generation == frame->target->drawn_generation &&
             !rects_intersect_f( &impl->drawn_bounds, &frame->damage ))
         return S_OK;
+    if (frame) frame->visuals++;
     mode = impl->composite_mode == CompositionCompositeMode_Inherit ? parent_mode : impl->composite_mode;
     visual_evaluate_expressions( impl );
     children = impl_from_IVisualCollection( impl->children );
@@ -13787,7 +13820,15 @@ static HRESULT draw_composition_visual_mode( ID2D1DeviceContext *context, IVisua
         }
     }
     if (SUCCEEDED(hr) && impl->brush && bounds.right > bounds.left && bounds.bottom > bounds.top)
+    {
+        ULONGLONG brush_start = TRACE_ON(uiperf) && frame && frame->partial ? perf_us() : 0;
+
         hr = draw_visual_brush( context, impl->brush, &bounds, opacity, mode );
+        if (brush_start)
+            TRACE_(uiperf)( "partial visual %p brush %p vtbl %p bounds %.0fx%.0f mode %d: %I64u us.\n", impl,
+                    impl->brush, impl->brush->lpVtbl, bounds.right - bounds.left, bounds.bottom - bounds.top,
+                    mode, perf_us() - brush_start );
+    }
     for (i = 0; SUCCEEDED(hr) && i < children->count; ++i)
     {
         hr = draw_composition_visual_mode( context, children->items[i], 0.0f, 0.0f, width, height,
@@ -13923,14 +13964,6 @@ static struct composition_drawing_surface *find_visual_drawing_surface( IVisual 
 /* Whether the layer window already covers the target's client area at the
  * z-order edge DirectComposition uses (above the target's children for a
  * topmost target, below them otherwise). */
-static ULONGLONG perf_us(void)
-{
-    LARGE_INTEGER counter, frequency;
-    QueryPerformanceCounter( &counter );
-    QueryPerformanceFrequency( &frequency );
-    return counter.QuadPart * 1000000 / frequency.QuadPart;
-}
-
 static BOOL render_window_placed( struct desktop_window_target *target, UINT width, UINT height )
 {
     RECT rect;
@@ -14522,8 +14555,8 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
     if (frame.partial) ID2D1DeviceContext_PopAxisAlignedClip( target->render_context );
     TlsSetValue( draw_frame_tls, previous_frame );
     if (frame.partial)
-        TRACE_(uiperf)( "frame hwnd %p partial %.0f,%.0f-%.0f,%.0f.\n", target->hwnd, frame.damage.left,
-                frame.damage.top, frame.damage.right, frame.damage.bottom );
+        TRACE_(uiperf)( "frame hwnd %p partial %.0f,%.0f-%.0f,%.0f, %u visuals.\n", target->hwnd, frame.damage.left,
+                frame.damage.top, frame.damage.right, frame.damage.bottom, frame.visuals );
     stage = "end draw";
     hr = ID2D1DeviceContext_EndDraw( target->render_context, NULL, NULL );
     /* A visual that cannot be drawn must not keep the rest of the window from
