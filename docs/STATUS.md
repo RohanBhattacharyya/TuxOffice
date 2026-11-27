@@ -28,6 +28,33 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Office dialogs had no shadow:** Office draws each dialog's four
+  `MSO_BORDEREFFECT` shadow strips once with UpdateLayeredWindow, then shows
+  them. Showing a strip makes its surface a subsurface of the dialog, and
+  clearing the surface's old role attached a null buffer, so the strip stayed
+  empty: the dialog sat flat on the sheet. A layered window's last pixels are
+  now attached again when it gets a new host (`e0229fc`). The PivotTable
+  dialog now fades 255 to 184 to its accent border on the left and 166 to
+  255 on the right (device pixels); context menus also have their shadow.
+  `tests/border-strip.py` fails on 0.1.30 and passes now; the floating-strip
+  check still passes.
+- **Excel's chart flyouts cut the top half off their headings** ("Style /
+  Color" of Chart Styles, "Chart Elements"): their window region has a beak,
+  which splits it into one band per scanline, and GPU children were cropped to
+  the largest single rectangle of the region data, the body below the beak.
+  They are now cropped to the largest rectangle inside the region (`0d05347`).
+- Checked on 0.1.30 and fine: Word comments (the Comments pane header no
+  longer shows stripes; card, reply box, anchor highlight, margin icon), the
+  account flyout, title-bar search; Excel quick chart, chart Filters flyout,
+  Format Cells (Number, Font, Border, Fill), PivotTable dialog, context menu
+  and mini toolbar, ribbon tooltips. The yellow account warning in the test
+  prefix comes from its in-memory keyring losing the tokens when the test
+  session restarted, not from TuxOffice.
+- Harness note: screenshots are in logical pixels, so one-pixel borders at
+  1.25 blur or vanish; `ScreenShot2` with `native-resolution` captures device
+  pixels. Display coordinates of a 2000-wide preview times 1.28 are input
+  coordinates.
+
 - **No frame around the selected slide thumbnail (reported on 0.1.25):**
   PowerPoint draws the selection and hover frames as a group of two rounded
   rectangles filled in alternate mode (a 5 px ring). d2d1's geometry groups
