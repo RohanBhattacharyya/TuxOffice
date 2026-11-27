@@ -32,8 +32,15 @@ finally:
 pixels, (width, height) = image.load(), image.size
 red = [(x, y) for y in range(0, height, 2) for x in range(width)
        if pixels[x, y][0] > 200 and pixels[x, y][1] < 60 and pixels[x, y][2] < 60]
-assert red, "the border strip is not shown"
-left, bottom = min(x for x, _ in red), max(y for _, y in red)
+# The strip's red half is a column 200 device pixels tall; other red on
+# the screen (an Office icon) is not.
+columns = {}
+for x, y in red:
+    columns.setdefault(x, []).append(y)
+strip = {x: ys for x, ys in columns.items() if len(ys) >= 80}
+assert strip, "the border strip is not shown"
+left = min(strip)
+bottom = max(strip[left])
 assert pixels[left - 2, bottom] == (255, 255, 255), "the strip is not beside the white frame"
 half = pixels[left + 4, bottom + 40]
 assert all(100 < c < 160 for c in half), f"the strip's translucent half shows {half}"
