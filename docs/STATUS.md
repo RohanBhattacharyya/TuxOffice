@@ -43,8 +43,24 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   cell cursor glides with the same 5-8 frames a move, `windows.ui`
   composition tests (246, the same two known failures) and the Office suite
   (Word 11, Excel 17, PowerPoint 8 checks) pass as on 0.1.30.
-- Open: a caret-sized partial frame in Word still costs about 2.5 ms to
-  draw, and expressions are parsed from their text at every evaluation.
+- **A blinking caret in Word cost 2-3.7 ms a frame to draw** for a 5x30
+  pixel damage: Office's caret and selection surfaces are virtual surfaces
+  262144 pixels square, and every frame drew each valid rectangle of each of
+  their tiles (one surface took 2 ms). Tiles outside the target or the
+  damage are skipped now (`d415eb8`): caret frames draw in 0.4-0.8 ms.
+  Every Vulkan present also restacked its toplevel (window list, child
+  rectangles, overlay copies) and committed it; now only a new or moved GPU
+  child does (`201b10e`): DXVK's submit thread 26 -> 12.5 ms/s. Word with a
+  blinking caret: 116 ms/s on 0.1.30, 57-75 now. Checked: caret blink,
+  Word selection and scrolling, PowerPoint typing and selection,
+  maximize/restore, ribbon collapse, Office suite, composition tests.
+- Open: expressions are parsed from their text at every evaluation; the
+  composition snapshot of an unchanged target still costs 0.15-0.2 ms.
+- Intermittent, also on 0.1.30: Word's Navigation pane header drew as
+  vertical stripes in 1 of 6 launches on 0.1.30 (0 of 6 with the changes
+  above; too rare to call fixed). Once, right after restoring Word, a
+  second status bar showed below the window; it did not happen again in
+  five more restores.
 - **Office dialogs had no shadow:** Office draws each dialog's four
   `MSO_BORDEREFFECT` shadow strips once with UpdateLayeredWindow, then shows
   them. Showing a strip makes its surface a subsurface of the dialog, and
