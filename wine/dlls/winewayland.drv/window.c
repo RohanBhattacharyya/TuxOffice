@@ -790,6 +790,7 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
     HWND active = NULL, border_parent, owner;
     BOOL managed, orphan_border, moved_only;
     BOOL border_effect = is_mso_border_effect_window(hwnd);
+    BOOL layered = !!(NtUserGetWindowLongW(hwnd, GWL_EXSTYLE) & WS_EX_LAYERED);
     DWORD foreign_pid;
     HWND foreign_root = get_foreign_popup_root(hwnd, &foreign_pid), notify_root = 0;
     HANDLE notify_section = 0;
@@ -797,6 +798,8 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
     BOOL fullscreen = swp_flags & WINE_SWP_FULLSCREEN;
     RECT region_clip = {0};
     BOOL region_clipped;
+    struct wayland_surface *old_surface;
+    HWND old_host;
 
     TRACE("hwnd %p new_rects %s after %p flags %08x\n", hwnd,
           debugstr_window_rects(new_rects), insert_after, swp_flags);
@@ -859,6 +862,9 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
     data->foreign_root = foreign_visible ? foreign_root : 0;
     data->foreign_pid = foreign_pid;
 
+    old_surface = data->wayland_surface;
+    old_host = old_surface && old_surface->role == WAYLAND_SURFACE_ROLE_SUBSURFACE ? old_surface->toplevel_hwnd : NULL;
+
     if (orphan_border || foreign_root || (!surface && (!NtUserIsWindowVisible(hwnd) ||
         (toplevel != hwnd && (!data->client_surface || (root != hwnd && toplevel_surface))))))
     {
@@ -886,10 +892,23 @@ void WAYLAND_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UIN
         /* A subsurface's position is otherwise applied with its next buffer.
          * A window that only moves needs no repaint, so without this it stays
          * at its old place, e.g. Office's frame shadow strip on the edge that
-         * does not change size during an interactive resize. */
-        if (moved_only && data->window_contents &&
-            data->wayland_surface->role == WAYLAND_SURFACE_ROLE_SUBSURFACE)
-            wayland_surface_reconfigure(data->wayland_surface);
+         * does not change size during an interactive resize. Office draws its
+         * dialog shadow strips once with UpdateLayeredWindow and then shows
+         * them; making the surface a subsurface detached those pixels, so
+         * attach them again. A layered window keeps its pixels until the
+         * next update; other windows repaint when shown. */
+        if (data->window_contents && data->wayland_surface->role == WAYLAND_SURFACE_ROLE_SUBSURFACE)
+        {
+            BOOL new_host = layered && (data->wayland_surface != old_surface ||
+                                        data->wayland_surface->toplevel_hwnd != old_host);
+
+            if ((moved_only || new_host) && wayland_surface_reconfigure(data->wayland_surface) && new_host)
+            {
+                wayland_surface_attach_shm(data->wayland_surface, data->window_contents, NULL);
+                wl_surface_damage_buffer(data->wayland_surface->wl_surface, 0, 0, INT32_MAX, INT32_MAX);
+                wl_surface_commit(data->wayland_surface->wl_surface);
+            }
+        }
     }
 
     wayland_win_data_release(data);
