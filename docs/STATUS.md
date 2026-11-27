@@ -28,6 +28,42 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Office animations capped at 95 frames a second on high refresh
+  displays.** The live panel runs at 240 Hz. windows.ui ticks composition
+  animations (Word's and Excel's smooth scrolling, caret fades,
+  transitions) on the committing thread with SetTimer, which never waits
+  less than 10 ms (USER_TIMER_MINIMUM); at 60 Hz a frame that started late
+  also slipped by up to a frame. Waits under 10 ms now go to a frame clock
+  thread that waits with a 100 ns timeout and posts a message to a
+  message-only window of the arming thread (`001aa6f`). The isolated
+  session's virtual output can run at 240 Hz (`kscreen-doctor
+  output.Virtual-0.addCustomMode.2560.1600.240000.full`, then `mode.2`).
+  `tests/input-latency.py`, 240 Hz, 0.1.31 compositor -> now:
+  Word 90 wheel steps 49-68 -> 93-110 view draws, wheel-to-draw median
+  4-5 -> 1-3 ms; Word typing key-to-draw median 8 (p90 12) -> 1-2 (p90 4)
+  ms; Excel 115-120 -> 188-221 draws, median 9 -> 3-4 ms. 60 Hz is
+  unchanged within noise. The Office suite passes and ran faster (Word
+  11.5 -> 6.0 s, Excel 12.3 -> 7.4 s, PowerPoint 18.3 -> 12.4 s).
+- **Callout beaks shown** (`d1b4fd2`, `765a4e0`): a composition target in a
+  window with a complex region now renders offscreen and copies each frame
+  (its damage) into the layer window's GDI surface, which keeps the region's
+  shape; the frame is kept for WM_PAINT. That showed a win32u bug: a region
+  span that starts and ends in one byte of the 1bpp shape mask set the bits
+  after it, not its own (`l_mask & r_mask` for `l_mask & ~r_mask`), so the
+  beak's tip pixel was hidden and seven beside it showed.
+  `tests/region-span.py` fails on 0.1.31 and passes now. The region is read
+  at most every 500 ms per target: reading it every frame for each of
+  Word's ~40 targets cost ~1.5 ms a frame.
+- Measured, not changed: Wine's input path adds under 10 ms (the wheel
+  events' compositor timestamps, now traced, against their delivery).
+  Word's UI thread makes ~19,000 server requests a second while scrolling
+  (registry: Outlook security policy keys and `IniFileMapping\desktop.ini`
+  for an `IShellItem2::GetPropertyStore` it retries ~16 times a second;
+  `GetProp`; hook chains; clipboard polling), under 1% of a core each. The
+  isolated KWin fell back to QPainter (`eglInitialize failed`), which holds
+  client buffers: there, about 4% of the compositor's presents block
+  4-68 ms in DXVK's image acquire (swap chains of one buffer allow one frame
+  in flight). Not yet measured with GPU compositing.
 - **White lines across Office windows at 125%** (reported in Publisher's
   dark theme, in all apps): a white row under the ribbon, a white column at
   the end of the horizontal scroll bar. KWin rounds a subsurface's position
@@ -55,10 +91,6 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   in its non-client area; it is no system colour of the prefix, which
   reports Windows 10 (build 19045), where Office draws its own frame. On
   Windows 11 DWM draws a darker border with rounded corners instead.
-- Open: the callout's beak (an 11-pixel triangle in its window region) is
-  not shown: GPU children of a toplevel with a region are cropped to the
-  region's largest rectangle. Showing it needs alpha in the composition
-  swap chain or another way to shape a subsurface.
 - Harness: a D3D11 back buffer that was only cleared is presented black or
   stale under DXVK (the clear is deferred; a readback runs it), so
   `tests/child-surface.c`'s loop frames never reach the screen and it
