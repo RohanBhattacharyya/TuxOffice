@@ -379,7 +379,7 @@ static void send_scroll(uint32_t axis, int delta)
         input.mi.mouseData = delta;
     }
 
-    TRACE("hwnd=%p axis=%u delta=%d\n", hwnd, axis, delta);
+    TRACE("hwnd=%p axis=%u delta=%d time=%u\n", hwnd, axis, delta, scroll.time);
 
     NtUserSendHardwareInput(get_input_hwnd(hwnd), 0, &input, 0);
 }
