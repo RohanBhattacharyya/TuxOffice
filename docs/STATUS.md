@@ -28,6 +28,23 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Idle Excel used 11% of a core** (about 110 ms of CPU a second, all on
+  the composition thread): Office's text carets fade in and out forever
+  (1.06 s key-frame animations), also while nothing is edited and the caret
+  is hidden, and every animation tick snapshotted all of the compositor's
+  targets to find nothing had changed. A tick now draws only when an
+  animated value changed on a visual the last complete render pass reached
+  (not under a hidden or transparent visual), and only the targets those
+  visuals are in; while every animation holds its value the timer sleeps
+  until the next change (`076c60c`). Idle, 10 s windows: Excel 111 -> 5
+  ms/s; Word while its caret blinks 116 -> 96 (animation frames draw 1
+  target instead of 12), Word after blinking stops 20 on both; Publisher,
+  Access, OneNote, PowerPoint 0-1. The caret blinks at the same rate, the
+  cell cursor glides with the same 5-8 frames a move, `windows.ui`
+  composition tests (246, the same two known failures) and the Office suite
+  (Word 11, Excel 17, PowerPoint 8 checks) pass as on 0.1.30.
+- Open: a caret-sized partial frame in Word still costs about 2.5 ms to
+  draw, and expressions are parsed from their text at every evaluation.
 - **Office dialogs had no shadow:** Office draws each dialog's four
   `MSO_BORDEREFFECT` shadow strips once with UpdateLayeredWindow, then shows
   them. Showing a strip makes its surface a subsurface of the dialog, and
