@@ -429,6 +429,13 @@ struct desktop_window_target
     ID2D1Device *render_device;
     ID2D1DeviceContext *render_context;
     ID2D1Bitmap1 *render_bitmap;
+    /* A target in a window with a shaped region draws through the window's
+     * own surface, which keeps that shape: a GPU layer can only be cropped
+     * to a rectangle, which cut off the beaks of Office's callouts. */
+    BOOL shaped;
+    ID2D1Bitmap1 *readback;
+    DWORD *pixels;  /* the last frame, for WM_PAINT, guarded by layer_cs */
+    UINT pixels_width, pixels_height;
     struct list entry;
     struct list layer_entry;
     CRITICAL_SECTION render_cs;
@@ -515,6 +522,13 @@ static void desktop_window_target_reset_renderer( struct desktop_window_target *
     if (impl->render_context) ID2D1DeviceContext_Release( impl->render_context );
     if (impl->render_device) ID2D1Device_Release( impl->render_device );
     if (impl->swapchain) IDXGISwapChain1_Release( impl->swapchain );
+    if (impl->readback) ID2D1Bitmap1_Release( impl->readback );
+    impl->readback = NULL;
+    EnterCriticalSection( &layer_cs );
+    free( impl->pixels );
+    impl->pixels = NULL;
+    impl->pixels_width = impl->pixels_height = 0;
+    LeaveCriticalSection( &layer_cs );
     impl->render_bitmap = NULL;
     impl->render_context = NULL;
     impl->render_device = NULL;
@@ -558,6 +572,20 @@ static ULONG desktop_window_target_release( struct desktop_window_target *impl )
     return ref;
 }
 
+/* Called with layer_cs held. */
+static void paint_layer_pixels( struct desktop_window_target *target, HDC hdc )
+{
+    BITMAPINFO info = {{sizeof(info.bmiHeader)}};
+
+    info.bmiHeader.biWidth = target->pixels_width;
+    info.bmiHeader.biHeight = -(LONG)target->pixels_height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    SetDIBitsToDevice( hdc, 0, 0, target->pixels_width, target->pixels_height, 0, 0, 0,
+            target->pixels_height, target->pixels, &info, DIB_RGB_COLORS );
+}
+
 static LRESULT CALLBACK composition_layer_proc( HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam )
 {
     struct desktop_window_target *target, *found = NULL;
@@ -588,6 +616,10 @@ static LRESULT CALLBACK composition_layer_proc( HWND hwnd, UINT message, WPARAM 
 
     if (message == WM_NCDESTROY) return DefWindowProcW( hwnd, message, wparam, lparam );
     BeginPaint( hwnd, &paint );
+    EnterCriticalSection( &layer_cs );
+    if (found && found->pixels && found->render_hwnd == hwnd)
+        paint_layer_pixels( found, paint.hdc );
+    LeaveCriticalSection( &layer_cs );
     EndPaint( hwnd, &paint );
     /* The layer's contents live in its swapchain and survive without a
      * repaint; presenting from the layer thread would race the application's
@@ -14347,6 +14379,60 @@ found:
     return S_OK;
 }
 
+static BOOL target_window_shaped( struct desktop_window_target *target )
+{
+    HRGN region = CreateRectRgn( 0, 0, 0, 0 );
+    BOOL shaped;
+
+    if (!region) return FALSE;
+    shaped = GetWindowRgn( GetAncestor( target->hwnd, GA_ROOT ), region ) == COMPLEXREGION;
+    DeleteObject( region );
+    return shaped;
+}
+
+/* Shows a shaped target's frame through its layer window's GDI surface. */
+static HRESULT present_shaped_target( struct desktop_window_target *target, const D2D1_RECT_F *damage )
+{
+    D2D1_MAPPED_RECT mapped;
+    D2D1_RECT_U rect = {0, 0, target->width, target->height};
+    D2D1_POINT_2U origin;
+    UINT x, y;
+    HRESULT hr;
+    HDC hdc;
+
+    if (damage) rect = (D2D1_RECT_U){damage->left, damage->top, damage->right, damage->bottom};
+    origin = (D2D1_POINT_2U){rect.left, rect.top};
+    if (FAILED(hr = ID2D1Bitmap1_CopyFromBitmap( target->readback, &origin,
+            (ID2D1Bitmap *)target->render_bitmap, &rect ))) return hr;
+    if (FAILED(hr = ID2D1Bitmap1_Map( target->readback, D2D1_MAP_OPTIONS_READ, &mapped ))) return hr;
+    EnterCriticalSection( &layer_cs );
+    if (target->pixels_width != target->width || target->pixels_height != target->height)
+    {
+        free( target->pixels );
+        target->pixels = calloc( (SIZE_T)target->width * target->height, sizeof(*target->pixels) );
+        target->pixels_width = target->pixels ? target->width : 0;
+        target->pixels_height = target->pixels ? target->height : 0;
+        rect = (D2D1_RECT_U){0, 0, target->pixels_width, target->pixels_height};
+    }
+    if (target->pixels)
+    {
+        for (y = rect.top; y < rect.bottom; ++y)
+        {
+            const DWORD *src = (const DWORD *)(mapped.bits + (SIZE_T)y * mapped.pitch);
+            DWORD *dst = target->pixels + (SIZE_T)y * target->pixels_width;
+            for (x = rect.left; x < rect.right; ++x) dst[x] = src[x] | 0xff000000;
+        }
+        if ((hdc = GetDCEx( target->render_hwnd, 0, DCX_CACHE | DCX_CLIPSIBLINGS )))
+        {
+            paint_layer_pixels( target, hdc );
+            ReleaseDC( target->render_hwnd, hdc );
+        }
+    }
+    LeaveCriticalSection( &layer_cs );
+    ID2D1Bitmap1_Unmap( target->readback );
+    return target->pixels ? S_OK : E_OUTOFMEMORY;
+}
+
 static HRESULT desktop_window_target_render_locked( struct desktop_window_target *target )
 {
     struct draw_frame frame = {0}, *previous_frame;
@@ -14367,7 +14453,7 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
     HRESULT hr, draw;
     ULONGLONG started = perf_us(), located, positioned, setup, drawn;
     struct target_snapshot snap = {0};
-    BOOL redraw = FALSE;
+    BOOL redraw = FALSE, shaped;
 
     /* Nothing of the target shows. */
     target->shown_pass = target->render_pass;
@@ -14403,24 +14489,37 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
         }
     }
     positioned = perf_us();
+    shaped = target_window_shaped( target );
+    if (shaped != target->shaped)
+    {
+        TRACE_(uirender)( "target hwnd %p shaped %d.\n", target->hwnd, shaped );
+        desktop_window_target_reset_renderer( target );
+        target->shaped = shaped;
+    }
     if (source && target->render_device && target->render_device != source->device)
         desktop_window_target_reset_renderer( target );
-    if (!target->swapchain || !target->render_context || !target->render_bitmap) redraw = TRUE;
-    if (target->swapchain && (target->width != width || target->height != height))
+    if ((!target->swapchain && !shaped) || !target->render_context || !target->render_bitmap) redraw = TRUE;
+    if ((target->swapchain || target->readback) && (target->width != width || target->height != height))
     {
         redraw = TRUE;
         stage = "resize composition buffers";
         if (target->render_context) ID2D1DeviceContext_SetTarget( target->render_context, NULL );
         if (target->render_bitmap) ID2D1Bitmap1_Release( target->render_bitmap );
         target->render_bitmap = NULL;
-        hr = IDXGISwapChain1_ResizeBuffers( target->swapchain, 1, width, height,
-                DXGI_FORMAT_B8G8R8A8_UNORM, 0 );
-        if (FAILED(hr)) goto done;
+        if (target->readback) ID2D1Bitmap1_Release( target->readback );
+        target->readback = NULL;
+        if (target->swapchain && FAILED(hr = IDXGISwapChain1_ResizeBuffers( target->swapchain, 1, width, height,
+                DXGI_FORMAT_B8G8R8A8_UNORM, 0 ))) goto done;
         target->width = width;
         target->height = height;
     }
 
-    if (!target->swapchain)
+    if (shaped && !source && !target->render_device)
+    {
+        stage = "get render device";
+        if (FAILED(hr = get_thread_render_device( &d3d_device, &target->render_device ))) goto done;
+    }
+    if (!target->swapchain && !shaped)
     {
         if (source)
         {
@@ -14475,6 +14574,23 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
         stage = "create render context";
         if (FAILED(hr = ID2D1Device_CreateDeviceContext( target->render_device,
                 D2D1_DEVICE_CONTEXT_OPTIONS_NONE, &target->render_context ))) goto done;
+    }
+    if (!target->render_bitmap && shaped)
+    {
+        D2D1_SIZE_U size = {width, height};
+
+        properties.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        properties.pixelFormat.alphaMode = D2D1_ALPHA_MODE_IGNORE;
+        properties.dpiX = properties.dpiY = 96.0f;
+        properties.bitmapOptions = D2D1_BITMAP_OPTIONS_TARGET;
+        stage = "create shaped render bitmap";
+        if (FAILED(hr = ID2D1DeviceContext_CreateBitmap( target->render_context, size, NULL, 0,
+                &properties, &target->render_bitmap ))) goto done;
+        properties.bitmapOptions = D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW;
+        if (FAILED(hr = ID2D1DeviceContext_CreateBitmap( target->render_context, size, NULL, 0,
+                &properties, &target->readback ))) goto done;
+        target->width = width;
+        target->height = height;
     }
     if (!target->render_bitmap)
     {
@@ -14567,7 +14683,8 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
     if (FAILED(hr)) goto done;
     drawn = perf_us();
     stage = "present";
-    hr = IDXGISwapChain1_Present( target->swapchain, 0, 0 );
+    if (shaped) hr = present_shaped_target( target, frame.partial ? &frame.damage : NULL );
+    else hr = IDXGISwapChain1_Present( target->swapchain, 0, 0 );
     if (SUCCEEDED(hr) && !snap.dynamic)
     {
         target->drawn_state = snap.data;
