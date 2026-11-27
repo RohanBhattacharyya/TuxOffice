@@ -7990,7 +7990,31 @@ struct composition_effect
     BOOL factory;
     LONG closed;
     LONG ref;
+    /* The last output, kept while nothing it depends on changes: drawing an
+     * effect renders its sources and the graph into two offscreen targets. */
+    ID2D1Bitmap *cache;
+    ID2D1Device *cache_device;
+    BYTE *cache_state;
+    SIZE_T cache_state_size;
 };
+
+static void effect_drop_cache( struct composition_effect *impl )
+{
+    ID2D1Bitmap *bitmap;
+    ID2D1Device *device;
+
+    EnterCriticalSection( &impl->lock );
+    bitmap = impl->cache;
+    device = impl->cache_device;
+    impl->cache = NULL;
+    impl->cache_device = NULL;
+    free( impl->cache_state );
+    impl->cache_state = NULL;
+    impl->cache_state_size = 0;
+    LeaveCriticalSection( &impl->lock );
+    if (bitmap) ID2D1Bitmap_Release( bitmap );
+    if (device) ID2D1Device_Release( device );
+}
 
 static const ICompositionBrushVtbl effect_composition_brush_vtbl;
 
@@ -8109,6 +8133,7 @@ static ULONG WINAPI effect_object_Release( ICompositionObject *iface )
             WindowsDeleteString( expression->name );
             free( expression );
         }
+        effect_drop_cache( impl );
         if (impl->properties) ICompositionPropertySet_Release( impl->properties );
         if (impl->graph) composition_effect_graph_release( impl->graph );
         ICompositor_Release( impl->compositor );
@@ -8307,6 +8332,7 @@ static HRESULT WINAPI effect_closable_Close( IClosable *iface )
     ICompositionBrush *source;
 
     if (InterlockedExchange( &impl->closed, TRUE )) return S_OK;
+    effect_drop_cache( impl );
     for (binding = impl->bindings; binding; binding = binding->next)
     {
         EnterCriticalSection( &impl->lock );
@@ -13381,10 +13407,15 @@ done:
     return hr;
 }
 
+static BOOL effect_cache_state( struct composition_effect *effect, ID2D1DeviceContext *context,
+        D2D1_SIZE_F size, BYTE **state, SIZE_T *state_size );
+
 static HRESULT draw_effect_brush( ID2D1DeviceContext *context, struct composition_effect *effect,
         const D2D1_RECT_F *bounds, FLOAT opacity, UINT depth )
 {
-    D2D1_PIXEL_FORMAT format = {DXGI_FORMAT_R32G32B32A32_FLOAT, D2D1_ALPHA_MODE_PREMULTIPLIED};
+    /* The graph runs on the float sources; its output, which is kept, is drawn
+     * into an 8-bit target anyway. */
+    D2D1_PIXEL_FORMAT format = {DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED};
     D2D1_COLOR_F clear = {0.0f, 0.0f, 0.0f, 0.0f};
     struct effect_render_sources sources = {effect, NULL,
             {bounds->right - bounds->left, bounds->bottom - bounds->top}, depth};
@@ -13392,10 +13423,37 @@ static HRESULT draw_effect_brush( ID2D1DeviceContext *context, struct compositio
     ID2D1DeviceContext *output = NULL;
     ID2D1Bitmap *bitmap = NULL;
     ID2D1Image *image = NULL;
+    ID2D1Device *device = NULL;
+    BYTE *state = NULL;
+    SIZE_T state_size = 0;
+    BOOL cacheable;
     HRESULT hr, end;
 
     if (InterlockedCompareExchange( &effect->closed, 0, 0 )) return RO_E_CLOSED;
     effect_update_expressions( effect );
+    /* Scrolling PowerPoint's slide thumbnails redrew every one of them each frame. */
+    ID2D1DeviceContext_GetDevice( context, &device );
+    cacheable = device && effect_cache_state( effect, context, sources.size, &state, &state_size );
+    if (cacheable)
+    {
+        EnterCriticalSection( &effect->lock );
+        if (effect->cache && effect->cache_device == device && effect->cache_state_size == state_size &&
+                !memcmp( effect->cache_state, state, state_size ))
+        {
+            bitmap = effect->cache;
+            ID2D1Bitmap_AddRef( bitmap );
+        }
+        LeaveCriticalSection( &effect->lock );
+        if (bitmap)
+        {
+            ID2D1DeviceContext_DrawBitmap( context, bitmap, bounds, opacity,
+                    D2D1_INTERPOLATION_MODE_LINEAR, NULL, NULL );
+            ID2D1Bitmap_Release( bitmap );
+            ID2D1Device_Release( device );
+            free( state );
+            return S_OK;
+        }
+    }
     if (FAILED(hr = ID2D1DeviceContext_CreateCompatibleRenderTarget( context, &sources.size, NULL,
             &format, D2D1_COMPATIBLE_RENDER_TARGET_OPTIONS_NONE, &target )))
     {
@@ -13417,7 +13475,31 @@ static HRESULT draw_effect_brush( ID2D1DeviceContext *context, struct compositio
     if (FAILED(hr = ID2D1BitmapRenderTarget_GetBitmap( target, &bitmap ))) goto done;
     ID2D1DeviceContext_DrawBitmap( context, bitmap, bounds, opacity,
             D2D1_INTERPOLATION_MODE_LINEAR, NULL, NULL );
+    if (cacheable)
+    {
+        ID2D1Bitmap *old;
+        ID2D1Device *old_device;
+        BYTE *old_state;
+
+        ID2D1Bitmap_AddRef( bitmap );
+        ID2D1Device_AddRef( device );
+        EnterCriticalSection( &effect->lock );
+        old = effect->cache;
+        old_device = effect->cache_device;
+        old_state = effect->cache_state;
+        effect->cache = bitmap;
+        effect->cache_device = device;
+        effect->cache_state = state;
+        effect->cache_state_size = state_size;
+        LeaveCriticalSection( &effect->lock );
+        state = NULL;
+        free( old_state );
+        if (old) ID2D1Bitmap_Release( old );
+        if (old_device) ID2D1Device_Release( old_device );
+    }
 done:
+    free( state );
+    if (device) ID2D1Device_Release( device );
     if (bitmap) ID2D1Bitmap_Release( bitmap );
     if (image) ID2D1Image_Release( image );
     if (output) ID2D1DeviceContext_Release( output );
@@ -14145,6 +14227,8 @@ static BOOL render_window_placed( struct desktop_window_target *target, UINT wid
 
 #define SNAPSHOT_FIELD( snap, value ) snapshot_add( (snap), &(value), sizeof(value) )
 
+static void snapshot_effect( struct target_snapshot *snap, struct composition_effect *effect, UINT depth );
+
 static void snapshot_brush( struct target_snapshot *snap, ICompositionBrush *brush, UINT depth )
 {
     SNAPSHOT_FIELD( snap, brush );
@@ -14223,7 +14307,67 @@ static void snapshot_brush( struct target_snapshot *snap, ICompositionBrush *bru
         snapshot_brush( snap, source, depth + 1 );
         if (source) ICompositionBrush_Release( source );
     }
+    else if (brush->lpVtbl == &effect_composition_brush_vtbl)
+        snapshot_effect( snap, effect_from_ICompositionBrush( brush ), depth );
     else snapshot_dynamic( snap, "brush type" );
+}
+
+/* An effect draws from its graph, its properties and its sources' brushes. */
+static void snapshot_effect( struct target_snapshot *snap, struct composition_effect *effect, UINT depth )
+{
+    struct composition_property_set *properties;
+    struct effect_source_binding *binding;
+    ICompositionBrush *source;
+    HSTRING name;
+    UINT i, n;
+
+    SNAPSHOT_FIELD( snap, effect->graph );
+    if (InterlockedCompareExchange( &effect->closed, 0, 0 )) return;
+    effect_update_expressions( effect );
+    if (effect->properties)
+    {
+        properties = impl_from_ICompositionPropertySet( effect->properties );
+        SNAPSHOT_FIELD( snap, properties->count );
+        for (i = 0; i < properties->count; ++i)
+        {
+            SNAPSHOT_FIELD( snap, properties->values[i].name );
+            SNAPSHOT_FIELD( snap, properties->values[i].type );
+            SNAPSHOT_FIELD( snap, properties->values[i].value );
+        }
+    }
+    for (i = 0; !snap->dynamic; ++i)
+    {
+        EnterCriticalSection( &effect->lock );
+        for (binding = effect->bindings, n = i; binding && n; binding = binding->next) --n;
+        name = binding ? binding->name : NULL;
+        if ((source = binding ? binding->source : NULL)) ICompositionBrush_AddRef( source );
+        LeaveCriticalSection( &effect->lock );
+        if (!binding) break;
+        SNAPSHOT_FIELD( snap, name );
+        snapshot_brush( snap, source, depth + 1 );
+        if (source) ICompositionBrush_Release( source );
+    }
+}
+
+/* What an effect's output depends on, to tell whether its cached output still holds. */
+static BOOL effect_cache_state( struct composition_effect *effect, ID2D1DeviceContext *context,
+        D2D1_SIZE_F size, BYTE **state, SIZE_T *state_size )
+{
+    struct target_snapshot snap = {0};
+    FLOAT dpi[2];
+
+    ID2D1DeviceContext_GetDpi( context, &dpi[0], &dpi[1] );
+    SNAPSHOT_FIELD( &snap, dpi );
+    SNAPSHOT_FIELD( &snap, size );
+    snapshot_effect( &snap, effect, 0 );
+    if (snap.dynamic)
+    {
+        free( snap.data );
+        return FALSE;
+    }
+    *state = snap.data;
+    *state_size = snap.size;
+    return TRUE;
 }
 
 /* Drop shadow animations apply their final values, so properties suffice. */
