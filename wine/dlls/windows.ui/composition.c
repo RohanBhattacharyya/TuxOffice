@@ -23,6 +23,7 @@
 #include <math.h>
 #include <stdint.h>
 #include "private.h"
+#include "winternl.h"
 #include "roapi.h"
 #include "initguid.h"
 #include "dcomp.h"
@@ -433,6 +434,7 @@ struct desktop_window_target
      * own surface, which keeps that shape: a GPU layer can only be cropped
      * to a rectangle, which cut off the beaks of Office's callouts. */
     BOOL shaped;
+    ULONGLONG shape_checked;  /* GetTickCount64() of the last region check */
     ID2D1Bitmap1 *readback;
     DWORD *pixels;  /* the last frame, for WM_PAINT, guarded by layer_cs */
     UINT pixels_width, pixels_height;
@@ -6101,20 +6103,139 @@ static LONGLONG animation_frame_period(void)
     return period;
 }
 
+/* SetTimer waits at least 10 ms (USER_TIMER_MINIMUM): a frame due sooner, every
+ * frame on a display above 100 Hz and a late one at 60 Hz, came up to a frame late,
+ * so Office's animations ran at most at 95 frames a second on a 240 Hz display. The
+ * desktop window manager times them by the display instead. For those waits a thread
+ * waits for the frame and posts a message to a window of the thread that armed the
+ * timer, which runs the tick as the timer would. animation_timer holds
+ * FRAME_CLOCK_TIMER while the clock is armed. */
+#define FRAME_CLOCK_TIMER ((UINT_PTR)-2)
+#define WM_WINE_FRAME_CLOCK (WM_USER + 1)
+static HWND frame_clock_window;
+static DWORD frame_clock_owner;
+static HANDLE frame_clock_event;
+static LONGLONG frame_clock_due;  /* in animation_now() units, 0 when idle; in running_animations_cs */
+static INIT_ONCE frame_clock_once = INIT_ONCE_STATIC_INIT;
+
+static DWORD WINAPI frame_clock_thread( void *arg )
+{
+    LARGE_INTEGER timeout;
+    LONGLONG due, now;
+
+    SetThreadDescription( GetCurrentThread(), L"wine_ui_frame_clock" );
+    SetThreadPriority( GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL );
+    for (;;)
+    {
+        EnterCriticalSection( &running_animations_cs );
+        due = frame_clock_due;
+        LeaveCriticalSection( &running_animations_cs );
+        if (!due)
+        {
+            WaitForSingleObject( frame_clock_event, INFINITE );
+            continue;
+        }
+        if ((now = animation_now()) < due)
+        {
+            /* Relative, in 100 ns units: finer than a millisecond. */
+            timeout.QuadPart = now - due;
+            NtWaitForSingleObject( frame_clock_event, FALSE, &timeout );
+            continue;
+        }
+        EnterCriticalSection( &running_animations_cs );
+        if (frame_clock_due == due) frame_clock_due = 0;
+        LeaveCriticalSection( &running_animations_cs );
+        PostMessageW( frame_clock_window, WM_WINE_FRAME_CLOCK, 0, 0 );
+    }
+    return 0;
+}
+
+static void CALLBACK animation_timer_proc( HWND hwnd, UINT msg, UINT_PTR id, DWORD time );
+
+static LRESULT CALLBACK frame_clock_proc( HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam )
+{
+    BOOL tick;
+
+    if (message != WM_WINE_FRAME_CLOCK) return DefWindowProcW( hwnd, message, wparam, lparam );
+    EnterCriticalSection( &running_animations_cs );
+    if ((tick = animation_timer == FRAME_CLOCK_TIMER) && animation_timer_due - animation_now() > 2000)
+    {
+        /* Posted for an earlier frame, which was cancelled: wait for this one. */
+        frame_clock_due = animation_timer_due;
+        SetEvent( frame_clock_event );
+        tick = FALSE;
+    }
+    LeaveCriticalSection( &running_animations_cs );
+    if (tick) animation_timer_proc( NULL, WM_TIMER, FRAME_CLOCK_TIMER, GetTickCount() );
+    return 0;
+}
+
+static BOOL CALLBACK frame_clock_start( INIT_ONCE *once, void *param, void **context )
+{
+    WNDCLASSW class = {.lpfnWndProc = frame_clock_proc, .lpszClassName = L"Wine.UI.Composition.FrameClock"};
+    HANDLE thread;
+
+    /* The window procedure can outlive the last composition object. */
+    if (!GetModuleHandleExW( GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+            (const WCHAR *)frame_clock_proc, &class.hInstance )) return FALSE;
+    if (!RegisterClassW( &class ) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return FALSE;
+    if (!(frame_clock_window = CreateWindowExW( 0, class.lpszClassName, NULL, 0, 0, 0, 0, 0,
+            HWND_MESSAGE, NULL, class.hInstance, NULL ))) return FALSE;
+    if (!(frame_clock_event = CreateEventW( NULL, FALSE, FALSE, NULL ))) goto failed;
+    if (!(thread = CreateThread( NULL, 0, frame_clock_thread, NULL, 0, NULL ))) goto failed;
+    CloseHandle( thread );
+    frame_clock_owner = GetCurrentThreadId();
+    TRACE( "frame clock on thread %04lx.\n", frame_clock_owner );
+    return TRUE;
+
+failed:
+    if (frame_clock_event) CloseHandle( frame_clock_event );
+    frame_clock_event = NULL;
+    DestroyWindow( frame_clock_window );
+    frame_clock_window = NULL;
+    return FALSE;
+}
+
+/* Called with running_animations_cs held, on the thread arming the timer. */
+static BOOL frame_clock_arm( LONGLONG due )
+{
+    if (!InitOnceExecuteOnce( &frame_clock_once, frame_clock_start, NULL, NULL )) return FALSE;
+    if (frame_clock_owner != GetCurrentThreadId()) return FALSE;
+    frame_clock_due = due;
+    SetEvent( frame_clock_event );
+    return TRUE;
+}
+
+/* Called with running_animations_cs held. */
+static void animation_timer_cancel(void)
+{
+    if (animation_timer == FRAME_CLOCK_TIMER) frame_clock_due = 0;
+    else if (animation_timer) KillTimer( NULL, animation_timer );
+    animation_timer = 0;
+}
+
 /* Called with running_animations_cs held. The next tick comes one display frame
  * after the last frame began, not a fixed time after the work it caused. */
 static void animation_timer_set(void)
 {
     LONGLONG now = animation_now(), next = animation_frame_start + animation_frame_period();
-    UINT delay = 15;
+    LONGLONG wait = 150000;
+    UINT delay;
 
     if (animation_frame_start && now - animation_frame_start < 10000000)
-        delay = next > now ? min( 15, (next - now + 9999) / 10000 ) : 1;
+        wait = next > now ? min( 150000, next - now ) : 0;
     /* While every running animation holds its value, as a caret between its fades
      * does, wake when one changes. Scoped batches and swap chains need every frame. */
     if (animation_next_change != LLONG_MAX && animation_next_change - now > animation_frame_period() &&
             list_empty( &pending_batches ) && !animation_polls_swapchains)
-        delay = min( 1000, (animation_next_change - now + 9999) / 10000 );
+        wait = min( 10000000, animation_next_change - now );
+    if (wait < USER_TIMER_MINIMUM * 10000 && frame_clock_arm( now + wait ))
+    {
+        animation_timer = FRAME_CLOCK_TIMER;
+        animation_timer_due = now + wait;
+        return;
+    }
+    delay = max( 1, (wait + 9999) / 10000 );
     animation_timer = SetTimer( NULL, 0, delay, animation_timer_proc );
     animation_timer_due = now + (LONGLONG)delay * 10000;
 }
@@ -6126,8 +6247,7 @@ static void animation_timer_arm(void)
     EnterCriticalSection( &running_animations_cs );
     if (animation_timer && animation_timer_due - animation_now() > animation_frame_period())
     {
-        KillTimer( NULL, animation_timer );
-        animation_timer = 0;
+        animation_timer_cancel();
         animation_next_change = 0;
     }
     if (!animation_timer) animation_timer_set();
@@ -6139,7 +6259,7 @@ static void animation_timer_rearm( LONGLONG started )
 {
     EnterCriticalSection( &running_animations_cs );
     animation_frame_start = started;
-    if (animation_timer) KillTimer( NULL, animation_timer );
+    animation_timer_cancel();
     animation_timer_set();
     LeaveCriticalSection( &running_animations_cs );
 }
@@ -6175,7 +6295,7 @@ static void CALLBACK animation_timer_proc( HWND hwnd, UINT msg, UINT_PTR id, DWO
     UINT count = 0, polls, i, j;
     BOOL batches, running;
 
-    KillTimer( NULL, id );
+    if (id != FRAME_CLOCK_TIMER) KillTimer( NULL, id );
     EnterCriticalSection( &running_animations_cs );
     if (animation_timer == id) animation_timer = 0;
     animation_frame_start = animation_now();
@@ -14489,7 +14609,14 @@ static HRESULT desktop_window_target_render_locked( struct desktop_window_target
         }
     }
     positioned = perf_us();
-    shaped = target_window_shaped( target );
+    /* Asking for the region takes a server call: check when the layer was
+     * placed and every half second, not for every target on every frame. */
+    if (redraw || !target->shape_checked || GetTickCount64() - target->shape_checked >= 500)
+    {
+        shaped = target_window_shaped( target );
+        target->shape_checked = GetTickCount64();
+    }
+    else shaped = target->shaped;
     if (shaped != target->shaped)
     {
         TRACE_(uirender)( "target hwnd %p shaped %d.\n", target->hwnd, shaped );
