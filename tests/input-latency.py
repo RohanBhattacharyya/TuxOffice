@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """Measure input-to-frame latency and frame count of an Office document view.
 
-Usage (inside tests/isolated-run.py): input-latency.py LOG [wheel|type]
+Usage (inside tests/isolated-run.py): input-latency.py LOG [wheel|type] [X Y]
 Start the app first with WINEDEBUG=+timestamp,+uiperf,+waylanddrv,+key and its
-output in LOG, with a long document whose view is at logical (1000, 700). The
-view is clicked and sent to its start; then 90 wheel steps at about 60 a second,
+output in LOG, with a long document whose view is at logical (X, Y), by
+default (1000, 700); PowerPoint's slide thumbnails are at (376, 700) with the
+window placed as the Office suite places it. The view is clicked and sent to
+its start; then 90 wheel steps at about 60 a second,
 or 88 typed characters, are sent. Reports the composition target drawn most
 often (the document view), its draws, the longest gaps between them, and the
 time from each input event reaching Wine to that target's next draw.
@@ -24,6 +26,7 @@ root = Path(__file__).resolve().parent.parent
 if not os.environ.get("TUXOFFICE_PREFIX", "").endswith("/home/prefix"):
     sys.exit("This test requires an isolated Office prefix")
 log = sys.argv[1]; mode = sys.argv[2] if len(sys.argv) > 2 else "wheel"
+x, y = (int(sys.argv[3]), int(sys.argv[4])) if len(sys.argv) > 4 else (1000, 700)
 build = Path(tempfile.mkdtemp())
 eis_input = build / "eis-input"
 flags = sp.check_output(["pkg-config", "--cflags", "--libs", "libei-1.0", "libsystemd"], text=True).split()
@@ -32,10 +35,10 @@ def eis(lines):
     sp.run([str(eis_input)], input="\n".join(lines) + "\n", text=True)
 def keys(item):
     return sp.run([sys.executable, str(root / "tests/eis-type.py"), item], capture_output=True, text=True).stdout.splitlines()
-eis(["move 1000 700", "sleep 100", "button 272 1", "sleep 30", "button 272 0", "sleep 300"] + keys("{ctrl+home}") + ["sleep 1500"])
+eis([f"move {x} {y}", "sleep 100", "button 272 1", "sleep 30", "button 272 0", "sleep 300"] + keys("{ctrl+home}") + ["sleep 1500"])
 mark = sum(1 for _ in open(log, errors="replace"))
 if mode == "wheel":
-    eis(["move 1000 700", "sleep 200"] + [x for i in range(90) for x in ("wheel 1", "sleep 16")] + ["sleep 1500"])
+    eis([f"move {x} {y}", "sleep 200"] + [c for i in range(90) for c in ("wheel 1", "sleep 16")] + ["sleep 1500"])
 else:
     seq = []
     for ch in "the quick brown fox jumps over the lazy dog " * 2:
