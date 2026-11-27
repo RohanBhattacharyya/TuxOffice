@@ -12739,6 +12739,8 @@ static HRESULT WINAPI composition_drawing_surface_interop_BeginDraw( ICompositio
     hr = drawing_surface_begin_draw( impl, update_rect, iid, update_object, update_offset );
     LeaveCriticalSection( &surface_update_cs );
     if (FAILED(hr)) WARN( "surface %p rect %s failed, hr %#lx.\n", impl, wine_dbgstr_rect( update_rect ), hr );
+    TRACE_(uiperf)( "begin draw surface %p virtual %d size %.0fx%.0f rect %s.\n", impl, impl->virtual,
+            impl->size.Width, impl->size.Height, wine_dbgstr_rect( update_rect ) );
     return hr;
 }
 
