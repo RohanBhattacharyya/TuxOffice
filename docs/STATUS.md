@@ -28,6 +28,17 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
 
 ## Changes in this session
 
+- **Released as 0.1.33** (`01e8b8e`, packages and checked SHA256SUMS in
+  `dist/0.1.33/`): the thumbnail scrolling and cloud font fixes below. The
+  container-built runner passes the Office suite (Word 11, Excel 17,
+  PowerPoint 8 checks); thumbnail pane at 240 Hz: 285-326 draws for 90
+  steps, input-to-draw median 4 ms (p90 6-7). Word wheel scrolling (Web
+  Layout, ten alternating runs each against 0.1.32 with the per-property
+  trace off): same draw counts, p90 12-25 vs 28-67 ms in the last five;
+  both have occasional 150-290 ms stalls where Word redraws ~2000 line
+  surfaces at once (its background work, not the compositor: per-frame
+  setup and draw times are the same). Word used ~13% more CPU over the
+  scroll on 0.1.33 (5.4 vs 4.8 s, three runs each), not explained yet.
 - **Scrolling PowerPoint's slide thumbnails lagged** (240 Hz, 60-slide
   deck, 90 wheel steps over the pane; 0.1.32 -> now, three runs each):
   102-165 -> 283-345 pane draws, input-to-draw median 6.5-11 -> 3-4 ms
