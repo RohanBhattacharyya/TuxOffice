@@ -663,34 +663,101 @@ static HWND find_mso_border_parent(HWND hwnd, HWND active, const RECT *border)
 /***********************************************************************
  *           WAYLAND_WindowPosChanged
  */
+/* The largest rectangle inside a region, from its y-x banded rectangles: a
+ * rectangle spans contiguous bands and lies in the intersection of their
+ * spans. A beak or rounded corner splits the region into one band per
+ * scanline, so the largest single rectangle can miss most of the window. */
+static INT64 get_largest_region_rect(const RECT *rects, UINT count, RECT *best_rect)
+{
+    LONG (*spans)[2], (*next)[2];
+    UINT *bands, band_count = 0, span_count, next_count, i, j, k, a, b;
+    INT64 best = 0, area;
+
+    if (!count) return 0;
+    bands = malloc((count + 1) * sizeof(*bands));
+    spans = malloc(count * sizeof(*spans));
+    next = malloc(count * sizeof(*next));
+    if (!bands || !spans || !next) goto done;
+
+    for (i = 0; i < count; i++)
+        if (!i || rects[i].top != rects[i - 1].top) bands[band_count++] = i;
+    bands[band_count] = count;
+
+    for (i = 0; i < band_count; i++)
+    {
+        /* The spans of band i, joining touching rectangles. */
+        span_count = 0;
+        for (k = bands[i]; k < bands[i + 1]; k++)
+        {
+            if (span_count && rects[k].left <= spans[span_count - 1][1])
+                spans[span_count - 1][1] = max(spans[span_count - 1][1], rects[k].right);
+            else
+            {
+                spans[span_count][0] = rects[k].left;
+                spans[span_count++][1] = rects[k].right;
+            }
+        }
+        for (j = i; span_count; j++)
+        {
+            if (j > i)
+            {
+                if (j == band_count || rects[bands[j]].top != rects[bands[j - 1]].bottom) break;
+                /* Intersect the spans so far with band j's rectangles. */
+                next_count = 0;
+                for (a = 0, b = bands[j]; a < span_count && b < bands[j + 1];)
+                {
+                    LONG left = max(spans[a][0], rects[b].left), right = min(spans[a][1], rects[b].right);
+                    if (left < right)
+                    {
+                        if (next_count && left <= next[next_count - 1][1])
+                            next[next_count - 1][1] = max(next[next_count - 1][1], right);
+                        else
+                        {
+                            next[next_count][0] = left;
+                            next[next_count++][1] = right;
+                        }
+                    }
+                    if (spans[a][1] < rects[b].right) a++;
+                    else b++;
+                }
+                memcpy(spans, next, next_count * sizeof(*spans));
+                span_count = next_count;
+            }
+            for (k = 0; k < span_count; k++)
+            {
+                area = (INT64)(spans[k][1] - spans[k][0]) * (rects[bands[j]].bottom - rects[bands[i]].top);
+                if (area <= best) continue;
+                best = area;
+                SetRect(best_rect, spans[k][0], rects[bands[i]].top, spans[k][1], rects[bands[j]].bottom);
+            }
+        }
+    }
+
+done:
+    free(bands);
+    free(spans);
+    free(next);
+    return best;
+}
+
 /* Windows clips child windows, and so their GPU contents, to their toplevel's
  * window region. A Wayland subsurface can only be cropped to a rectangle: use
- * the region's largest one. Office's callouts trim an 11 pixel strip from their
- * region and shape a beak in it; their DirectUI child drew the whole window,
- * so the trimmed strips showed as solid bands. */
+ * the largest one inside the region. Office's callouts trim an 11 pixel strip
+ * from their region and shape a beak in it; their DirectUI child drew the
+ * whole window, so the trimmed strips showed as solid bands. */
 static BOOL get_region_clip(HWND hwnd, const RECT *window, RECT *clip)
 {
     HRGN region;
     RGNDATA *data = NULL;
-    INT64 best = 0, area;
-    UINT dpi, raw_dpi, i;
-    RECT *rects;
+    INT64 best = 0;
+    UINT dpi, raw_dpi;
     int type;
 
     if (!(region = NtGdiCreateRectRgn(0, 0, 0, 0))) return FALSE;
     type = NtUserGetWindowRgnEx(hwnd, region, 0);
     if ((type == SIMPLEREGION || type == COMPLEXREGION) && (data = get_region_data(region)))
     {
-        rects = (RECT *)data->Buffer;
-        for (i = 0; i < data->rdh.nCount; i++)
-        {
-            area = (INT64)(rects[i].right - rects[i].left) * (rects[i].bottom - rects[i].top);
-            if (area > best)
-            {
-                best = area;
-                *clip = rects[i];
-            }
-        }
+        best = get_largest_region_rect((RECT *)data->Buffer, data->rdh.nCount, clip);
         free(data);
     }
     NtGdiDeleteObjectApp(region);
