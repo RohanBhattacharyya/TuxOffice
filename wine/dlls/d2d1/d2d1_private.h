@@ -710,6 +710,15 @@ struct d2d_device
     ID3D10Blob *precompiled_shape_vs[D2D_SHAPE_TYPE_COUNT];
     ID3D10Blob *precompiled_shape_ps;
 
+    /* Created once and shared by the device's contexts: creating them for each
+     * context made every compatible render target parse and hash all the shaders. */
+    SRWLOCK shared_lock;
+    bool shared_ready;
+    struct d2d_shape_resources shared_shape_resources[D2D_SHAPE_TYPE_COUNT];
+    ID3D11PixelShader *shared_ps;
+    ID3D11Buffer *shared_ib, *shared_vb;
+    ID3D11RasterizerState *shared_rs;
+
     struct d2d_indexed_objects shaders;
 };
 

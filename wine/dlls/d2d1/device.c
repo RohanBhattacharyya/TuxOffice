@@ -7142,30 +7142,146 @@ static HRESULT d2d_device_init_shape_shaders(struct d2d_device *device)
     return S_OK;
 }
 
+static const struct
+{
+    float x, y;
+}
+d2d_clear_quad[] =
+{
+    {-1.0f,  1.0f},
+    {-1.0f, -1.0f},
+    { 1.0f,  1.0f},
+    { 1.0f, -1.0f},
+};
+
+static void d2d_device_release_shared_resources(struct d2d_device *device)
+{
+    unsigned int i;
+
+    for (i = 0; i < D2D_SHAPE_TYPE_COUNT; ++i)
+    {
+        if (device->shared_shape_resources[i].vs)
+            ID3D11VertexShader_Release(device->shared_shape_resources[i].vs);
+        if (device->shared_shape_resources[i].il)
+            ID3D11InputLayout_Release(device->shared_shape_resources[i].il);
+    }
+    if (device->shared_ps) ID3D11PixelShader_Release(device->shared_ps);
+    if (device->shared_ib) ID3D11Buffer_Release(device->shared_ib);
+    if (device->shared_vb) ID3D11Buffer_Release(device->shared_vb);
+    if (device->shared_rs) ID3D11RasterizerState_Release(device->shared_rs);
+    memset(device->shared_shape_resources, 0, sizeof(device->shared_shape_resources));
+    device->shared_ps = NULL;
+    device->shared_ib = device->shared_vb = NULL;
+    device->shared_rs = NULL;
+    device->shared_ready = false;
+}
+
+/* The shaders, clear quad and rasteriser state are immutable: create them once per device. */
+static HRESULT d2d_device_get_shared_resources(struct d2d_device *device, ID3D11Device1 *d3d_device)
+{
+    static const UINT16 indices[] = {0, 1, 2, 2, 1, 3};
+    D3D11_SUBRESOURCE_DATA buffer_data;
+    D3D11_RASTERIZER_DESC rs_desc;
+    D3D11_BUFFER_DESC buffer_desc;
+    ID3D10Blob *precompiled;
+    unsigned int i;
+    HRESULT hr = S_OK;
+
+    AcquireSRWLockExclusive(&device->shared_lock);
+    if (device->shared_ready) goto done;
+
+    for (i = 0; i < ARRAY_SIZE(shape_info); ++i)
+    {
+        const struct shape_info *si = &shape_info[i];
+
+        assert(device->precompiled_shape_vs[i]);
+        precompiled = device->precompiled_shape_vs[i];
+        if (FAILED(hr = ID3D11Device1_CreateInputLayout(d3d_device, si->il_desc, si->il_element_count,
+                ID3D10Blob_GetBufferPointer(precompiled), ID3D10Blob_GetBufferSize(precompiled),
+                &device->shared_shape_resources[si->shape_type].il)))
+        {
+            WARN("Failed to create input layout for shape type %#x, hr %#lx.\n", si->shape_type, hr);
+            goto done;
+        }
+
+        if (FAILED(hr = ID3D11Device1_CreateVertexShader(d3d_device,
+                ID3D10Blob_GetBufferPointer(precompiled), ID3D10Blob_GetBufferSize(precompiled),
+                NULL, &device->shared_shape_resources[si->shape_type].vs)))
+        {
+            WARN("Failed to create vertex shader for shape type %#x, hr %#lx.\n", si->shape_type, hr);
+            goto done;
+        }
+    }
+
+    assert(device->precompiled_shape_ps);
+    precompiled = device->precompiled_shape_ps;
+    if (FAILED(hr = ID3D11Device1_CreatePixelShader(d3d_device,
+            ID3D10Blob_GetBufferPointer(precompiled), ID3D10Blob_GetBufferSize(precompiled),
+            NULL, &device->shared_ps)))
+    {
+        WARN("Failed to create pixel shader, hr %#lx.\n", hr);
+        goto done;
+    }
+
+    buffer_desc.ByteWidth = sizeof(indices);
+    buffer_desc.Usage = D3D11_USAGE_DEFAULT;
+    buffer_desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+    buffer_desc.CPUAccessFlags = 0;
+    buffer_desc.MiscFlags = 0;
+    buffer_desc.StructureByteStride = 0;
+
+    buffer_data.pSysMem = indices;
+    buffer_data.SysMemPitch = 0;
+    buffer_data.SysMemSlicePitch = 0;
+
+    if (FAILED(hr = ID3D11Device1_CreateBuffer(d3d_device, &buffer_desc, &buffer_data, &device->shared_ib)))
+    {
+        WARN("Failed to create clear index buffer, hr %#lx.\n", hr);
+        goto done;
+    }
+
+    buffer_desc.ByteWidth = sizeof(d2d_clear_quad);
+    buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    buffer_data.pSysMem = d2d_clear_quad;
+
+    if (FAILED(hr = ID3D11Device1_CreateBuffer(d3d_device, &buffer_desc, &buffer_data, &device->shared_vb)))
+    {
+        WARN("Failed to create clear vertex buffer, hr %#lx.\n", hr);
+        goto done;
+    }
+
+    rs_desc.FillMode = D3D11_FILL_SOLID;
+    rs_desc.CullMode = D3D11_CULL_NONE;
+    rs_desc.FrontCounterClockwise = FALSE;
+    rs_desc.DepthBias = 0;
+    rs_desc.DepthBiasClamp = 0.0f;
+    rs_desc.SlopeScaledDepthBias = 0.0f;
+    rs_desc.DepthClipEnable = TRUE;
+    rs_desc.ScissorEnable = TRUE;
+    rs_desc.MultisampleEnable = FALSE;
+    rs_desc.AntialiasedLineEnable = FALSE;
+    if (FAILED(hr = ID3D11Device1_CreateRasterizerState(d3d_device, &rs_desc, &device->shared_rs)))
+    {
+        WARN("Failed to create clear rasteriser state, hr %#lx.\n", hr);
+        goto done;
+    }
+    device->shared_ready = true;
+
+done:
+    if (FAILED(hr)) d2d_device_release_shared_resources(device);
+    ReleaseSRWLockExclusive(&device->shared_lock);
+    return hr;
+}
+
 static HRESULT d2d_device_context_init(struct d2d_device_context *render_target,
         struct d2d_device *device, IUnknown *outer_unknown, const struct d2d_device_context_ops *ops)
 {
-    D3D11_SUBRESOURCE_DATA buffer_data;
     IDWriteFactory *dwrite_factory;
-    D3D11_RASTERIZER_DESC rs_desc;
     D3D11_BUFFER_DESC buffer_desc;
     struct d2d_factory *factory;
-    ID3D10Blob *precompiled;
     unsigned int i;
     HRESULT hr;
 
-    static const struct
-    {
-        float x, y;
-    }
-    quad[] =
-    {
-        {-1.0f,  1.0f},
-        {-1.0f, -1.0f},
-        { 1.0f,  1.0f},
-        { 1.0f, -1.0f},
-    };
-    static const UINT16 indices[] = {0, 1, 2, 2, 1, 3};
     static const D3D_FEATURE_LEVEL feature_levels = D3D_FEATURE_LEVEL_10_0;
 
     render_target->ID2D1DeviceContext6_iface.lpVtbl = &d2d_device_context_vtbl;
@@ -7199,28 +7315,20 @@ static HRESULT d2d_device_context_init(struct d2d_device_context *render_target,
         goto err;
     }
 
-    for (i = 0; i < ARRAY_SIZE(shape_info); ++i)
+    if (FAILED(hr = d2d_device_get_shared_resources(device, render_target->d3d_device)))
+        goto err;
+    for (i = 0; i < D2D_SHAPE_TYPE_COUNT; ++i)
     {
-        const struct shape_info *si = &shape_info[i];
-
-        assert(device->precompiled_shape_vs[i]);
-        precompiled = device->precompiled_shape_vs[i];
-        if (FAILED(hr = ID3D11Device1_CreateInputLayout(render_target->d3d_device, si->il_desc, si->il_element_count,
-                ID3D10Blob_GetBufferPointer(precompiled), ID3D10Blob_GetBufferSize(precompiled),
-                &render_target->shape_resources[si->shape_type].il)))
-        {
-            WARN("Failed to create input layout for shape type %#x, hr %#lx.\n", si->shape_type, hr);
-            goto err;
-        }
-
-        if (FAILED(hr = ID3D11Device1_CreateVertexShader(render_target->d3d_device,
-                ID3D10Blob_GetBufferPointer(precompiled), ID3D10Blob_GetBufferSize(precompiled),
-                NULL, &render_target->shape_resources[si->shape_type].vs)))
-        {
-            WARN("Failed to create vertex shader for shape type %#x, hr %#lx.\n", si->shape_type, hr);
-            goto err;
-        }
+        if ((render_target->shape_resources[i].il = device->shared_shape_resources[i].il))
+            ID3D11InputLayout_AddRef(render_target->shape_resources[i].il);
+        if ((render_target->shape_resources[i].vs = device->shared_shape_resources[i].vs))
+            ID3D11VertexShader_AddRef(render_target->shape_resources[i].vs);
     }
+    ID3D11PixelShader_AddRef(render_target->ps = device->shared_ps);
+    ID3D11Buffer_AddRef(render_target->ib = device->shared_ib);
+    ID3D11Buffer_AddRef(render_target->vb = device->shared_vb);
+    ID3D11RasterizerState_AddRef(render_target->rs = device->shared_rs);
+    render_target->vb_stride = sizeof(*d2d_clear_quad);
 
     buffer_desc.ByteWidth = sizeof(struct d2d_vs_cb);
     buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
@@ -7235,16 +7343,6 @@ static HRESULT d2d_device_context_init(struct d2d_device_context *render_target,
         goto err;
     }
 
-    assert(device->precompiled_shape_ps);
-    precompiled = device->precompiled_shape_ps;
-    if (FAILED(hr = ID3D11Device1_CreatePixelShader(render_target->d3d_device,
-            ID3D10Blob_GetBufferPointer(precompiled), ID3D10Blob_GetBufferSize(precompiled),
-            NULL, &render_target->ps)))
-    {
-        WARN("Failed to create pixel shader, hr %#lx.\n", hr);
-        goto err;
-    }
-
     buffer_desc.ByteWidth = sizeof(struct d2d_ps_cb);
     buffer_desc.Usage = D3D11_USAGE_DYNAMIC;
     buffer_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
@@ -7255,51 +7353,6 @@ static HRESULT d2d_device_context_init(struct d2d_device_context *render_target,
             &render_target->ps_cb)))
     {
         WARN("Failed to create constant buffer, hr %#lx.\n", hr);
-        goto err;
-    }
-
-    buffer_desc.ByteWidth = sizeof(indices);
-    buffer_desc.Usage = D3D11_USAGE_DEFAULT;
-    buffer_desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
-    buffer_desc.CPUAccessFlags = 0;
-    buffer_desc.MiscFlags = 0;
-
-    buffer_data.pSysMem = indices;
-    buffer_data.SysMemPitch = 0;
-    buffer_data.SysMemSlicePitch = 0;
-
-    if (FAILED(hr = ID3D11Device1_CreateBuffer(render_target->d3d_device,
-            &buffer_desc, &buffer_data, &render_target->ib)))
-    {
-        WARN("Failed to create clear index buffer, hr %#lx.\n", hr);
-        goto err;
-    }
-
-    buffer_desc.ByteWidth = sizeof(quad);
-    buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-    buffer_data.pSysMem = quad;
-
-    render_target->vb_stride = sizeof(*quad);
-    if (FAILED(hr = ID3D11Device1_CreateBuffer(render_target->d3d_device,
-            &buffer_desc, &buffer_data, &render_target->vb)))
-    {
-        WARN("Failed to create clear vertex buffer, hr %#lx.\n", hr);
-        goto err;
-    }
-
-    rs_desc.FillMode = D3D11_FILL_SOLID;
-    rs_desc.CullMode = D3D11_CULL_NONE;
-    rs_desc.FrontCounterClockwise = FALSE;
-    rs_desc.DepthBias = 0;
-    rs_desc.DepthBiasClamp = 0.0f;
-    rs_desc.SlopeScaledDepthBias = 0.0f;
-    rs_desc.DepthClipEnable = TRUE;
-    rs_desc.ScissorEnable = TRUE;
-    rs_desc.MultisampleEnable = FALSE;
-    rs_desc.AntialiasedLineEnable = FALSE;
-    if (FAILED(hr = ID3D11Device1_CreateRasterizerState(render_target->d3d_device, &rs_desc, &render_target->rs)))
-    {
-        WARN("Failed to create clear rasteriser state, hr %#lx.\n", hr);
         goto err;
     }
 
@@ -7498,6 +7551,7 @@ static ULONG WINAPI d2d_device_Release(ID2D1Device6 *iface)
         }
         if (device->precompiled_shape_ps)
             ID3D10Blob_Release(device->precompiled_shape_ps);
+        d2d_device_release_shared_resources(device);
         free(device);
     }
 
@@ -7734,6 +7788,7 @@ HRESULT d2d_device_init(struct d2d_device *device, ID2D1Factory1 *factory, IDXGI
     device->dxgi_device = dxgi_device;
     IDXGIDevice_AddRef(device->dxgi_device);
     device->allow_get_dxgi_device = allow_get_dxgi_device;
+    InitializeSRWLock(&device->shared_lock);
 
     if (FAILED(hr = d2d_device_init_shape_shaders(device)))
         return hr;
