@@ -54,6 +54,18 @@ crash in `PrefetchAxis::Add`, and cross-app stress testing is in progress.
   blinking caret: 116 ms/s on 0.1.30, 57-75 now. Checked: caret blink,
   Word selection and scrolling, PowerPoint typing and selection,
   maximize/restore, ribbon collapse, Office suite, composition tests.
+- **Scrolling in Word took over two cores** (80 wheel steps over a 1000
+  paragraph document: 11.75-12.3 CPU seconds on 0.1.30). The composition
+  thread spent 43% of its time in DXVK copying whole context states: Wine's
+  D2D swaps the context state twice per draw, and DXVK copied every binding
+  slot of six stages (256 class instances, 128 views ... each). The DXVK
+  build now copies only bound slots (`runner/patches/dxvk-context-state-copy.patch`,
+  `067c5c1`): 27%. With the changes above, 10.6-10.7 CPU seconds. Most of
+  the rest is Word itself: 20 steps update 347 surfaces 2470 times (12
+  megapixels, mostly word-sized rectangles redrawn on each step), probably
+  re-rendering text at each new fractional pixel offset at 125%; not
+  compared with Windows. Replacing DXVK's spinning device lock with a
+  spin-then-wait lock made no measurable difference and was dropped.
 - Open: expressions are parsed from their text at every evaluation; the
   composition snapshot of an unchanged target still costs 0.15-0.2 ms.
 - Intermittent, also on 0.1.30: Word's Navigation pane header drew as
