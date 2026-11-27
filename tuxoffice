@@ -675,9 +675,9 @@ register_fonts() { # files in the Windows Fonts folder
 
 set_segoe_substitutes() { # target family prefix, or "" once the real Segoe UI is installed
   # Faces of Segoe UI that are installed are used as they are; the rest are
-  # substituted. Microsoft's cloud fonts have only Segoe UI and Segoe UI
+  # substituted. Microsoft's cloud fonts have Segoe UI, Light, Semibold and
   # Black, and Office ships Segoe UI Semilight, so with "" the missing faces
-  # still map to Selawik's, which has the same metrics. DirectWrite keeps the
+  # (Bold) still map to Selawik's, which has the same metrics. DirectWrite keeps the
   # "Segoe UI" replacement and takes the faces the family lacks from it.
   local seg target prefix=${1:-Selawik}
   for seg in 'Segoe UI' 'Segoe UI Semibold' 'Segoe UI Light' 'Segoe UI Semilight' 'Segoe UI Bold'; do
@@ -735,9 +735,20 @@ fonts_cloud() {
   mkdir -p "$work"
   python3 -I "$TUX_SRC/lib/fontdoc.py" "$work/fonts.docx"
   cp "$TUX_SRC/lib/cloudfonts.vbs" "$work/cloudfonts.vbs"
+  # Office downloads only fonts it cannot find. The Selawik stand-ins for
+  # Segoe UI's faces enumerate as those faces, so while they were in place
+  # Segoe UI, Semibold and Light were never fetched. Drop the stand-ins for
+  # faces not installed while Word primes the cache; they are set again below.
+  local seg
+  for seg in 'Segoe UI' 'Segoe UI Semibold' 'Segoe UI Light' 'Segoe UI Semilight' 'Segoe UI Bold'; do
+    font_registered "$seg" && continue
+    wine reg delete "$SUBST_KEY" /v "$seg" /f >/dev/null 2>&1 || true
+    wine reg delete 'HKCU\Software\Wine\Fonts\Replacements' /v "$seg" /f >/dev/null 2>&1 || true
+  done
   msg "letting Office download its cloud fonts (up to 2 minutes)"
   wine cscript //nologo 'C:\tuxoffice\cloudfonts.vbs' 'C:\tuxoffice\fonts.docx' 120 2>/dev/null |
     grep -a 'cloud fonts cached' || true
+  set_segoe_substitutes Selawik
 
   # Copy (not link): Office evicts cache entries it hasn't used recently.
   local f name file added=()
@@ -749,7 +760,7 @@ fonts_cloud() {
   done < <(find "$(cloud_font_cache)" -type f -iname '*.ttf' -print0 |
            xargs -0 -r python3 -I "$TUX_SRC/lib/fontnames.py" --paths)
   register_fonts "${added[@]}"
-  font_registered 'Segoe UI' && set_segoe_substitutes ""
+  if font_registered 'Segoe UI'; then set_segoe_substitutes ""; else set_segoe_substitutes Selawik; fi
   msg "registered ${#added[@]} Office cloud fonts"
   configure_office_ui
 }
@@ -757,17 +768,20 @@ fonts_cloud() {
 # Office's own fonts (Segoe UI, Calibri, Cambria, Consolas, Aptos and the
 # rest) come from Microsoft's cloud font service once Office is activated,
 # as they would be part of Windows. Install them on the first launch that can
-# (activated, Word not running). The service sends some faces only on a later
-# request, so try again, at most hourly, until Segoe UI Semibold is there too.
+# (activated, Word not running). Until Segoe UI and Semibold are there, try
+# again after an hour, then after twice as long each time, up to a week.
 ensure_cloud_fonts() {
   { has_font_file 'office-cloud-Segoe-UI.ttf' && has_font_file 'office-cloud-Segoe-UI-Semibold.ttf'; } ||
     has_font_file segoeui.ttf || {
     office_signed_in || return 0
-    local stamp="$TUX_HOME/cloud-fonts-attempt"
-    [[ -n "$(find "$stamp" -mmin -60 2>/dev/null)" ]] && return 0
+    local stamp="$TUX_HOME/cloud-fonts-attempt" tries wait
+    tries=$(cat "$stamp" 2>/dev/null); [[ $tries =~ ^[0-9]+$ ]] || tries=0
+    wait=$(( tries < 8 ? 60 << (tries > 0 ? tries - 1 : 0) : 10080 ))
+    (( wait > 10080 )) && wait=10080
+    [[ -n "$(find "$stamp" -mmin "-$wait" 2>/dev/null)" ]] && return 0
     pgrep -f 'Office16.WINWORD.EXE' >/dev/null && return 0
-    touch "$stamp"
-    splash status "Installing Office fonts (one time, up to 2 minutes)…"
+    echo $(( tries + 1 )) >"$stamp"
+    splash status "Installing Office fonts (up to 2 minutes)…"
     (SPLASH_DIR=""; fonts_cloud) || warn "Office fonts are not installed yet; they will be retried (or run: tuxoffice fonts cloud)"
   }
   return 0
